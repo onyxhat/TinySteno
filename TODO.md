@@ -9,3 +9,10 @@
 - [ ] Add HF_TOKEN for authenticated model downloads from Hugging Face
 - [x] Allow use of `~` for home directory in config
 - [ ] Fix duration calculation using audio recording length (currently outputs 0)
+- [ ] Allow external faster-whisper API for transcription
+- [ ] Add personas for specific event/meeting types
+  - [ ] Root Cause Analysis (RCA)
+  - [ ] Incident Response & Management (IRM)
+  - [ ] Sprint Planning, Review, Retrospective (SPRINT)
+  - [ ] Project Kickoff
+  - [ ] Event timeline and fact gathering
