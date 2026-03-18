@@ -1,0 +1,11 @@
+# TODO
+- [x] Implement audio capture without `BlackHole` (MacOS only)
+  - [x] Use loopback/monitor device through sounddevice on Windows & Linux, otherwise fallback to `pyobjc-framework-ScreenCaptureKit` for MacOS
+- [x] Embed transcript at the end of the summary
+  - [ ] Store as WebVTT format
+  - [x] Deprecate storing in additional `transcript` folder in Obsidian
+- [ ] Add a `device` config option to select audio device(s)
+- [x] Make `recordings` path configurable
+- [ ] Add HF_TOKEN for authenticated model downloads from Hugging Face
+- [x] Allow use of `~` for home directory in config
+- [ ] Fix duration calculation using audio recording length (currently outputs 0)
