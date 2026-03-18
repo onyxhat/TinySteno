@@ -1,0 +1,281 @@
+"""Audio recording module for TinySteno."""
+
+import platform
+import wave
+import numpy as np
+from pathlib import Path
+from datetime import datetime
+from typing import Optional
+
+
+class AudioRecorder:
+    """Record mic + system audio loopback to WAV files.
+
+    On Windows and Linux the system audio loopback is captured via PortAudio
+    (WASAPI loopback on Windows, PulseAudio/PipeWire monitor on Linux).
+    On macOS, system audio is captured via ScreenCaptureKit
+    (requires ``pyobjc-framework-ScreenCaptureKit`` and Screen Recording permission).
+
+    When a loopback source is found, the output WAV is stereo:
+      left  channel = microphone
+      right channel = system audio
+    This makes the recording compatible with the diarization feature
+    (left = "You", right = "Others").
+    """
+
+    def __init__(
+        self,
+        sample_rate: int = 44100,
+        channels: int = 1,
+        recordings_dir: Optional[Path] = None,
+    ):
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.recordings_dir = recordings_dir or Path.cwd() / "recordings"
+        self.recordings_dir.mkdir(parents=True, exist_ok=True)
+
+        self._buffer: list[np.ndarray] = []
+        self._loopback_buffer: list[np.ndarray] = []
+        self._is_recording = False
+        self._audio_interface = None
+        self._loopback_interface = None
+        self._macos_loopback = None
+        self._active_channels = channels
+        self._has_loopback = False
+
+    # ── audio callbacks ───────────────────────────────────────────────────────
+
+    def _audio_callback(self, indata, frames, time, status):
+        if status:
+            print(f"Audio callback status: {status}")
+        self._buffer.append(indata.copy())
+
+    def _loopback_callback(self, indata, frames, time, status):
+        if status:
+            print(f"Loopback callback status: {status}")
+        self._loopback_buffer.append(indata.copy())
+
+    # ── device discovery ──────────────────────────────────────────────────────
+
+    def _get_default_input_device(self) -> Optional[tuple[int, int]]:
+        """Return (device_index, max_input_channels) for the default input device."""
+        import sounddevice as sd
+
+        try:
+            device = sd.query_devices(device=None, kind="input")
+            max_ch = device.get("max_input_channels", 0)
+            return (device["index"], max_ch) if max_ch > 0 else None
+        except Exception:
+            return None
+
+    def _find_loopback_device(self) -> Optional[tuple[int, int]]:
+        """Return (device_index, max_input_channels) for the system loopback device.
+
+        Only relevant on Windows and Linux; returns None on macOS.
+        """
+        system = platform.system()
+        if system == "Windows":
+            return self._find_wasapi_loopback()
+        if system == "Linux":
+            return self._find_pulse_monitor()
+        return None
+
+    def _find_wasapi_loopback(self) -> Optional[tuple[int, int]]:
+        """Find a WASAPI loopback device on Windows."""
+        import sounddevice as sd
+
+        hostapis = sd.query_hostapis()
+        wasapi_idx = next(
+            (i for i, h in enumerate(hostapis) if "WASAPI" in h.get("name", "")),
+            None,
+        )
+        if wasapi_idx is None:
+            return None
+
+        devices = sd.query_devices()
+
+        # Prefer a device explicitly named "loopback"
+        for i, dev in enumerate(devices):
+            if (
+                dev.get("hostapi") == wasapi_idx
+                and dev.get("max_input_channels", 0) > 0
+                and "loopback" in dev.get("name", "").lower()
+            ):
+                return (i, dev["max_input_channels"])
+
+        # Fall back: use the default output device via WASAPI (PortAudio exposes it)
+        try:
+            default_out = sd.query_devices(kind="output")
+            out_idx = default_out.get("index")
+            if out_idx is not None:
+                dev = sd.query_devices(out_idx)
+                if dev.get("hostapi") == wasapi_idx:
+                    return (out_idx, dev.get("max_output_channels", 2))
+        except Exception:
+            pass
+
+        return None
+
+    def _find_pulse_monitor(self) -> Optional[tuple[int, int]]:
+        """Find a PulseAudio/PipeWire monitor source on Linux."""
+        import sounddevice as sd
+
+        devices = sd.query_devices()
+        for i, dev in enumerate(devices):
+            if (
+                "monitor" in dev.get("name", "").lower()
+                and dev.get("max_input_channels", 0) > 0
+            ):
+                return (i, dev["max_input_channels"])
+        return None
+
+    # ── start / stop ──────────────────────────────────────────────────────────
+
+    def start(self, name: Optional[str] = None) -> str:
+        """Start recording and return the output WAV path."""
+        import sounddevice as sd
+
+        self.output_path = self._generate_output_path(name)
+        self._buffer = []
+        self._loopback_buffer = []
+        self._is_recording = True
+        self._has_loopback = False
+
+        # ── microphone ────────────────────────────────────────────────────────
+        result = self._get_default_input_device()
+        if result is None:
+            raise RuntimeError("No audio input devices found")
+
+        device, max_channels = result
+        self._active_channels = min(self.channels, max_channels)
+        if self._active_channels != self.channels:
+            print(
+                f"Warning: requested {self.channels} channel(s) but device supports "
+                f"{max_channels}; recording with {self._active_channels}."
+            )
+
+        try:
+            self._audio_interface = sd.InputStream(
+                callback=self._audio_callback,
+                samplerate=self.sample_rate,
+                channels=self._active_channels,
+                device=device,
+            )
+            self._audio_interface.start()
+        except sd.PortAudioError as e:
+            raise RuntimeError(f"Failed to start audio recording: {e}")
+
+        # ── system audio loopback ─────────────────────────────────────────────
+        system = platform.system()
+        if system == "Darwin":
+            self._has_loopback = self._start_macos_loopback()
+        else:
+            loopback = self._find_loopback_device()
+            if loopback is not None:
+                lb_device, lb_channels = loopback
+                try:
+                    self._loopback_interface = sd.InputStream(
+                        callback=self._loopback_callback,
+                        samplerate=self.sample_rate,
+                        channels=min(self._active_channels, lb_channels),
+                        device=lb_device,
+                    )
+                    self._loopback_interface.start()
+                    self._has_loopback = True
+                except sd.PortAudioError:
+                    self._loopback_interface = None
+
+        return str(self.output_path)
+
+    def _start_macos_loopback(self) -> bool:
+        """Start macOS system audio capture via ScreenCaptureKit."""
+        try:
+            from tinysteno._macos_loopback import MacOSLoopback
+
+            self._macos_loopback = MacOSLoopback(
+                sample_rate=self.sample_rate,
+                callback=lambda data: self._loopback_buffer.append(data),
+            )
+            self._macos_loopback.start()
+            return True
+        except ImportError:
+            # pyobjc-framework-ScreenCaptureKit not installed
+            return False
+        except Exception as e:
+            print(f"Warning: macOS system audio capture unavailable: {e}")
+            return False
+
+    def stop(self) -> bool:
+        """Stop recording and save WAV file."""
+        if not self._is_recording:
+            return False
+
+        try:
+            if self._audio_interface:
+                self._audio_interface.stop()
+                self._audio_interface.close()
+                self._audio_interface = None
+
+            if self._loopback_interface:
+                self._loopback_interface.stop()
+                self._loopback_interface.close()
+                self._loopback_interface = None
+
+            loopback_sr = None
+            if self._macos_loopback:
+                loopback_sr = self._macos_loopback.detected_sample_rate
+                self._macos_loopback.stop()
+                self._macos_loopback = None
+
+            if not self._buffer:
+                return False
+
+            mic_data = np.concatenate(self._buffer, axis=0).astype(np.float32)
+
+            if self._has_loopback and self._loopback_buffer:
+                lb_data = np.concatenate(self._loopback_buffer, axis=0).astype(np.float32)
+                if loopback_sr and abs(loopback_sr - self.sample_rate) > 1:
+                    n_out = int(round(len(lb_data) * self.sample_rate / loopback_sr))
+                    x = np.linspace(0, len(lb_data) - 1, n_out)
+                    lb_data = np.interp(x, np.arange(len(lb_data)), lb_data.squeeze()).reshape(-1, 1)
+                audio_data = self._mix_stereo(mic_data, lb_data)
+                out_channels = 2
+            else:
+                audio_data = mic_data
+                out_channels = self._active_channels
+
+            max_val = np.max(np.abs(audio_data))
+            if max_val > 0:
+                audio_data = np.int16(audio_data / max_val * 32767)
+            else:
+                audio_data = np.zeros_like(audio_data, dtype=np.int16)
+
+            with wave.open(str(self.output_path), "w") as wav_file:
+                wav_file.setnchannels(out_channels)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(audio_data.tobytes())
+
+            self._is_recording = False
+            return True
+        except Exception as e:
+            self._is_recording = False
+            raise RuntimeError(f"Failed to save recording: {e}")
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _mix_stereo(self, mic: np.ndarray, loopback: np.ndarray) -> np.ndarray:
+        """Combine mic and loopback into a stereo array [n, 2] (L=mic, R=loopback)."""
+        # Reduce to mono
+        mic_mono = mic[:, 0] if mic.ndim > 1 else mic
+        lb_mono = loopback.mean(axis=1) if loopback.ndim > 1 else loopback
+
+        # Align lengths
+        n = min(len(mic_mono), len(lb_mono))
+        return np.column_stack([mic_mono[:n], lb_mono[:n]])
+
+    def _generate_output_path(self, name: Optional[str] = None) -> Path:
+        timestamp = datetime.now()
+        base_name = name.replace(" ", "-") if name else "Meeting"
+        filename = f"{base_name}-{timestamp.strftime('%Y%m%d-%H%M%S')}.wav"
+        return self.recordings_dir / filename
