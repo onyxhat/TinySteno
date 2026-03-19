@@ -52,7 +52,7 @@ class Orchestrator:
             raw_json = response.choices[0].message.content
             parsed = self._parse_json(raw_json)
         except Exception as e:
-            logger.error(f"Summarization failed: {e}")
+            logger.error("Summarization failed: %s", e)
 
         result: dict = {}
         for field_name, field_def in persona.schema.items():
@@ -63,8 +63,9 @@ class Orchestrator:
                 else:
                     if value is not None:
                         logger.warning(
-                            f"Field '{field_name}': expected string, got "
-                            f"{type(value).__name__}; using empty string"
+                            "Field '%s': expected string, got %s; using empty string",
+                            field_name,
+                            type(value).__name__,
                         )
                     result[field_name] = ""
             else:  # list
@@ -73,8 +74,9 @@ class Orchestrator:
                 else:
                     if value is not None:
                         logger.warning(
-                            f"Field '{field_name}': expected list, got "
-                            f"{type(value).__name__}; using empty list"
+                            "Field '%s': expected list, got %s; using empty list",
+                            field_name,
+                            type(value).__name__,
                         )
                     result[field_name] = []
 
@@ -101,7 +103,7 @@ class Orchestrator:
             title = response.choices[0].message.content.strip()
             return self._clean_title(title)
         except Exception as e:
-            logger.warning(f"Title generation failed: {e}")
+            logger.warning("Title generation failed: %s", e)
             return None
 
     def _build_user_message(self, transcript: str, persona: "Persona") -> str:
@@ -124,8 +126,9 @@ class Orchestrator:
 
         if len(transcript) > _TRANSCRIPT_MAX_CHARS:
             logger.warning(
-                f"Transcript truncated from {len(transcript)} to "
-                f"{_TRANSCRIPT_MAX_CHARS} characters for summarization."
+                "Transcript truncated from %d to %d characters for summarization.",
+                len(transcript),
+                _TRANSCRIPT_MAX_CHARS,
             )
         truncated = transcript[:_TRANSCRIPT_MAX_CHARS]
 
