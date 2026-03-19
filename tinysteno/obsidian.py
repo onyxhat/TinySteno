@@ -24,7 +24,8 @@ class ObsidianExporter:
         if not os.access(self.vault_path, os.W_OK):
             raise PermissionError(f"Obsidian vault is not writable: {self.vault_path}")
 
-    def export(self, data: dict, persona: "Persona", metadata: dict) -> str:  # pylint: disable=too-many-locals
+    # pylint: disable=too-many-locals
+    def export(self, data: dict, persona: "Persona", metadata: dict) -> str:
         """Export a note using the persona's Jinja2 template.
 
         Args:
