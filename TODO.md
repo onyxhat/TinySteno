@@ -14,3 +14,4 @@
 - [x] Add support for reprocessing and/or resuming transcription jobs
 - [ ] Make installable as a `uvx tool install`
 - [ ] Add dynamic tag generation
+- [ ] Investigate slow local transcription (periodically)
