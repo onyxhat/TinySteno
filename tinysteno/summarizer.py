@@ -143,10 +143,14 @@ class Summarizer:
         )
 
     def _parse_json(self, response: str) -> dict:
+        # Strip markdown code fences (```json ... ``` or ``` ... ```)
+        stripped = re.sub(r"^```(?:json)?\s*\n?", "", response.strip())
+        stripped = re.sub(r"\n?```\s*$", "", stripped).strip()
+
         try:
-            return json.loads(response)
+            return json.loads(stripped)
         except json.JSONDecodeError:
-            json_match = self._extract_json(response)
+            json_match = self._extract_json(stripped)
             if json_match:
                 try:
                     return json.loads(json_match)
@@ -155,10 +159,12 @@ class Summarizer:
             logger.warning(
                 "Failed to parse LLM response as JSON; summary fields will be empty."
             )
+            logger.debug("Raw LLM response: %r", response[:500])
             return {}
 
     def _extract_json(self, text: str) -> Optional[str]:
-        match = re.search(r"\{.*?\}", text, re.DOTALL)
+        # Greedy match: first { to last } — handles } inside string values
+        match = re.search(r"\{.*\}", text, re.DOTALL)
         return match.group(0) if match else None
 
     def _clean_title(self, title: str) -> str:
