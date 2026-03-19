@@ -358,7 +358,7 @@ def _prompt_bool(console, label: str, default: bool, hint: str = "") -> bool:
     return value in ("y", "yes")
 
 
-def cmd_setup(args):
+def cmd_setup(_args):
     """Interactively create or update ~/.tinysteno/config.yaml."""
     import yaml
     from rich.console import Console
