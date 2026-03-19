@@ -1,0 +1,27 @@
+name: Pylint
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v6.2.0
+      with:
+        python-version-file: .python-version
+
+    - name: astral-sh/setup-uv
+      uses: astral-sh/setup-uv@v7.6.0
+
+    - name: Install dependencies
+      run: |
+        uv add pylint pylint
+        uv sync
+
+    - name: Analysing the code with pylint
+      run: |
+        uv run pylint $(git ls-files '*.py')
