@@ -1,9 +1,15 @@
 """LLM summarization module for TinySteno."""
+from __future__ import annotations
 
 import json
 import logging
 import re
-from typing import List, Dict, Optional
+from typing import TYPE_CHECKING, Optional
+
+from openai import OpenAI
+
+if TYPE_CHECKING:
+    from tinysteno.personas import Persona
 
 logger = logging.getLogger(__name__)
 
@@ -13,36 +19,10 @@ _TITLE_MAX_OVERVIEW_CHARS = 500
 _LLM_TIMEOUT_SECONDS = 120.0
 
 
-class MeetingData:
-    """Container for meeting summary data."""
-
-    def __init__(
-        self,
-        overview: str,
-        participants: List[str],
-        key_points: List[str],
-        action_items: List[Dict[str, str]],
-    ):
-        self.overview = overview
-        self.participants = participants
-        self.key_points = key_points
-        self.action_items = action_items
-
-    def to_dict(self) -> dict:
-        return {
-            "overview": self.overview,
-            "participants": self.participants,
-            "key_points": self.key_points,
-            "action_items": self.action_items,
-        }
-
-
 class Summarizer:
     """Summarize transcripts using OpenAI-compatible API."""
 
     def __init__(self, api_key: str, base_url: str, model: str):
-        from openai import OpenAI
-
         self.model = model
         self._client = OpenAI(
             api_key=api_key,
@@ -50,46 +30,62 @@ class Summarizer:
             timeout=_LLM_TIMEOUT_SECONDS,
         )
 
-    def summarize(self, transcript: str) -> MeetingData:
-        """Generate meeting summary from transcript."""
-        prompt = self._summary_prompt(transcript)
+    def summarize(self, transcript: str, persona: "Persona") -> dict:
+        """Generate summary from transcript using persona's prompt and schema.
+
+        Returns a dict with all schema field names as keys.
+        Missing/invalid fields from the LLM default to "" (string) or [] (list).
+        """
+        user_message = self._build_user_message(transcript, persona)
+        parsed: dict = {}
 
         try:
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a meeting assistant that extracts structured information.",
-                    },
-                    {"role": "user", "content": prompt},
+                    {"role": "system", "content": persona.system_prompt},
+                    {"role": "user", "content": user_message},
                 ],
                 temperature=0.3,
                 response_format={"type": "json_object"},
             )
-
             raw_json = response.choices[0].message.content
             parsed = self._parse_json(raw_json)
-
-            return MeetingData(
-                overview=parsed.get("overview", ""),
-                participants=parsed.get("participants", []),
-                key_points=parsed.get("key_points", []),
-                action_items=parsed.get("action_items", []),
-            )
         except Exception as e:
             logger.error(f"Summarization failed: {e}")
-            return MeetingData(
-                overview=f"Summary unavailable - {e}",
-                participants=[],
-                key_points=[],
-                action_items=[],
-            )
 
-    def generate_title(self, overview: str) -> str:
-        """Generate a short title from overview."""
-        prompt = self._title_prompt(overview)
+        result: dict = {}
+        for field_name, field_def in persona.schema.items():
+            value = parsed.get(field_name)
+            if field_def["type"] == "string":
+                if isinstance(value, str):
+                    result[field_name] = value
+                else:
+                    if value is not None:
+                        logger.warning(
+                            f"Field '{field_name}': expected string, got "
+                            f"{type(value).__name__}; using empty string"
+                        )
+                    result[field_name] = ""
+            else:  # list
+                if isinstance(value, list):
+                    result[field_name] = [str(item) for item in value]
+                else:
+                    if value is not None:
+                        logger.warning(
+                            f"Field '{field_name}': expected list, got "
+                            f"{type(value).__name__}; using empty list"
+                        )
+                    result[field_name] = []
 
+        return result
+
+    def generate_title(self, field_value: str) -> Optional[str]:
+        """Generate a short title from a field value string.
+
+        Returns the generated title string, or None if the LLM call fails.
+        """
+        prompt = self._title_prompt(field_value)
         try:
             response = self._client.chat.completions.create(
                 model=self.model,
@@ -102,31 +98,49 @@ class Summarizer:
                 ],
                 temperature=0.3,
             )
-
             title = response.choices[0].message.content.strip()
             return self._clean_title(title)
         except Exception as e:
-            logger.warning(f"Title generation failed, using default: {e}")
-            return "Meeting"
+            logger.warning(f"Title generation failed: {e}")
+            return None
 
-    def _summary_prompt(self, transcript: str) -> str:
+    def _build_user_message(self, transcript: str, persona: "Persona") -> str:
+        """Build the LLM user message: JSON format instruction + transcript."""
+        # Build JSON example showing expected shape
+        json_example: dict = {}
+        for field_name, field_def in persona.schema.items():
+            if field_def["type"] == "string":
+                json_example[field_name] = "string"
+            else:
+                json_example[field_name] = ["string", "..."]
+
+        json_str = json.dumps(json_example, indent=2)
+
+        # Build field descriptions
+        descriptions = "\n".join(
+            f"- {name}: {defn['description']}"
+            for name, defn in persona.schema.items()
+        )
+
         if len(transcript) > _TRANSCRIPT_MAX_CHARS:
             logger.warning(
-                f"Transcript truncated from {len(transcript)} to {_TRANSCRIPT_MAX_CHARS} "
-                "characters for summarization."
+                f"Transcript truncated from {len(transcript)} to "
+                f"{_TRANSCRIPT_MAX_CHARS} characters for summarization."
             )
-        return f"""Analyze this meeting transcript and extract the following as JSON:
-- overview: A brief summary paragraph
-- participants: List of names mentioned
-- key_points: List of 3-7 major discussion points
-- action_items: List of objects with "task" and "assignee" fields
+        truncated = transcript[:_TRANSCRIPT_MAX_CHARS]
 
-Transcript:
-{transcript[:_TRANSCRIPT_MAX_CHARS]}
-"""
+        return (
+            f"Return a JSON object with exactly these fields:\n"
+            f"{json_str}\n\n"
+            f"Field descriptions:\n{descriptions}\n\n"
+            f"Transcript:\n{truncated}"
+        )
 
     def _title_prompt(self, overview: str) -> str:
-        return f"Based on this overview, generate a 3-6 word title (no special chars): {overview[:_TITLE_MAX_OVERVIEW_CHARS]}"
+        return (
+            f"Based on this content, generate a 3-6 word title "
+            f"(no special chars): {overview[:_TITLE_MAX_OVERVIEW_CHARS]}"
+        )
 
     def _parse_json(self, response: str) -> dict:
         try:
