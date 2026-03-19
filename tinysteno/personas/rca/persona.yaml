@@ -1,0 +1,8 @@
+name: Root Cause Analysis
+description: Extracts timeline, root cause, contributing factors, and corrective actions from postmortem transcripts.
+schema:
+  overview:             {type: string, description: "Brief incident summary"}
+  timeline:             {type: list,   description: "Chronological list of events as strings"}
+  root_cause:           {type: string, description: "The primary root cause of the incident"}
+  contributing_factors: {type: list,   description: "Contributing factors as strings"}
+  corrective_actions:   {type: list,   description: "Follow-up actions, each formatted as 'task (owner)'"}
