@@ -1,0 +1,7 @@
+name: Executive Summary
+description: Produces a concise executive summary with key decisions, risks, and asks from a meeting transcript.
+schema:
+  summary:       {type: string, description: "3-5 sentence executive summary"}
+  key_decisions: {type: list,   description: "Key decisions made, as concise strings"}
+  risks:         {type: list,   description: "Risks or concerns raised, as strings"}
+  asks:          {type: list,   description: "Requests or asks directed at stakeholders, formatted as 'ask (from whom)'"}

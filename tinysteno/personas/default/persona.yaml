@@ -1,0 +1,7 @@
+name: Meeting Summary
+description: Extracts overview, participants, key points, and action items from a meeting transcript.
+schema:
+  overview:      {type: string, description: "A brief summary paragraph of the meeting"}
+  participants:  {type: list,   description: "Names of people mentioned in the meeting"}
+  key_points:    {type: list,   description: "3-7 major discussion points as strings"}
+  action_items:  {type: list,   description: "Action items, each formatted as 'task (assignee)'"}
