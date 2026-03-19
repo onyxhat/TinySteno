@@ -239,7 +239,9 @@ class AudioRecorder:
                 if loopback_sr and abs(loopback_sr - self.sample_rate) > 1:
                     n_out = int(round(len(lb_data) * self.sample_rate / loopback_sr))
                     x = np.linspace(0, len(lb_data) - 1, n_out)
-                    lb_data = np.interp(x, np.arange(len(lb_data)), lb_data.squeeze()).reshape(-1, 1)
+                    lb_data = np.interp(
+                        x, np.arange(len(lb_data)), lb_data.squeeze()
+                    ).reshape(-1, 1)
                 audio_data = self._mix_stereo(mic_data, lb_data)
                 out_channels = 2
             else:

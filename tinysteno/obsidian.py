@@ -24,7 +24,7 @@ class ObsidianExporter:
         if not os.access(self.vault_path, os.W_OK):
             raise PermissionError(f"Obsidian vault is not writable: {self.vault_path}")
 
-    def export(self, data: dict, persona: "Persona", metadata: dict) -> str:
+    def export(self, data: dict, persona: "Persona", metadata: dict) -> str:  # pylint: disable=too-many-locals
         """Export a note using the persona's Jinja2 template.
 
         Args:
@@ -47,7 +47,9 @@ class ObsidianExporter:
         context = {**metadata, **data}
 
         try:
-            env = Environment(loader=BaseLoader(), keep_trailing_newline=True, undefined=StrictUndefined)
+            env = Environment(
+                loader=BaseLoader(), keep_trailing_newline=True, undefined=StrictUndefined
+            )
             tmpl = env.from_string(persona.template)
             content = tmpl.render(**context)
         except TemplateError as e:
