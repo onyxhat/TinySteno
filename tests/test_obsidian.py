@@ -65,7 +65,7 @@ def test_export_renders_metadata_variables(tmp_path):
     metadata["detected_language"] = "fr"
 
     path = exporter.export({}, persona, metadata)
-    content = Path(path).read_text()
+    content = Path(path).read_text(encoding="utf-8")
     assert "date=2026-03-18 10:00" in content
     assert "lang=fr" in content
 
@@ -83,7 +83,7 @@ def test_export_renders_schema_fields(tmp_path):
     data = {"summary": "Discussed budgets.", "points": ["Point A", "Point B"]}
 
     path = exporter.export(data, persona, metadata)
-    content = Path(path).read_text()
+    content = Path(path).read_text(encoding="utf-8")
     assert "Discussed budgets." in content
     assert "- Point A" in content
     assert "- Point B" in content
@@ -97,7 +97,7 @@ def test_export_transcript_absent_means_not_included(tmp_path):
     data = {"summary": "hello"}
 
     path = exporter.export(data, persona, metadata)
-    content = Path(path).read_text()
+    content = Path(path).read_text(encoding="utf-8")
     # transcript variable is available but not referenced in the template
     assert "SECRET TRANSCRIPT" not in content
 
@@ -110,7 +110,7 @@ def test_export_transcript_included_when_referenced(tmp_path):
     data = {}
 
     path = exporter.export(data, persona, metadata)
-    content = Path(path).read_text()
+    content = Path(path).read_text(encoding="utf-8")
     assert "THE TRANSCRIPT" in content
 
 
@@ -130,7 +130,7 @@ def test_export_data_and_metadata_merged_in_context(tmp_path):
     data = {"summary": "The Summary"}
 
     path = exporter.export(data, persona, metadata)
-    content = Path(path).read_text()
+    content = Path(path).read_text(encoding="utf-8")
     assert "The Title" in content
     assert "The Summary" in content
 
