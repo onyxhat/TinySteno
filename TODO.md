@@ -1,18 +1,16 @@
 # TODO
-- [x] Implement audio capture without `BlackHole` (MacOS only)
-  - [x] Use loopback/monitor device through sounddevice on Windows & Linux, otherwise fallback to `pyobjc-framework-ScreenCaptureKit` for MacOS
-- [x] Embed transcript at the end of the summary
-  - [ ] Store as WebVTT format
-  - [x] Deprecate storing in additional `transcript` folder in Obsidian
 - [ ] Add a `device` config option to select audio device(s)
-- [x] Make `recordings` path configurable
 - [ ] Add HF_TOKEN for authenticated model downloads from Hugging Face
-- [x] Allow use of `~` for home directory in config
 - [ ] Fix duration calculation using audio recording length (currently outputs 0)
 - [ ] Allow external faster-whisper API for transcription
-- [ ] Add personas for specific event/meeting types
-  - [ ] Root Cause Analysis (RCA)
-  - [ ] Incident Response & Management (IRM)
-  - [ ] Sprint Planning, Review, Retrospective (SPRINT)
-  - [ ] Project Kickoff
-  - [ ] Event timeline and fact gathering
+- [ ] Add user info/knowledge config (name, job, title, etc.)
+- [x] Add personas for specific event/meeting types
+  - [x] Root Cause Analysis (RCA)
+  - [x] Incident Response & Management (IRM)
+  - [x] Sprint Planning, Review, Retrospective (SPRINT)
+  - [x] Project Kickoff
+  - [x] Event timeline and fact gathering
+  - [x] Executive Summary
+- [ ] Basic UI/AppImage
+- [ ] Add support for reprocessing and/or resuming transcription jobs
+- [ ] Make installable as a `uvx tool install`
