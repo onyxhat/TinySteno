@@ -1,6 +1,5 @@
 """Tests for updated Summarizer."""
 import json
-import pytest
 from unittest.mock import MagicMock, patch
 
 from tinysteno.personas import Persona
