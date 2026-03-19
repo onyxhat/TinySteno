@@ -16,7 +16,10 @@ disable=
 
 [TYPECHECK]
 # platform-conditional; don't error on missing members at import time
-ignored-modules=sounddevice
+ignored-modules=sounddevice,
+                objc,
+                ScreenCaptureKit,
+                Foundation
 
 [DESIGN]
 max-attributes=12
