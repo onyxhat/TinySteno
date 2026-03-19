@@ -251,10 +251,10 @@ class AudioRecorder:
                 audio_data = np.zeros_like(audio_data, dtype=np.int16)
 
             with wave.open(str(self.output_path), "w") as wav_file:
-                wav_file.setnchannels(out_channels)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(self.sample_rate)
-                wav_file.writeframes(audio_data.tobytes())
+                wav_file.setnchannels(out_channels)  # pylint: disable=no-member
+                wav_file.setsampwidth(2)  # pylint: disable=no-member
+                wav_file.setframerate(self.sample_rate)  # pylint: disable=no-member
+                wav_file.writeframes(audio_data.tobytes())  # pylint: disable=no-member
 
             self._is_recording = False
             return True
