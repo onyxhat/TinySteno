@@ -46,12 +46,12 @@ class AudioRecorder:
 
     # ── audio callbacks ───────────────────────────────────────────────────────
 
-    def _audio_callback(self, indata, frames, time, status):
+    def _audio_callback(self, indata, _frames, _time, status):
         if status:
             print(f"Audio callback status: {status}")
         self._buffer.append(indata.copy())
 
-    def _loopback_callback(self, indata, frames, time, status):
+    def _loopback_callback(self, indata, _frames, _time, status):
         if status:
             print(f"Loopback callback status: {status}")
         self._loopback_buffer.append(indata.copy())
@@ -195,7 +195,7 @@ class AudioRecorder:
 
             self._macos_loopback = MacOSLoopback(
                 sample_rate=self.sample_rate,
-                callback=lambda data: self._loopback_buffer.append(data),
+                callback=self._loopback_buffer.append,
             )
             self._macos_loopback.start()
             return True
