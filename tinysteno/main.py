@@ -358,6 +358,13 @@ def _prompt_bool(console, label: str, default: bool, hint: str = "") -> bool:
     return value in ("y", "yes")
 
 
+def _write_config(config_path: Path, config: dict) -> None:
+    """Persist config dict to YAML file."""
+    import yaml  # pylint: disable=import-outside-toplevel
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(yaml.dump(config, default_flow_style=False), encoding="utf-8")
+
+
 def cmd_setup(_args):
     """Interactively create or update ~/.tinysteno/config.yaml."""
     import yaml
@@ -521,8 +528,7 @@ def cmd_setup(_args):
         "persona": persona_slug,
     }
 
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(yaml.dump(config, default_flow_style=False))
+    _write_config(config_path, config)
 
     console.print()
     console.print(Rule())

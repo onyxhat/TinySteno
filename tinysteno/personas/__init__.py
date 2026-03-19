@@ -22,6 +22,8 @@ _USER_DIR = Path.home() / ".tinysteno" / "personas"
 
 @dataclass
 class Persona:
+    """Encapsulates a meeting note persona: schema, system prompt, and Jinja2 template."""
+
     slug: str
     name: str
     description: str

@@ -94,7 +94,10 @@ class Orchestrator:
                 messages=[
                     {
                         "role": "system",
-                        "content": f"Generate a brief title (max {_TITLE_MAX_WORDS} words, no special characters).",
+                        "content": (
+                            f"Generate a brief title "
+                            f"(max {_TITLE_MAX_WORDS} words, no special characters)."
+                        ),
                     },
                     {"role": "user", "content": prompt},
                 ],
