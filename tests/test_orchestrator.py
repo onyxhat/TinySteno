@@ -3,7 +3,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from tinysteno.personas import Persona
-from tinysteno.summarizer import Summarizer
+from tinysteno.orchestrator import Orchestrator
 
 from pathlib import Path
 
@@ -20,9 +20,9 @@ def _make_persona(schema: dict) -> Persona:
     )
 
 
-def _make_summarizer() -> Summarizer:
-    with patch("tinysteno.summarizer.OpenAI"):
-        s = Summarizer(api_key="test", base_url="http://localhost", model="test-model")
+def _make_orchestrator() -> Orchestrator:
+    with patch("tinysteno.orchestrator.OpenAI"):
+        s = Orchestrator(api_key="test", base_url="http://localhost", model="test-model")
     return s
 
 
@@ -33,7 +33,7 @@ def test_build_user_message_includes_field_names():
         "overview": {"type": "string", "description": "A summary"},
         "points":   {"type": "list",   "description": "Key points"},
     })
-    s = _make_summarizer()
+    s = _make_orchestrator()
     msg = s._build_user_message("Hello world", persona)
     assert '"overview"' in msg
     assert '"points"' in msg
@@ -41,21 +41,21 @@ def test_build_user_message_includes_field_names():
 
 def test_build_user_message_string_field_shown_as_string():
     persona = _make_persona({"title_field": {"type": "string", "description": "x"}})
-    s = _make_summarizer()
+    s = _make_orchestrator()
     msg = s._build_user_message("t", persona)
     assert '"title_field": "string"' in msg
 
 
 def test_build_user_message_list_field_shown_as_array():
     persona = _make_persona({"items": {"type": "list", "description": "x"}})
-    s = _make_summarizer()
+    s = _make_orchestrator()
     msg = s._build_user_message("t", persona)
     assert '"items": [' in msg
 
 
 def test_build_user_message_truncates_transcript():
     persona = _make_persona({"s": {"type": "string", "description": "x"}})
-    s = _make_summarizer()
+    s = _make_orchestrator()
     long_transcript = "x" * 20000
     msg = s._build_user_message(long_transcript, persona)
     # The transcript in the message should be at most 15000 chars
@@ -67,7 +67,7 @@ def test_build_user_message_includes_field_descriptions():
     persona = _make_persona({
         "key": {"type": "string", "description": "The primary key value"},
     })
-    s = _make_summarizer()
+    s = _make_orchestrator()
     msg = s._build_user_message("transcript", persona)
     assert "The primary key value" in msg
 
@@ -79,7 +79,7 @@ def test_summarize_returns_dict_with_schema_fields():
         "overview": {"type": "string", "description": "summary"},
         "items":    {"type": "list",   "description": "items"},
     })
-    s = _make_summarizer()
+    s = _make_orchestrator()
     s._client.chat.completions.create.return_value = MagicMock(
         choices=[MagicMock(message=MagicMock(content=json.dumps({
             "overview": "Great meeting",
@@ -92,7 +92,7 @@ def test_summarize_returns_dict_with_schema_fields():
 
 def test_summarize_defaults_missing_string_field():
     persona = _make_persona({"title_field": {"type": "string", "description": "x"}})
-    s = _make_summarizer()
+    s = _make_orchestrator()
     s._client.chat.completions.create.return_value = MagicMock(
         choices=[MagicMock(message=MagicMock(content=json.dumps({})))]
     )
@@ -102,7 +102,7 @@ def test_summarize_defaults_missing_string_field():
 
 def test_summarize_defaults_missing_list_field():
     persona = _make_persona({"items": {"type": "list", "description": "x"}})
-    s = _make_summarizer()
+    s = _make_orchestrator()
     s._client.chat.completions.create.return_value = MagicMock(
         choices=[MagicMock(message=MagicMock(content=json.dumps({})))]
     )
@@ -112,7 +112,7 @@ def test_summarize_defaults_missing_list_field():
 
 def test_summarize_ignores_extra_llm_fields():
     persona = _make_persona({"overview": {"type": "string", "description": "x"}})
-    s = _make_summarizer()
+    s = _make_orchestrator()
     s._client.chat.completions.create.return_value = MagicMock(
         choices=[MagicMock(message=MagicMock(content=json.dumps({
             "overview": "hi", "unexpected_field": "ignored"
@@ -128,7 +128,7 @@ def test_summarize_returns_defaults_on_llm_exception():
         "overview": {"type": "string", "description": "x"},
         "items": {"type": "list", "description": "x"},
     })
-    s = _make_summarizer()
+    s = _make_orchestrator()
     s._client.chat.completions.create.side_effect = Exception("timeout")
     result = s.summarize("t", persona)
     assert result == {"overview": "", "items": []}
@@ -142,7 +142,7 @@ def test_summarize_uses_persona_system_prompt():
         system_prompt="CUSTOM SYSTEM PROMPT",
         template=persona.template, template_path=persona.template_path,
     )
-    s = _make_summarizer()
+    s = _make_orchestrator()
     s._client.chat.completions.create.return_value = MagicMock(
         choices=[MagicMock(message=MagicMock(content=json.dumps({"s": ""})))]
     )
@@ -156,7 +156,7 @@ def test_summarize_uses_persona_system_prompt():
 # --- generate_title ---
 
 def test_generate_title_returns_string_on_success():
-    s = _make_summarizer()
+    s = _make_orchestrator()
     s._client.chat.completions.create.return_value = MagicMock(
         choices=[MagicMock(message=MagicMock(content="My Meeting Title"))]
     )
@@ -166,7 +166,7 @@ def test_generate_title_returns_string_on_success():
 
 
 def test_generate_title_returns_none_on_exception():
-    s = _make_summarizer()
+    s = _make_orchestrator()
     s._client.chat.completions.create.side_effect = Exception("API down")
     result = s.generate_title("overview")
     assert result is None

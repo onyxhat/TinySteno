@@ -1,4 +1,4 @@
-"""LLM summarization module for TinySteno."""
+"""LLM orchestration module for TinySteno."""
 from __future__ import annotations
 
 import json
@@ -19,8 +19,8 @@ _TITLE_MAX_OVERVIEW_CHARS = 500
 _LLM_TIMEOUT_SECONDS = 120.0
 
 
-class Summarizer:
-    """Summarize transcripts using OpenAI-compatible API."""
+class Orchestrator:
+    """Orchestrate LLM calls for transcript extraction and title generation."""
 
     def __init__(self, api_key: str, base_url: str, model: str):
         self.model = model
