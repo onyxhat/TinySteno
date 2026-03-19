@@ -7,6 +7,7 @@ from tinysteno.orchestrator import Orchestrator
 
 from pathlib import Path
 
+# pylint: disable=missing-function-docstring,protected-access
 
 def _make_persona(schema: dict) -> Persona:
     return Persona(
