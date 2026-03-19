@@ -1,8 +1,8 @@
 """Tests for tinysteno.personas module."""
-import keyword
-import pytest
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from tinysteno.personas import (
     Persona,

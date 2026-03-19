@@ -2,12 +2,24 @@
 
 Requires ``pyobjc-framework-ScreenCaptureKit`` and Screen Recording permission.
 """
+# pylint: disable=no-name-in-module  # pyobjc framework members resolved at runtime on macOS
+# pylint: disable=no-member  # pyobjc framework members resolved at runtime on macOS
+# pylint: disable=invalid-name  # ObjC bridge method names use camelCase/underscore conventions
+# pylint: disable=self-cls-assignment  # required ObjC init pattern: self = objc.super().init()
+# pylint: disable=attribute-defined-outside-init  # ObjC init method is not __init__
+# pylint: disable=access-member-before-definition  # ObjC init sets attrs; pylint can't see it
+# pylint: disable=using-constant-test  # ctypes c_void_p truthiness check is intentional
+# pylint: disable=global-statement  # module-level cache pattern for lazy-loaded C library
+# pylint: disable=too-many-locals  # complex platform-specific hardware interface functions
+# pylint: disable=too-many-branches  # complex platform-specific hardware interface functions
+# pylint: disable=consider-using-with  # Semaphore.acquire() is not a resource-allocating op
 
 import ctypes
 import ctypes.util
 import threading
-import numpy as np
 from typing import Callable, Optional
+
+import numpy as np
 
 
 # ── CoreMedia ctypes wrappers ─────────────────────────────────────────────────
@@ -168,7 +180,9 @@ def _get_delegate_class():
             return self
 
         @objc.typedSelector(b"v@:@^{opaqueCMSampleBuffer=}q")
-        def stream_didOutputSampleBuffer_ofType_(self, stream, sample_buffer, output_type):
+        def stream_didOutputSampleBuffer_ofType_(  # pylint: disable=unused-argument  # ObjC protocol requires this signature
+            self, _stream, sample_buffer, output_type
+        ):
             if output_type != SCK.SCStreamOutputTypeAudio:
                 return
             try:
@@ -183,7 +197,7 @@ def _get_delegate_class():
                     self._cb(arr)
             except Exception as e:
                 import logging
-                logging.getLogger(__name__).debug(f"SCStreamOutput callback error: {e}")
+                logging.getLogger(__name__).debug("SCStreamOutput callback error: %s", e)
 
         def stream_didStopWithError_(self, stream, error):
             pass
@@ -230,7 +244,7 @@ class MacOSLoopback:
 
     # ── private ──────────────────────────────────────────────────────────────
 
-    def _run_loop(self) -> None:
+    def _run_loop(self) -> None:  # pylint: disable=too-many-statements  # complex platform-specific ScreenCaptureKit setup sequence
         try:
             import time
             import ScreenCaptureKit as SCK
@@ -268,9 +282,11 @@ class MacOSLoopback:
             display = displays[0]
 
             # Exclude nothing → capture all apps/windows on this display
-            filt = SCK.SCContentFilter.alloc().initWithDisplay_excludingApplications_exceptingWindows_(
-                display, [], []
+            init_filter = (
+                SCK.SCContentFilter.alloc()
+                .initWithDisplay_excludingApplications_exceptingWindows_
             )
+            filt = init_filter(display, [], [])
             if filt is None:
                 raise RuntimeError("SCContentFilter init failed")
 
@@ -302,8 +318,8 @@ class MacOSLoopback:
             # and NSError under the method-stub convention), so use *args.
             sem = threading.Semaphore(0)
 
-            def on_start(*args):
-                # args is empty — no reliable error info from pyobjc here;
+            def on_start(*_args):
+                # _args is empty — no reliable error info from pyobjc here;
                 # failure surfaces as stream producing no audio samples.
                 self._ready.set()
                 sem.release()

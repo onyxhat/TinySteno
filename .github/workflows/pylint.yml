@@ -19,8 +19,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv add pylint pylint
-        uv sync
+        uv sync --extra dev
 
     - name: Analysing the code with pylint
       run: |
