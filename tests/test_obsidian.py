@@ -1,7 +1,7 @@
 """Tests for updated ObsidianExporter."""
-import pytest
 from pathlib import Path
-from unittest.mock import patch
+
+import pytest
 
 from tinysteno.obsidian import ObsidianExporter
 from tinysteno.personas import Persona

@@ -2,10 +2,11 @@
 
 import platform
 import wave
-import numpy as np
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
+
+import numpy as np
 
 
 class AudioRecorder:
