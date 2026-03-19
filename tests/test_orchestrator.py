@@ -1,11 +1,10 @@
 """Tests for tinysteno.orchestrator (Orchestrator)."""
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from tinysteno.personas import Persona
 from tinysteno.orchestrator import Orchestrator
-
-from pathlib import Path
 
 # pylint: disable=missing-function-docstring,protected-access
 

@@ -14,7 +14,9 @@ from tinysteno.recorder import AudioRecorder
 from tinysteno.transcriber import WhisperTranscriber
 from tinysteno.orchestrator import Orchestrator
 from tinysteno.obsidian import ObsidianExporter
-from tinysteno.personas import load_persona, list_personas, PersonaNotFoundError, PersonaInvalidError, Persona
+from tinysteno.personas import (  # noqa: E501
+    load_persona, list_personas, PersonaNotFoundError, PersonaInvalidError, Persona,
+)
 
 
 def setup_logging(verbose: bool = False):
@@ -89,7 +91,7 @@ def _format_duration(duration_seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def _process_audio(
+def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals  # pipeline requires all params; locals are distinct processing steps
     wav_path: str,
     name: Optional[str],
     config: dict,
@@ -239,7 +241,7 @@ def cmd_list(args):
         print(meeting.name)
 
 
-def cmd_test(args):
+def cmd_test(_args):  # pylint: disable=too-many-statements  # large interactive CLI setup function
     """Verify setup before first use."""
     from rich.console import Console
 
@@ -249,7 +251,7 @@ def cmd_test(args):
     console.print("\n[TinySteno Setup Test]")
 
     try:
-        from tinysteno.recorder import AudioRecorder
+        from tinysteno.recorder import AudioRecorder as _  # noqa: F401  # pylint: disable=unused-import,reimported,redefined-outer-name  # import-existence check
 
         console.print("✓ Recorder module")
     except ImportError as e:
@@ -257,7 +259,7 @@ def cmd_test(args):
         console.print(f"✗ Recorder: {e}")
 
     try:
-        from tinysteno.transcriber import WhisperTranscriber
+        from tinysteno.transcriber import WhisperTranscriber as _  # noqa: F401  # pylint: disable=unused-import,reimported,redefined-outer-name  # import-existence check
 
         console.print("✓ Transcriber module")
     except ImportError as e:
@@ -265,7 +267,7 @@ def cmd_test(args):
         console.print(f"✗ Transcriber: {e}")
 
     try:
-        import sounddevice
+        import sounddevice as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
 
         console.print("✓ sounddevice")
     except ImportError:
@@ -273,7 +275,7 @@ def cmd_test(args):
         console.print("✗ sounddevice (pip install sounddevice)")
 
     try:
-        import faster_whisper
+        import faster_whisper as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
 
         console.print("✓ faster-whisper")
     except ImportError:
@@ -281,7 +283,7 @@ def cmd_test(args):
         console.print("✗ faster-whisper (pip install faster-whisper)")
 
     try:
-        import openai
+        import openai as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
 
         console.print("✓ openai")
     except ImportError:
@@ -289,7 +291,7 @@ def cmd_test(args):
         console.print("✗ openai (pip install openai)")
 
     try:
-        import yaml
+        import yaml as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
 
         console.print("✓ pyyaml")
     except ImportError:
@@ -297,7 +299,7 @@ def cmd_test(args):
         console.print("✗ pyyaml (pip install pyyaml)")
 
     try:
-        import rich
+        import rich as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
 
         console.print("✓ rich")
     except ImportError:
@@ -314,9 +316,8 @@ def cmd_test(args):
     if not issues:
         console.print("\n✓ All checks passed!")
         return 0
-    else:
-        console.print(f"\n✗ Found {len(issues)} issue(s)")
-        return 1
+    console.print(f"\n✗ Found {len(issues)} issue(s)")
+    return 1
 
 
 def cmd_config(args):
@@ -365,7 +366,7 @@ def _write_config(config_path: Path, config: dict) -> None:
     config_path.write_text(yaml.dump(config, default_flow_style=False), encoding="utf-8")
 
 
-def cmd_setup(_args):
+def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # large interactive CLI setup function
     """Interactively create or update ~/.tinysteno/config.yaml."""
     import yaml
     from rich.console import Console
@@ -386,7 +387,7 @@ def cmd_setup(_args):
         return existing.get(key, fallback)
 
     console.print()
-    console.print(Rule(f"[bold]TinySteno Setup[/bold]"))
+    console.print(Rule("[bold]TinySteno Setup[/bold]"))
     console.print()
     console.print(f"{action} [bold]{config_path}[/bold]")
     console.print("Press Enter to keep the current value.\n")
@@ -419,8 +420,12 @@ def cmd_setup(_args):
     # --- LLM ---
     console.print()
     console.print(Rule("[dim]LLM / Summarization[/dim]"))
-    console.print("  [dim]Ollama (local): base_url = http://localhost:11434/v1, api_key = ollama[/dim]")
-    console.print("  [dim]OpenAI (cloud): base_url = https://api.openai.com/v1, api_key = sk-...[/dim]")
+    console.print(
+        "  [dim]Ollama (local): base_url = http://localhost:11434/v1, api_key = ollama[/dim]"
+    )
+    console.print(
+        "  [dim]OpenAI (cloud): base_url = https://api.openai.com/v1, api_key = sk-...[/dim]"
+    )
     console.print()
 
     base_url = _prompt(
@@ -449,7 +454,9 @@ def cmd_setup(_args):
     # --- Whisper ---
     console.print()
     console.print(Rule("[dim]Transcription (Whisper)[/dim]"))
-    console.print("  [dim]Model sizes (speed ↔ accuracy): tiny · base · small · medium · large[/dim]")
+    console.print(
+        "  [dim]Model sizes (speed ↔ accuracy): tiny · base · small · medium · large[/dim]"
+    )
     console.print()
 
     whisper_model = _prompt(
@@ -509,7 +516,10 @@ def cmd_setup(_args):
         "slug of the persona to use for processing",
     )
     if persona_slug not in available_personas:
-        console.print(f"  [yellow]Warning: '{persona_slug}' is not a known persona. It will be saved but may fail at runtime.[/yellow]")
+        console.print(
+            f"  [yellow]Warning: '{persona_slug}' is not a known persona."
+            " It will be saved but may fail at runtime.[/yellow]"
+        )
 
     # --- Write ---
     config = {
