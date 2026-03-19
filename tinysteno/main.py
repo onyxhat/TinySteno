@@ -14,6 +14,7 @@ from tinysteno.recorder import AudioRecorder
 from tinysteno.transcriber import WhisperTranscriber
 from tinysteno.summarizer import Summarizer
 from tinysteno.obsidian import ObsidianExporter
+from tinysteno.personas import load_persona, list_personas, PersonaNotFoundError, PersonaInvalidError
 
 
 def setup_logging(verbose: bool = False):
@@ -41,6 +42,7 @@ def load_config() -> dict:
             "output_folder": "meetings",
             "sample_rate": 44100,
             "channels": 1,
+            "persona": "default",
         }
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(yaml.dump(default_config, default_flow_style=False))
@@ -77,11 +79,23 @@ def _validate_config(config: dict) -> None:
         raise ValueError("Config field 'channels' must be 1 or 2")
 
 
+def _format_duration(duration_seconds: float) -> str:
+    """Format duration in seconds to HH:MM:SS, clamped at 99:59:59."""
+    total = int(duration_seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h > 99:
+        return "99:59:59"
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
 def _process_audio(
     wav_path: str,
     name: Optional[str],
     config: dict,
     logger: logging.Logger,
+    persona,  # tinysteno.personas.Persona
+    timestamp: datetime,
 ) -> None:
     """Shared pipeline: transcribe → summarize → export."""
     print("Transcribing...")
@@ -97,7 +111,7 @@ def _process_audio(
         print("No speech detected, skipping export.")
         return
 
-    summary = None
+    data: dict = {}
     summarizer = None
     if config.get("api_key"):
         print("Summarizing...")
@@ -106,14 +120,33 @@ def _process_audio(
             base_url=config["base_url"],
             model=config["model"],
         )
-        summary = summarizer.summarize(transcript)
+        data = summarizer.summarize(transcript, persona)
 
-    title = name or "Meeting"
-    if config.get("auto_title") and summary and summarizer:
-        print("Generating title...")
-        title = summarizer.generate_title(summary.overview)
+    # Resolve title
+    title = name  # start with --name if provided
+    if not title:
+        first_string_value = next(
+            (data.get(field, "") for field, defn in persona.schema.items()
+             if defn["type"] == "string"),
+            None,
+        )
+        if config.get("auto_title") and first_string_value and summarizer:
+            print("Generating title...")
+            generated = summarizer.generate_title(first_string_value)
+            title = generated if generated else Path(wav_path).stem
+        else:
+            title = Path(wav_path).stem
 
-    timestamp = datetime.now()
+    date_str = timestamp.strftime("%Y-%m-%d %H:%M")
+    duration_str = _format_duration(result.get("duration_seconds", 0.0))
+
+    metadata = {
+        "title": title,
+        "date": date_str,
+        "duration": duration_str,
+        "transcript": transcript,
+        "detected_language": result.get("detected_language", ""),
+    }
 
     exporter = ObsidianExporter(
         vault_path=config["obsidian_vault"],
@@ -121,12 +154,11 @@ def _process_audio(
         tags=config.get("tags", ["meeting"]),
     )
 
-    meeting_path = exporter.export_meeting(
-        data=summary.to_dict() if summary else {},
-        title=title,
-        timestamp=timestamp,
-        transcript=transcript,
-    )
+    try:
+        meeting_path = exporter.export(data, persona, metadata)
+    except RuntimeError as e:
+        print(f"Error rendering note: {e}")
+        return
 
     print(f"Meeting: {meeting_path}")
 
@@ -135,7 +167,19 @@ def cmd_record(args, config):
     """Record audio and process into meeting notes."""
     logger = logging.getLogger(__name__)
 
+    slug = getattr(args, "persona", None) or config.get("persona", "default")
+    try:
+        persona = load_persona(slug)
+    except PersonaNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except PersonaInvalidError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
     name = args.name or None
+    timestamp = datetime.now()  # capture at start of recording
+
     recorder = AudioRecorder(
         sample_rate=config.get("sample_rate", 44100),
         channels=config.get("channels", 1),
@@ -148,7 +192,6 @@ def cmd_record(args, config):
 
     try:
         import time
-
         while True:
             time.sleep(0.1)
     except KeyboardInterrupt:
@@ -157,7 +200,7 @@ def cmd_record(args, config):
         recorder.stop()
 
     print("Recording stopped.")
-    _process_audio(wav_path, name, config, logger)
+    _process_audio(wav_path, name, config, logger, persona, timestamp)
 
 
 def cmd_process(args, config):
@@ -166,8 +209,20 @@ def cmd_process(args, config):
     if not audio_file.exists():
         raise FileNotFoundError(f"Audio file not found: {audio_file}")
 
+    slug = getattr(args, "persona", None) or config.get("persona", "default")
+    try:
+        persona = load_persona(slug)
+    except PersonaNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except PersonaInvalidError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    timestamp = datetime.fromtimestamp(audio_file.stat().st_mtime)
+
     logger = logging.getLogger(__name__)
-    _process_audio(str(audio_file), args.name or None, config, logger)
+    _process_audio(str(audio_file), args.name or None, config, logger, persona, timestamp)
 
 
 def cmd_list(args):
@@ -433,6 +488,20 @@ def cmd_setup(args):
     except ValueError:
         sample_rate = 44100
 
+    # --- Persona ---
+    console.print()
+    console.print(Rule("[dim]Persona[/dim]"))
+    available_personas = list_personas()
+    console.print(f"  [dim]Available personas: {', '.join(available_personas)}[/dim]")
+    console.print()
+
+    persona_slug = _prompt(
+        console,
+        "Default persona",
+        get("persona", "default"),
+        "slug of the persona to use for processing",
+    )
+
     # --- Write ---
     config = {
         "obsidian_vault": obsidian_vault,
@@ -447,6 +516,7 @@ def cmd_setup(args):
         "diarization": diarization,
         "channels": channels,
         "sample_rate": sample_rate,
+        "persona": persona_slug,
     }
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -469,11 +539,13 @@ def main():
 
     record_parser = subparsers.add_parser("record", help="Record a meeting")
     record_parser.add_argument("--name", help="Meeting name")
+    record_parser.add_argument("--persona", help="Persona slug to use for this recording")
     record_parser.add_argument("--verbose", action="store_true", help="Verbose output")
 
     process_parser = subparsers.add_parser("process", help="Process existing audio")
     process_parser.add_argument("audio", help="Audio file path")
     process_parser.add_argument("--name", help="Meeting name")
+    process_parser.add_argument("--persona", help="Persona slug to use for this recording")
     process_parser.add_argument("--verbose", action="store_true", help="Verbose output")
 
     list_parser = subparsers.add_parser("list", help="List meetings")
