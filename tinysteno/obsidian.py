@@ -3,8 +3,11 @@
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 import yaml
+
+if TYPE_CHECKING:
+    from tinysteno.personas import Persona
 
 
 class ObsidianExporter:
@@ -72,6 +75,43 @@ class ObsidianExporter:
             f"---\n{yaml.dump(frontmatter, default_flow_style=False)}---\n\n{body}"
         )
 
+        filepath.write_text(content)
+        return str(filepath)
+
+    def export(self, data: dict, persona: "Persona", metadata: dict) -> str:
+        """Export a note using the persona's Jinja2 template.
+
+        Args:
+            data: Dict of schema field values from summarizer.
+            persona: The Persona whose template to render.
+            metadata: Dict with keys: title, date, duration, transcript, detected_language.
+
+        Returns:
+            Absolute path to the written file.
+
+        Raises:
+            RuntimeError: If the Jinja2 template fails to render.
+        """
+        from jinja2 import Environment, BaseLoader, TemplateError
+
+        meetings_dir = self.vault_path / self.output_folder
+        meetings_dir.mkdir(parents=True, exist_ok=True)
+
+        # Context: metadata first, then data fields (data overwrites on collision)
+        context = {**metadata, **data}
+
+        try:
+            env = Environment(loader=BaseLoader(), keep_trailing_newline=True)
+            tmpl = env.from_string(persona.template)
+            content = tmpl.render(**context)
+        except TemplateError as e:
+            raise RuntimeError(
+                f"Template render error in {persona.template_path}: {e}"
+            ) from e
+
+        date_prefix = metadata["date"][:10]
+        filename = self._sanitize_filename(f"{metadata['title']} ({date_prefix})")
+        filepath = meetings_dir / f"{filename}.md"
         filepath.write_text(content)
         return str(filepath)
 
