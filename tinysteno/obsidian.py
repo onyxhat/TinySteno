@@ -82,7 +82,7 @@ class ObsidianExporter:
         """Export a note using the persona's Jinja2 template.
 
         Args:
-            data: Dict of schema field values from summarizer.
+            data: Dict of schema field values from orchestrator.
             persona: The Persona whose template to render.
             metadata: Dict with keys: title, date, duration, transcript, detected_language.
 

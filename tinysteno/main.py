@@ -12,7 +12,7 @@ from typing import Optional
 
 from tinysteno.recorder import AudioRecorder
 from tinysteno.transcriber import WhisperTranscriber
-from tinysteno.summarizer import Summarizer
+from tinysteno.orchestrator import Orchestrator
 from tinysteno.obsidian import ObsidianExporter
 from tinysteno.personas import load_persona, list_personas, PersonaNotFoundError, PersonaInvalidError
 
@@ -112,15 +112,15 @@ def _process_audio(
         return
 
     data: dict = {}
-    summarizer = None
+    orchestrator = None
     if config.get("api_key"):
         print("Summarizing...")
-        summarizer = Summarizer(
+        orchestrator = Orchestrator(
             api_key=config["api_key"],
             base_url=config["base_url"],
             model=config["model"],
         )
-        data = summarizer.summarize(transcript, persona)
+        data = orchestrator.summarize(transcript, persona)
 
     # Resolve title
     title = name  # start with --name if provided
@@ -130,9 +130,9 @@ def _process_audio(
              if defn["type"] == "string"),
             None,
         )
-        if config.get("auto_title") and summarizer and first_string_value:
+        if config.get("auto_title") and orchestrator and first_string_value:
             print("Generating title...")
-            generated = summarizer.generate_title(first_string_value)
+            generated = orchestrator.generate_title(first_string_value)
             title = generated if generated else Path(wav_path).stem
         else:
             title = Path(wav_path).stem
