@@ -1,0 +1,10 @@
+name: Sprint Ceremony
+description: Captures sprint planning, review, or retrospective outcomes including completed work, blockers, and action items.
+schema:
+  ceremony_type:       {type: string, description: "Type of ceremony: Planning, Review, or Retrospective"}
+  overview:            {type: string, description: "Brief summary of the ceremony"}
+  completed_items:     {type: list,   description: "Work items completed this sprint as strings"}
+  incomplete_items:    {type: list,   description: "Work items not completed, with brief reason"}
+  blockers:            {type: list,   description: "Current blockers or impediments as strings"}
+  retrospective_notes: {type: list,   description: "Retrospective observations (what went well / what didn't)"}
+  action_items:        {type: list,   description: "Action items, formatted as 'task (owner)'"}

@@ -1,0 +1,10 @@
+name: Incident Response & Management
+description: Captures severity, impact, responders, mitigations, and follow-ups from incident response meetings.
+schema:
+  overview:   {type: string, description: "Brief incident description"}
+  timeline:   {type: list,   description: "Chronological response events as strings"}
+  severity:   {type: string, description: "Incident severity level (e.g., SEV1, P0, Critical)"}
+  impact:     {type: string, description: "Description of business and user impact"}
+  responders: {type: list,   description: "Names and roles of responders, formatted as 'name (role)'"}
+  mitigations: {type: list,   description: "Mitigations applied during the incident as strings"}
+  follow_ups: {type: list,   description: "Post-incident follow-up tasks, formatted as 'task (owner)'"}

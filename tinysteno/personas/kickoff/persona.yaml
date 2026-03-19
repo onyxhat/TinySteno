@@ -1,0 +1,10 @@
+name: Project Kickoff
+description: Captures objectives, stakeholders, scope, risks, decisions, and next steps from a project kickoff meeting.
+schema:
+  overview:     {type: string, description: "Brief project summary"}
+  objectives:   {type: list,   description: "Project objectives or success criteria as strings"}
+  stakeholders: {type: list,   description: "Key stakeholders, formatted as 'name (role)'"}
+  scope:        {type: string, description: "What is and isn't in scope"}
+  risks:        {type: list,   description: "Identified risks as strings"}
+  decisions:    {type: list,   description: "Key decisions made during kickoff as strings"}
+  next_steps:   {type: list,   description: "Immediate next steps, formatted as 'task (owner)'"}
