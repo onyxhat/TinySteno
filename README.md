@@ -18,9 +18,9 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 
 ## Installation
 
-**UVX tool:**
+**UV:**
 ```bash
-uvx tool install git+https://github.com/onyxhat/TinySteno
+uv tool install git+https://github.com/onyxhat/TinySteno
 ```
 
 **Manually:**
