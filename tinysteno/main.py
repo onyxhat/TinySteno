@@ -130,7 +130,7 @@ def _process_audio(
              if defn["type"] == "string"),
             None,
         )
-        if config.get("auto_title") and first_string_value and summarizer:
+        if config.get("auto_title") and summarizer and first_string_value:
             print("Generating title...")
             generated = summarizer.generate_title(first_string_value)
             title = generated if generated else Path(wav_path).stem
@@ -167,7 +167,7 @@ def cmd_record(args, config):
     """Record audio and process into meeting notes."""
     logger = logging.getLogger(__name__)
 
-    slug = getattr(args, "persona", None) or config.get("persona", "default")
+    slug = args.persona or config.get("persona", "default")
     try:
         persona = load_persona(slug)
     except PersonaNotFoundError as e:
@@ -209,7 +209,7 @@ def cmd_process(args, config):
     if not audio_file.exists():
         raise FileNotFoundError(f"Audio file not found: {audio_file}")
 
-    slug = getattr(args, "persona", None) or config.get("persona", "default")
+    slug = args.persona or config.get("persona", "default")
     try:
         persona = load_persona(slug)
     except PersonaNotFoundError as e:
@@ -501,6 +501,8 @@ def cmd_setup(args):
         get("persona", "default"),
         "slug of the persona to use for processing",
     )
+    if persona_slug not in available_personas:
+        console.print(f"  [yellow]Warning: '{persona_slug}' is not a known persona. It will be saved but may fail at runtime.[/yellow]")
 
     # --- Write ---
     config = {
@@ -545,7 +547,7 @@ def main():
     process_parser = subparsers.add_parser("process", help="Process existing audio")
     process_parser.add_argument("audio", help="Audio file path")
     process_parser.add_argument("--name", help="Meeting name")
-    process_parser.add_argument("--persona", help="Persona slug to use for this recording")
+    process_parser.add_argument("--persona", help="Persona slug to use for this audio file")
     process_parser.add_argument("--verbose", action="store_true", help="Verbose output")
 
     list_parser = subparsers.add_parser("list", help="List meetings")
