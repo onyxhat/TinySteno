@@ -1,7 +1,6 @@
 # TODO
-- [ ] Add a `device` config option to select audio device(s)
 - [ ] Add HF_TOKEN for authenticated model downloads from Hugging Face
-- [ ] Fix duration calculation using audio recording length (currently outputs 0)
+- [x] Fix duration calculation using audio recording length (currently outputs 0)
 - [ ] Allow external faster-whisper API for transcription
 - [ ] Add user info/knowledge config (name, job, title, etc.)
 - [x] Add personas for specific event/meeting types
@@ -12,5 +11,6 @@
   - [x] Event timeline and fact gathering
   - [x] Executive Summary
 - [ ] Basic UI/AppImage
-- [ ] Add support for reprocessing and/or resuming transcription jobs
+- [x] Add support for reprocessing and/or resuming transcription jobs
 - [ ] Make installable as a `uvx tool install`
+- [ ] Add dynamic tag generation
