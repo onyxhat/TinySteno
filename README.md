@@ -8,7 +8,8 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 - Record meetings (indefinite duration, Ctrl+C to stop)
 - Captures mic + system audio simultaneously — no virtual audio device required
 - Transcribe with faster-whisper (local, runs on CPU)
-- Summarize via OpenAI-compatible API (Ollama, OpenAI, Groq)
+- Summarize via OpenAI-compatible API (Ollama, OpenAI, OpenRouter, etc.)
+- Persona system — choose how recordings are summarized and formatted
 - Export structured markdown notes to Obsidian vault
 
 ## Installation
@@ -24,14 +25,20 @@ uv run tinysteno --help
 # Update config interactively
 tinysteno setup
 
-# Record a meeting
+# Record a meeting (uses default persona)
 tinysteno record
 
 # Record with custom name
 tinysteno record --name "Budget Review"
 
+# Record using a specific persona
+tinysteno record --persona rca
+
 # Process existing audio file
 tinysteno process recordings/Meeting.wav
+
+# Process with a specific persona
+tinysteno process recordings/Meeting.wav --persona executive-summary
 
 # Verify setup
 tinysteno test
@@ -42,6 +49,51 @@ tinysteno list --vault /path/to/vault
 # Show current config
 tinysteno config
 ```
+
+## Personas
+
+Personas control what the LLM extracts from a transcript and how the Obsidian note is rendered. Each persona defines a system prompt, an output schema, and a Jinja2 note template.
+
+### Built-in personas
+
+| Slug | Name | Use for |
+|------|------|---------|
+| `default` | Meeting Summary | General meetings — overview, participants, key points, action items |
+| `rca` | Root Cause Analysis | Postmortems — timeline, root cause, contributing factors, corrective actions |
+| `irm` | Incident Response & Management | Incident calls — severity, impact, responders, mitigations, follow-ups |
+| `sprint` | Sprint Ceremony | Planning/review/retros — completed work, blockers, retrospective notes |
+| `kickoff` | Project Kickoff | Project kickoffs — objectives, stakeholders, scope, risks, decisions |
+| `executive-summary` | Executive Summary | Concise summaries — key decisions, risks, asks |
+
+### Custom personas
+
+Drop a directory into `~/.tinysteno/personas/<slug>/` with three files:
+
+```
+~/.tinysteno/personas/
+└── my-persona/
+    ├── persona.yaml      # name, description, schema
+    ├── system_prompt.md  # LLM system message
+    └── template.md       # Jinja2 Obsidian note template
+```
+
+**`persona.yaml`** example:
+
+```yaml
+name: My Persona
+description: What this persona does.
+schema:
+  summary:
+    type: string
+    description: A brief summary
+  highlights:
+    type: list
+    description: Key highlights as strings
+```
+
+Schema field types are `string` or `list` (list of strings). Field names must be valid Python identifiers and cannot collide with reserved metadata variables: `title`, `date`, `duration`, `transcript`, `detected_language`.
+
+**`template.md`** receives all schema fields plus the metadata variables above as Jinja2 context.
 
 ## Configuration
 
@@ -55,11 +107,13 @@ obsidian_vault: "~/Obsidian/Vault"
 
 # Output settings
 output_folder: "meetings"   # subfolder inside vault
-tags: ["meeting"]           # default YAML frontmatter tags
 
 # Where to store raw audio recordings
 # Defaults to <obsidian_vault>/<output_folder>/audio if not set
 # recordings_path: "~/recordings"
+
+# Persona to use when --persona is not specified
+persona: "default"
 
 # OpenAI-compatible API settings
 # Ollama (local):  base_url: "http://localhost:11434/v1", api_key: "ollama"
@@ -86,28 +140,32 @@ channels: 1                 # mic input channels; output is automatically stereo
 
 ## Output Format
 
-### Meeting Note
+Note format is controlled by the active persona's template. The default persona produces:
 
-```yaml
+```markdown
 ---
-created: 2024-01-15T14:30:00
+created: 2024-01-15 14:30
 type: meeting
 tags: [meeting]
-duration: "45m"
-participants: [Alice, Bob]
+duration: 00:45:12
+participants: Alice, Bob
 ---
 
-# Budget-Review
+# Budget Review
 
 ## Overview
-AI-generated summary...
+AI-generated summary of the meeting.
+
+## Participants
+- Alice
+- Bob
 
 ## Key Points
-1. Point 1
-2. Point 2
+1. Point one
+2. Point two
 
 ## Action Items
-- [ ] Task → @Alice
+- [ ] Follow up with the team (Alice)
 
 ## Transcript
 \```
