@@ -55,7 +55,7 @@ def _validate_dir(path: Path, slug: str) -> dict:
     except Exception as e:
         raise PersonaInvalidError(
             f"Persona '{slug}': failed to parse persona.yaml: {e}"
-        )
+        ) from e
 
     if not isinstance(data, dict):
         raise PersonaInvalidError(
