@@ -3,7 +3,7 @@ created: {{ date }}
 type: meeting
 tags: [meeting]
 duration: {{ duration }}
-participants: {{ participants | join(', ') }}
+participants: {{ (participants or []) | join(', ') }}
 ---
 
 # {{ title }}
