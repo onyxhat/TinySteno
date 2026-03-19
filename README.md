@@ -8,7 +8,7 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 - Record meetings (indefinite duration, Ctrl+C to stop)
 - Captures mic + system audio simultaneously — no virtual audio device required
 - Transcribe with faster-whisper (local, runs on CPU)
-- Summarize via OpenAI-compatible API (Ollama, OpenAI, Groq)
+- Summarize via OpenAI-compatible API (Ollama, OpenAI, OpenRouter, etc.)
 - Persona system — choose how recordings are summarized and formatted
 - Export structured markdown notes to Obsidian vault
 
