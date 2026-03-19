@@ -43,6 +43,7 @@ class AudioRecorder:
         self._macos_loopback = None
         self._active_channels = channels
         self._has_loopback = False
+        self.output_path: Optional[Path] = None
 
     # ── audio callbacks ───────────────────────────────────────────────────────
 
