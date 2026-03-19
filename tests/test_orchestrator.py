@@ -1,4 +1,4 @@
-"""Tests for updated Summarizer."""
+"""Tests for tinysteno.orchestrator (Orchestrator)."""
 import json
 from unittest.mock import MagicMock, patch
 
