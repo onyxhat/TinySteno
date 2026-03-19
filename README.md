@@ -12,9 +12,21 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 - Persona system — choose how recordings are summarized and formatted
 - Export structured markdown notes to Obsidian vault
 
+## Prerequisites
+- [Python 3.12+](https://www.python.org/downloads/)
+- [UV](https://docs.astral.sh/uv/getting-started/installation/)
+
 ## Installation
 
+**UVX tool:**
 ```bash
+uvx tool install git+https://github.com/onyxhat/TinySteno
+```
+
+**Manually:**
+```bash
+git clone https://github.com/onyxhat/TinySteno.git
+cd TinySteno
 uv sync
 uv run tinysteno --help
 ```
