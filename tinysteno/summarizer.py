@@ -158,12 +158,12 @@ class Summarizer:
             return {}
 
     def _extract_json(self, text: str) -> Optional[str]:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
+        match = re.search(r"\{.*?\}", text, re.DOTALL)
         return match.group(0) if match else None
 
     def _clean_title(self, title: str) -> str:
         title = title.replace('"', "").replace("'", "").replace(":", "")
-        title = re.sub(r"[^\w\s\-\.\(\\)]", "", title)
+        title = re.sub(r"[^\w\s\-\.\(\)]", "", title)
         title = re.sub(r"\s+", " ", title).strip()
         words = title.split()[:_TITLE_MAX_WORDS]
         return " ".join(words)
