@@ -13,6 +13,7 @@ from tinysteno.personas import (
     BUILTIN_ORDER,
 )
 
+# pylint: disable=missing-function-docstring,protected-access
 
 # --- list_personas ---
 

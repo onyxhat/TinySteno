@@ -1,0 +1,22 @@
+[FORMAT]
+max-line-length=100
+
+[MESSAGES CONTROL]
+disable=
+    # Intentional lazy imports for optional/heavy platform-specific dependencies
+    import-outside-toplevel,
+    # Deliberate broad catches: LLM and hardware errors use fallback/degraded mode
+    broad-exception-caught,
+    # Hardware interface class (AudioRecorder) legitimately needs many attributes
+    too-many-instance-attributes,
+    # Thin wrapper classes don't need artificial extra public methods
+    too-few-public-methods,
+    # objc bridge methods and test functions don't require docstrings
+    missing-function-docstring
+
+[TYPECHECK]
+# platform-conditional; don't error on missing members at import time
+ignored-modules=sounddevice
+
+[DESIGN]
+max-attributes=12

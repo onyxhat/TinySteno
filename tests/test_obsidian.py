@@ -6,6 +6,7 @@ import pytest
 from tinysteno.obsidian import ObsidianExporter
 from tinysteno.personas import Persona
 
+# pylint: disable=missing-function-docstring
 
 def _make_persona(template: str, schema: dict | None = None) -> Persona:
     return Persona(
