@@ -164,7 +164,7 @@ class AudioRecorder:
             )
             self._audio_interface.start()
         except sd.PortAudioError as e:
-            raise RuntimeError(f"Failed to start audio recording: {e}")
+            raise RuntimeError(f"Failed to start audio recording: {e}") from e
 
         # ── system audio loopback ─────────────────────────────────────────────
         system = platform.system()
@@ -261,7 +261,7 @@ class AudioRecorder:
             return True
         except Exception as e:
             self._is_recording = False
-            raise RuntimeError(f"Failed to save recording: {e}")
+            raise RuntimeError(f"Failed to save recording: {e}") from e
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
