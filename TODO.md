@@ -10,6 +10,7 @@
   - [x] Project Kickoff
   - [x] Event timeline and fact gathering
   - [x] Executive Summary
+  - [ ] Add subcommand to generate persona stub from template that creates and populates the directory for the user
 - [ ] Basic UI/AppImage
 - [x] Add support for reprocessing and/or resuming transcription jobs
 - [ ] Make installable as a `uvx tool install`

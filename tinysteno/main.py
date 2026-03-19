@@ -14,7 +14,7 @@ from tinysteno.recorder import AudioRecorder
 from tinysteno.transcriber import WhisperTranscriber
 from tinysteno.orchestrator import Orchestrator
 from tinysteno.obsidian import ObsidianExporter
-from tinysteno.personas import load_persona, list_personas, PersonaNotFoundError, PersonaInvalidError
+from tinysteno.personas import load_persona, list_personas, PersonaNotFoundError, PersonaInvalidError, Persona
 
 
 def setup_logging(verbose: bool = False):
@@ -94,7 +94,7 @@ def _process_audio(
     name: Optional[str],
     config: dict,
     logger: logging.Logger,
-    persona,  # tinysteno.personas.Persona
+    persona: Persona,
     timestamp: datetime,
 ) -> None:
     """Shared pipeline: transcribe → summarize → export."""
