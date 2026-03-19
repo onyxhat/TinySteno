@@ -1,6 +1,5 @@
 """Shared pytest fixtures for TinySteno tests."""
 import pytest
-from pathlib import Path
 
 
 @pytest.fixture
@@ -13,8 +12,12 @@ def tmp_persona_dir(tmp_path):
         "name: Test Persona\n"
         "description: A persona used in tests.\n"
         "schema:\n"
-        "  summary: {type: string, description: A short summary}\n"
-        "  points: {type: list, description: Key points as strings}\n"
+        "  summary:\n"
+        "    type: string\n"
+        "    description: A short summary\n"
+        "  points:\n"
+        "    type: list\n"
+        "    description: Key points as strings\n"
     )
     (persona_dir / "system_prompt.md").write_text(
         "You are a test assistant."
