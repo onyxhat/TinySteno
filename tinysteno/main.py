@@ -188,7 +188,7 @@ def cmd_record(args, config):
 
     print("Recording started... Press Ctrl+C to stop.")
     wav_path = recorder.start(name)
-    logger.debug(f"Recording to: {wav_path}")
+    logger.debug("Recording to: %s", wav_path)
 
     try:
         import time
