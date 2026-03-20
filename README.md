@@ -34,8 +34,11 @@ uv run tinysteno --help
 ## Usage
 
 ```bash
-# Update config interactively
+# Update config interactively (also seeds built-in personas to ~/.tinysteno/personas/)
 tinysteno setup
+
+# Reset built-in personas to defaults (overwrites any edits you've made to them)
+tinysteno setup --reset-personas
 
 # Record a meeting (uses default persona)
 tinysteno record
@@ -67,6 +70,8 @@ tinysteno config
 Personas control what the LLM extracts from a transcript and how the Obsidian note is rendered. Each persona defines a system prompt, an output schema, and a Jinja2 note template.
 
 ### Built-in personas
+
+Built-in personas are seeded to `~/.tinysteno/personas/` on first run, so you can inspect and edit them directly. To restore them to their defaults, run `tinysteno setup --reset-personas`.
 
 | Slug | Name | Use for |
 |------|------|---------|
