@@ -15,6 +15,11 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 ## Prerequisites
 - [Python 3.12+](https://www.python.org/downloads/)
 - [UV](https://docs.astral.sh/uv/getting-started/installation/)
+- An [OpenAI](https://platform.openai.com/) Compatible API
+  - [Ollama](https://ollama.com)
+  - [LMStudio](https://lmstudio.ai)
+  - [OpenRouter](https://openrouter.ai)
+  - MORE!
 
 ## Installation
 
