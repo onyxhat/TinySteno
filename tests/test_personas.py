@@ -1,4 +1,6 @@
 """Tests for tinysteno.personas module."""
+import logging
+import shutil
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,14 +13,17 @@ from tinysteno.personas import (
     load_persona,
     list_personas,
     BUILTIN_ORDER,
+    seed_builtin_personas,
+    _BUILTIN_DIR,
 )
 
 # pylint: disable=missing-function-docstring,protected-access
 
 # --- list_personas ---
 
-def test_list_personas_returns_all_builtins():
-    slugs = list_personas()
+def test_list_personas_returns_all_builtins(seeded_user_dir):
+    with patch("tinysteno.personas._USER_DIR", seeded_user_dir):
+        slugs = list_personas()
     assert slugs[:len(BUILTIN_ORDER)] == BUILTIN_ORDER
 
 
@@ -28,8 +33,9 @@ def test_list_personas_builtin_order_is_fixed():
     ]
 
 
-def test_list_personas_no_duplicates():
-    slugs = list_personas()
+def test_list_personas_no_duplicates(seeded_user_dir):
+    with patch("tinysteno.personas._USER_DIR", seeded_user_dir):
+        slugs = list_personas()
     assert len(slugs) == len(set(slugs))
 
 
@@ -44,7 +50,8 @@ def test_list_personas_skips_malformed_user_persona(tmp_path):
     assert "my-bad-persona" not in slugs
 
 
-def test_list_personas_malformed_user_with_builtin_slug_keeps_builtin(tmp_path):
+def test_list_personas_malformed_builtin_slug_is_excluded(tmp_path):
+    # Malformed user dir for a built-in slug: no fallback to package, slug excluded
     user_dir = tmp_path / "personas" / "default"
     user_dir.mkdir(parents=True)
     # malformed: no files
@@ -52,7 +59,7 @@ def test_list_personas_malformed_user_with_builtin_slug_keeps_builtin(tmp_path):
     with patch("tinysteno.personas._USER_DIR", tmp_path / "personas"):
         slugs = list_personas()
 
-    assert "default" in slugs
+    assert "default" not in slugs
 
 
 def test_list_personas_valid_user_only_appended_alphabetically(tmp_path):
@@ -70,8 +77,9 @@ def test_list_personas_valid_user_only_appended_alphabetically(tmp_path):
 
 # --- load_persona ---
 
-def test_load_persona_default_returns_persona():
-    p = load_persona("default")
+def test_load_persona_default_returns_persona(seeded_user_dir):
+    with patch("tinysteno.personas._USER_DIR", seeded_user_dir):
+        p = load_persona("default")
     assert isinstance(p, Persona)
     assert p.slug == "default"
     assert p.name
@@ -81,14 +89,16 @@ def test_load_persona_default_returns_persona():
     assert p.template
 
 
-def test_load_persona_unknown_slug_raises():
-    with pytest.raises(PersonaNotFoundError, match="unknown-slug"):
-        load_persona("unknown-slug")
+def test_load_persona_unknown_slug_raises(seeded_user_dir):
+    with patch("tinysteno.personas._USER_DIR", seeded_user_dir):
+        with pytest.raises(PersonaNotFoundError, match="unknown-slug"):
+            load_persona("unknown-slug")
 
 
-def test_load_persona_unknown_lists_available_in_error():
-    with pytest.raises(PersonaNotFoundError) as exc_info:
-        load_persona("no-such-persona")
+def test_load_persona_unknown_lists_available_in_error(seeded_user_dir):
+    with patch("tinysteno.personas._USER_DIR", seeded_user_dir):
+        with pytest.raises(PersonaNotFoundError) as exc_info:
+            load_persona("no-such-persona")
     assert "default" in str(exc_info.value)
 
 
@@ -205,6 +215,72 @@ def test_persona_schema_preserves_insertion_order(tmp_path):
         p = load_persona("ordered")
 
     assert list(p.schema.keys()) == ["zzz", "aaa"]
+
+
+# --- seed_builtin_personas ---
+
+
+def test_seed_copies_all_builtins_to_empty_dir(tmp_path):
+    personas_dir = tmp_path / "personas"
+    with patch("tinysteno.personas._USER_DIR", personas_dir):
+        result = seed_builtin_personas()
+    assert set(result["copied"]) == set(BUILTIN_ORDER)
+    assert not result["skipped"]
+    for slug in BUILTIN_ORDER:
+        assert (personas_dir / slug / "persona.yaml").exists()
+
+
+def test_seed_skips_existing_when_not_forced(tmp_path):
+    personas_dir = tmp_path / "personas"
+    shutil.copytree(_BUILTIN_DIR / "default", personas_dir / "default")
+    with patch("tinysteno.personas._USER_DIR", personas_dir):
+        result = seed_builtin_personas()
+    assert "default" in result["skipped"]
+    assert "default" not in result["copied"]
+
+
+def test_seed_overwrites_when_forced(tmp_path):
+    personas_dir = tmp_path / "personas"
+    shutil.copytree(_BUILTIN_DIR / "default", personas_dir / "default")
+    with patch("tinysteno.personas._USER_DIR", personas_dir):
+        result = seed_builtin_personas(force=True)
+    assert "default" in result["copied"]
+    assert "default" not in result["skipped"]
+
+
+def test_seed_interactive_overwrites_on_yes(tmp_path, monkeypatch):
+    personas_dir = tmp_path / "personas"
+    shutil.copytree(_BUILTIN_DIR / "default", personas_dir / "default")
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    with patch("tinysteno.personas._USER_DIR", personas_dir):
+        result = seed_builtin_personas(interactive=True)
+    assert "default" in result["copied"]
+    assert "default" not in result["skipped"]
+
+
+def test_seed_interactive_skips_on_no(tmp_path, monkeypatch):
+    personas_dir = tmp_path / "personas"
+    shutil.copytree(_BUILTIN_DIR / "default", personas_dir / "default")
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    with patch("tinysteno.personas._USER_DIR", personas_dir):
+        result = seed_builtin_personas(interactive=True)
+    assert "default" in result["skipped"]
+    assert "default" not in result["copied"]
+
+
+def test_seed_warns_and_skips_missing_source(tmp_path, caplog):
+    fake_builtin = tmp_path / "fake_builtin"
+    fake_builtin.mkdir()
+    for slug in BUILTIN_ORDER[1:]:  # all except "default"
+        shutil.copytree(_BUILTIN_DIR / slug, fake_builtin / slug)
+    personas_dir = tmp_path / "personas"
+    with patch("tinysteno.personas._BUILTIN_DIR", fake_builtin):
+        with patch("tinysteno.personas._USER_DIR", personas_dir):
+            with caplog.at_level(logging.WARNING, logger="tinysteno.personas"):
+                result = seed_builtin_personas()
+    assert "default" not in result["copied"]
+    assert "default" not in result["skipped"]
+    assert any("default" in r.message for r in caplog.records)
 
 
 # --- helpers ---
