@@ -14,8 +14,9 @@ from tinysteno.recorder import AudioRecorder
 from tinysteno.transcriber import WhisperTranscriber
 from tinysteno.orchestrator import Orchestrator
 from tinysteno.obsidian import ObsidianExporter
-from tinysteno.personas import (  # noqa: E501
-    load_persona, list_personas, PersonaNotFoundError, PersonaInvalidError, Persona,
+from tinysteno.personas import (
+    load_persona, list_personas, seed_builtin_personas,
+    PersonaNotFoundError, PersonaInvalidError, Persona,
 )
 
 
@@ -48,6 +49,11 @@ def load_config() -> dict:
         }
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(yaml.dump(default_config, default_flow_style=False))
+
+    # Seed built-in personas on first run (silent; only when dir absent)
+    personas_dir = config_path.parent / "personas"
+    if not personas_dir.exists():
+        seed_builtin_personas()
 
     config = yaml.safe_load(config_path.read_text())
     if not isinstance(config, dict):
@@ -359,6 +365,16 @@ def _prompt_bool(console, label: str, default: bool, hint: str = "") -> bool:
     return value in ("y", "yes")
 
 
+def _print_seed_summary(console, result: dict) -> None:
+    """Print persona seeding summary using rich."""
+    user_dir = Path.home() / ".tinysteno" / "personas"
+    if result["copied"]:
+        console.print(f"[green]✓[/green] Personas seeded in [bold]{user_dir}[/bold]")
+        console.print(f"  Copied: {', '.join(result['copied'])}")
+    if result["skipped"]:
+        console.print(f"  Skipped (kept yours): {', '.join(result['skipped'])}")
+
+
 def _write_config(config_path: Path, config: dict) -> None:
     """Persist config dict to YAML file."""
     import yaml  # pylint: disable=import-outside-toplevel
@@ -373,6 +389,13 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
     from rich.rule import Rule
 
     console = Console()
+
+    # --reset-personas: re-seed built-ins without running the config wizard
+    if getattr(_args, "reset_personas", False):
+        result = seed_builtin_personas(force=True)
+        _print_seed_summary(console, result)
+        return
+
     config_path = Path.home() / ".tinysteno" / "config.yaml"
 
     # Load existing values as defaults, or fall back to built-in defaults.
@@ -540,6 +563,10 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
 
     _write_config(config_path, config)
 
+    # Seed built-in personas, prompting on conflicts
+    seed_result = seed_builtin_personas(interactive=True)
+    _print_seed_summary(console, seed_result)
+
     console.print()
     console.print(Rule())
     console.print(f"[green]✓[/green] Config written to [bold]{config_path}[/bold]")
@@ -575,7 +602,13 @@ def main():
     config_parser = subparsers.add_parser("config", help="Show/edit config")
     config_parser.add_argument("--edit", action="store_true", help="Edit config")
 
-    subparsers.add_parser("setup", help="Create or update config interactively")
+    setup_parser = subparsers.add_parser("setup", help="Create or update config interactively")
+    setup_parser.add_argument(
+        "--reset-personas",
+        action="store_true",
+        default=False,
+        help="Re-copy all built-in personas to ~/.tinysteno/personas/ (overwrites existing)",
+    )
 
     args = parser.parse_args()
 

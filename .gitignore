@@ -173,11 +173,5 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-
-# Code indexing and agent assistant files
-.gitnexus
-.claude/
+.gitnexus/
 .cocoindex_code/
-.shotgun/
-AGENTS.md
-CLAUDE.md
