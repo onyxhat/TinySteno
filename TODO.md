@@ -1,18 +1,9 @@
 # TODO
 - [ ] Add HF_TOKEN for authenticated model downloads from Hugging Face
-- [x] Fix duration calculation using audio recording length (currently outputs 0)
 - [ ] Allow external faster-whisper API for transcription
 - [ ] Add user info/knowledge config (name, job, title, etc.)
-- [x] Add personas for specific event/meeting types
-  - [x] Root Cause Analysis (RCA)
-  - [x] Incident Response & Management (IRM)
-  - [x] Sprint Planning, Review, Retrospective (SPRINT)
-  - [x] Project Kickoff
-  - [x] Event timeline and fact gathering
-  - [x] Executive Summary
-  - [ ] Add subcommand to generate persona stub from template that creates and populates the directory for the user
+- [ ] Add subcommand to generate persona stub from template that creates and populates the directory for the user
 - [ ] Basic UI/AppImage
-- [x] Add support for reprocessing and/or resuming transcription jobs
-- [x] Make installable as a `uv tool install`
 - [ ] Add dynamic tag generation
 - [ ] Investigate slow local transcription (periodically)
+- [ ] Remove need to truncate transcript content to fit context window
