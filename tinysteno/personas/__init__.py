@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import keyword
 import logging
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -109,23 +110,57 @@ def _load_from_dir(slug: str, path: Path) -> Persona:
     )
 
 
+def seed_builtin_personas(interactive: bool = False, force: bool = False) -> dict[str, list[str]]:
+    """Copy built-in persona dirs to _USER_DIR.
+
+    Returns {"copied": [...], "skipped": [...]} for callers to display or discard.
+    """
+    if force and interactive:
+        raise ValueError("force and interactive are mutually exclusive")
+    _USER_DIR.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    skipped: list[str] = []
+
+    for slug in BUILTIN_ORDER:
+        src = _BUILTIN_DIR / slug
+        dst = _USER_DIR / slug
+
+        if not src.exists():
+            logger.warning("Built-in persona source missing: %s", src)
+            continue
+
+        if dst.exists():
+            if force:
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+                copied.append(slug)
+            elif interactive:
+                answer = input(
+                    f"  Built-in persona '{slug}' already exists. Overwrite? [y/N] "
+                ).strip().lower()
+                if answer in ("y", "yes"):
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+                    copied.append(slug)
+                else:
+                    skipped.append(slug)
+            else:
+                skipped.append(slug)
+        else:
+            shutil.copytree(src, dst)
+            copied.append(slug)
+
+    return {"copied": copied, "skipped": skipped}
+
+
 def load_persona(slug: str) -> Persona:
-    """Load persona by slug.
+    """Load persona by slug from _USER_DIR.
 
-    User persona in ~/.tinysteno/personas/<slug>/ takes priority over built-ins.
-    If user directory exists for the slug, it is used exclusively (no fallback to built-in).
-
-    Raises PersonaNotFoundError if no directory for the slug exists.
+    Raises PersonaNotFoundError if no directory for the slug exists in _USER_DIR.
     Raises PersonaInvalidError if the directory exists but is malformed.
     """
     user_path = _USER_DIR / slug
-    builtin_path = _BUILTIN_DIR / slug
 
     if user_path.exists() and user_path.is_dir():
         return _load_from_dir(slug, user_path)
-
-    if builtin_path.exists() and builtin_path.is_dir():
-        return _load_from_dir(slug, builtin_path)
 
     available = list_personas()
     raise PersonaNotFoundError(
@@ -136,17 +171,15 @@ def load_persona(slug: str) -> Persona:
 def list_personas() -> list[str]:
     """Return available persona slugs in canonical order.
 
-    Order: built-ins in BUILTIN_ORDER, then user-only personas sorted
-    case-insensitively. A user persona that overrides a built-in slug stays at
-    the built-in's position. Malformed user persona directories are skipped
-    (with a warning) and do not suppress built-ins.
+    Order: built-ins in BUILTIN_ORDER (only those present and valid in _USER_DIR),
+    then user-only personas sorted case-insensitively.
+    Malformed persona directories are skipped with a warning.
     """
-    # Start with built-in order; user valid overrides replace in-place at load time
-    result = list(BUILTIN_ORDER)
-    user_only: list[str] = []
-
     if not _USER_DIR.exists():
-        return result
+        return []
+
+    valid_slugs: set[str] = set()
+    user_only: list[str] = []
 
     for entry in sorted(_USER_DIR.iterdir(), key=lambda p: p.name.lower()):
         if not entry.is_dir():
@@ -156,12 +189,11 @@ def list_personas() -> list[str]:
             _validate_dir(entry, slug)
         except PersonaInvalidError as e:
             logger.warning(str(e))
-            # If it shadows a built-in, the built-in remains in the list
             continue
-
+        valid_slugs.add(slug)
         if slug not in BUILTIN_ORDER:
             user_only.append(slug)
-        # Valid built-in override: slug already in result, load_persona will pick user's version
 
+    result = [s for s in BUILTIN_ORDER if s in valid_slugs]
     result.extend(user_only)
     return result
