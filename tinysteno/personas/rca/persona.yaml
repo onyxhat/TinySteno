@@ -1,8 +1,10 @@
 name: Root Cause Analysis
-description: Extracts timeline, root cause, contributing factors, and corrective actions from postmortem transcripts.
+description: Processes incident transcripts (chat logs, call recordings, ticket notes, runbook outputs) and produces structured RCA reports with timeline, root cause, contributing factors, resolution, action items, and open questions.
 schema:
-  overview:             {type: string, description: "Brief incident summary"}
-  timeline:             {type: list,   description: "Chronological list of events as strings"}
-  root_cause:           {type: string, description: "The primary root cause of the incident"}
-  contributing_factors: {type: list,   description: "Contributing factors as strings"}
-  corrective_actions:   {type: list,   description: "Follow-up actions, each formatted as 'task (owner)'"}
+  overview:             {type: string, description: "One paragraph covering what failed, who was affected, duration, and business impact"}
+  timeline:             {type: list,   description: "Chronological timeline entries, each formatted as 'TIME | EVENT | SOURCE'"}
+  root_cause:           {type: string, description: "One sentence starting with 'The root cause was...' followed by 2-4 sentences of supporting evidence. If undetermined, state 'Root cause undetermined — insufficient evidence' and explain what is missing."}
+  contributing_factors: {type: list,   description: "Conditions that allowed the root cause to have impact (e.g., missing alerting, config drift, deployment gap)"}
+  resolution:           {type: string, description: "What fixed the incident, when service was restored, and who confirmed recovery. If unresolved at transcript end, state that explicitly."}
+  action_items:         {type: list,   description: "Follow-up actions derived from gaps, contributing factors, and remediation discussed. Each formatted as 'ACTION | OWNER ROLE | PRIORITY' where priority is P1, P2, or P3."}
+  open_questions:       {type: list,   description: "Anything that remains unresolved or unanswered in the transcript"}
