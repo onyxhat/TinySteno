@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _TRANSCRIPT_MAX_CHARS = 15000
 _TITLE_MAX_WORDS = 6
 _TITLE_MAX_OVERVIEW_CHARS = 500
+_TAG_MAX_OVERVIEW_CHARS = 500
 _LLM_TIMEOUT_SECONDS = 120.0
 
 
@@ -109,6 +110,36 @@ class Orchestrator:
             logger.warning("Title generation failed: %s", e)
             return None
 
+    def generate_tags(self, field_value: str) -> list:
+        """Generate tags from a field value string.
+
+        Returns a list of lowercase alphanumeric/underscore tags,
+        or an empty list if the LLM call fails.
+        """
+        prompt = self._tags_prompt(field_value)
+        try:
+            response = self._client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Generate 1-5 single-word tags that categorize the content. "
+                            "Return only the tags as a comma-separated list, nothing else. "
+                            "Use lowercase letters, digits, and underscores only. "
+                            "Prefer single words; use underscores only if needed."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+            )
+            raw = response.choices[0].message.content.strip()
+            return self._clean_tags(raw)
+        except Exception as e:
+            logger.warning("Tag generation failed: %s", e)
+            return []
+
     def _build_user_message(self, transcript: str, persona: "Persona") -> str:
         """Build the LLM user message: JSON format instruction + transcript."""
         # Build JSON example showing expected shape
@@ -142,6 +173,13 @@ class Orchestrator:
             f"Transcript:\n{truncated}"
         )
 
+    def _tags_prompt(self, overview: str) -> str:
+        return (
+            f"Based on this content, generate 1-5 single-word tags "
+            f"(lowercase, alphanumeric and underscores only, comma-separated): "
+            f"{overview[:_TAG_MAX_OVERVIEW_CHARS]}"
+        )
+
     def _title_prompt(self, overview: str) -> str:
         return (
             f"Based on this content, generate a 3-6 word title "
@@ -172,6 +210,18 @@ class Orchestrator:
         # Greedy match: first { to last } — handles } inside string values
         match = re.search(r"\{.*\}", text, re.DOTALL)
         return match.group(0) if match else None
+
+    def _clean_tags(self, raw: str) -> list:
+        tags = []
+        for part in raw.split(","):
+            tag = part.strip().lower()
+            tag = re.sub(r"\s+", "_", tag)          # spaces → underscores
+            tag = re.sub(r"[^a-z0-9_]", "", tag)    # remove other invalid chars
+            tag = re.sub(r"_+", "_", tag)            # collapse repeated underscores
+            tag = tag.strip("_")                     # trim leading/trailing underscores
+            if tag:
+                tags.append(tag)
+        return tags
 
     def _clean_title(self, title: str) -> str:
         title = title.replace('"', "").replace("'", "").replace(":", "")

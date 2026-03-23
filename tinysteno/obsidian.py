@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tinysteno.personas import Persona
@@ -15,11 +15,9 @@ class ObsidianExporter:
         self,
         vault_path: str,
         output_folder: str = "meetings",
-        tags: Optional[List[str]] = None,
     ):
         self.vault_path = Path(vault_path)
         self.output_folder = output_folder
-        self.tags = tags or ["meeting"]
         self.vault_path.mkdir(parents=True, exist_ok=True)
         if not os.access(self.vault_path, os.W_OK):
             raise PermissionError(f"Obsidian vault is not writable: {self.vault_path}")
