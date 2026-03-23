@@ -1,7 +1,7 @@
 ---
 created: {{ date }}
 type: kickoff
-tags: [project, kickoff]
+tags: [project, kickoff{% for tag in generated_tags %}, {{ tag }}{% endfor %}]
 duration: {{ duration }}
 ---
 
