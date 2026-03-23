@@ -1,7 +1,7 @@
 ---
 created: {{ date }}
 type: meeting
-tags: [meeting]
+tags: [meeting{% for tag in generated_tags %}, {{ tag }}{% endfor %}]
 duration: {{ duration }}
 participants: {{ (participants or []) | join(', ') }}
 ---

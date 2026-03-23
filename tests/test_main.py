@@ -20,7 +20,6 @@ def _write_config(path: Path) -> None:
         "whisper_model": "small",
         "diarization": False,
         "auto_title": True,
-        "tags": ["meeting"],
         "output_folder": "meetings",
         "sample_rate": 44100,
         "channels": 1,

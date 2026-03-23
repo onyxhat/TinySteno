@@ -41,7 +41,7 @@ def load_config() -> dict:
             "whisper_model": "small",
             "diarization": False,
             "auto_title": True,
-            "tags": ["meeting"],
+            "auto_tags": True,
             "output_folder": "meetings",
             "sample_rate": 44100,
             "channels": 1,
@@ -130,20 +130,28 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
         )
         data = orchestrator.summarize(transcript, persona)
 
+    # Get first string field for title/tag generation
+    first_string_value = next(
+        (data.get(field, "") for field, defn in persona.schema.items()
+         if defn["type"] == "string"),
+        None,
+    )
+
     # Resolve title
     title = name  # start with --name if provided
     if not title:
-        first_string_value = next(
-            (data.get(field, "") for field, defn in persona.schema.items()
-             if defn["type"] == "string"),
-            None,
-        )
         if config.get("auto_title") and orchestrator and first_string_value:
             print("Generating title...")
             generated = orchestrator.generate_title(first_string_value)
             title = generated if generated else Path(wav_path).stem
         else:
             title = Path(wav_path).stem
+
+    # Resolve generated tags
+    generated_tags: list = []
+    if config.get("auto_tags") and orchestrator and first_string_value:
+        print("Generating tags...")
+        generated_tags = orchestrator.generate_tags(first_string_value)
 
     date_str = timestamp.strftime("%Y-%m-%d %H:%M")
     duration_str = _format_duration(result.get("duration_seconds", 0.0))
@@ -154,12 +162,12 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
         "duration": duration_str,
         "transcript": transcript,
         "detected_language": result.get("detected_language", ""),
+        "generated_tags": generated_tags,
     }
 
     exporter = ObsidianExporter(
         vault_path=config["obsidian_vault"],
         output_folder=config.get("output_folder", "meetings"),
-        tags=config.get("tags", ["meeting"]),
     )
 
     try:
@@ -431,15 +439,6 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         "subfolder inside vault where notes are saved",
     )
 
-    tags_default = ", ".join(get("tags", ["meeting"]))
-    tags_input = _prompt(
-        console,
-        "Default tags",
-        tags_default,
-        "comma-separated list of tags",
-    )
-    tags = [t.strip() for t in tags_input.split(",") if t.strip()]
-
     # --- LLM ---
     console.print()
     console.print(Rule("[dim]LLM / Summarization[/dim]"))
@@ -472,6 +471,11 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         console,
         "Auto-generate titles from content?",
         get("auto_title", True),
+    )
+    auto_tags = _prompt_bool(
+        console,
+        "Auto-generate tags from content?",
+        get("auto_tags", True),
     )
 
     # --- Whisper ---
@@ -549,11 +553,11 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         "obsidian_vault": obsidian_vault,
         "output_folder": output_folder,
         **( {"recordings_path": recordings_path} if recordings_path else {} ),
-        "tags": tags,
         "api_key": api_key,
         "base_url": base_url,
         "model": model,
         "auto_title": auto_title,
+        "auto_tags": auto_tags,
         "whisper_model": whisper_model,
         "diarization": diarization,
         "channels": channels,

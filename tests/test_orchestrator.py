@@ -170,3 +170,63 @@ def test_generate_title_returns_none_on_exception():
     s._client.chat.completions.create.side_effect = Exception("API down")
     result = s.generate_title("overview")
     assert result is None
+
+
+# --- generate_tags ---
+
+def test_generate_tags_returns_list_on_success():
+    s = _make_orchestrator()
+    s._client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content="budget, planning, q4"))]
+    )
+    result = s.generate_tags("We discussed Q4 budget planning")
+    assert isinstance(result, list)
+    assert result == ["budget", "planning", "q4"]
+
+
+def test_generate_tags_returns_empty_list_on_exception():
+    s = _make_orchestrator()
+    s._client.chat.completions.create.side_effect = Exception("API down")
+    result = s.generate_tags("some content")
+    assert not result
+
+
+def test_generate_tags_returns_empty_list_on_empty_response():
+    s = _make_orchestrator()
+    s._client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content=""))]
+    )
+    result = s.generate_tags("content")
+    assert not result
+
+
+# --- _clean_tags ---
+
+def test_clean_tags_lowercases():
+    s = _make_orchestrator()
+    assert s._clean_tags("Budget, PLANNING") == ["budget", "planning"]
+
+
+def test_clean_tags_removes_special_characters():
+    s = _make_orchestrator()
+    assert s._clean_tags("q4-review, cost!") == ["q4review", "cost"]
+
+
+def test_clean_tags_converts_spaces_to_underscores():
+    s = _make_orchestrator()
+    assert s._clean_tags("budget planning") == ["budget_planning"]
+
+
+def test_clean_tags_collapses_repeated_underscores():
+    s = _make_orchestrator()
+    assert s._clean_tags("q4__review") == ["q4_review"]
+
+
+def test_clean_tags_strips_leading_trailing_underscores():
+    s = _make_orchestrator()
+    assert s._clean_tags("_budget_") == ["budget"]
+
+
+def test_clean_tags_skips_empty_parts():
+    s = _make_orchestrator()
+    assert s._clean_tags("budget,,planning") == ["budget", "planning"]

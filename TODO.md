@@ -4,6 +4,6 @@
 - [ ] Add user info/knowledge config (name, job, title, etc.)
 - [ ] Add subcommand to generate persona stub from template that creates and populates the directory for the user
 - [ ] Basic UI/AppImage
-- [ ] Add dynamic tag generation
+- [x] Add dynamic tag generation
 - [ ] Investigate slow local transcription (periodically)
 - [ ] Remove need to truncate transcript content to fit context window
