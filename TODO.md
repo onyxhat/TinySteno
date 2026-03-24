@@ -6,4 +6,4 @@
 - [ ] Basic UI/AppImage
 - [x] Add dynamic tag generation
 - [ ] Investigate slow local transcription (periodically)
-- [ ] Remove need to truncate transcript content to fit context window
+- [x] Remove need to truncate transcript content to fit context window

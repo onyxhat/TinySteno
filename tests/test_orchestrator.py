@@ -53,14 +53,13 @@ def test_build_user_message_list_field_shown_as_array():
     assert '"items": [' in msg
 
 
-def test_build_user_message_truncates_transcript():
+def test_build_user_message_includes_full_transcript():
     persona = _make_persona({"s": {"type": "string", "description": "x"}})
     s = _make_orchestrator()
     long_transcript = "x" * 20000
     msg = s._build_user_message(long_transcript, persona)
-    # The transcript in the message should be at most 15000 chars
     transcript_section = msg.split("Transcript:\n", 1)[1]
-    assert len(transcript_section) <= 15000
+    assert len(transcript_section) == 20000
 
 
 def test_build_user_message_includes_field_descriptions():
@@ -230,3 +229,132 @@ def test_clean_tags_strips_leading_trailing_underscores():
 def test_clean_tags_skips_empty_parts():
     s = _make_orchestrator()
     assert s._clean_tags("budget,,planning") == ["budget", "planning"]
+
+
+# --- _chunk_transcript ---
+
+def test_chunk_transcript_short_returns_single_chunk():
+    s = _make_orchestrator()
+    transcript = "hello world"
+    assert s._chunk_transcript(transcript) == [transcript]
+
+
+def test_chunk_transcript_exactly_chunk_size_returns_single_chunk():
+    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
+    s = _make_orchestrator()
+    transcript = "x" * _CHUNK_SIZE_CHARS
+    assert s._chunk_transcript(transcript) == [transcript]
+
+
+def test_chunk_transcript_long_creates_multiple_chunks():
+    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
+    s = _make_orchestrator()
+    transcript = "x" * (_CHUNK_SIZE_CHARS * 2 + 1)
+    chunks = s._chunk_transcript(transcript)
+    assert len(chunks) > 1
+
+
+def test_chunk_transcript_all_content_covered():
+    """Every character of the transcript appears in at least one chunk."""
+    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS, _CHUNK_OVERLAP_CHARS
+    s = _make_orchestrator()
+    # Build a transcript with unique characters at known positions
+    transcript = "".join(str(i % 10) for i in range(_CHUNK_SIZE_CHARS * 3))
+    chunks = s._chunk_transcript(transcript)
+    # Reconstruct: non-overlapping portions should cover the whole transcript
+    reconstructed = chunks[0]
+    for chunk in chunks[1:]:
+        reconstructed += chunk[_CHUNK_OVERLAP_CHARS:]
+    assert reconstructed == transcript
+
+
+def test_chunk_transcript_chunks_have_overlap():
+    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS, _CHUNK_OVERLAP_CHARS
+    s = _make_orchestrator()
+    transcript = "x" * (_CHUNK_SIZE_CHARS + _CHUNK_OVERLAP_CHARS + 100)
+    chunks = s._chunk_transcript(transcript)
+    assert len(chunks) == 2
+    # The tail of chunk 0 should match the head of chunk 1
+    assert chunks[0][-_CHUNK_OVERLAP_CHARS:] == chunks[1][:_CHUNK_OVERLAP_CHARS]
+
+
+# --- _build_merge_message ---
+
+def test_build_merge_message_includes_dedup_instruction():
+    persona = _make_persona({"overview": {"type": "string", "description": "summary"}})
+    s = _make_orchestrator()
+    partials = [{"overview": "Part one"}, {"overview": "Part two"}]
+    msg = s._build_merge_message(partials, persona)
+    assert "duplicate" in msg.lower()
+    assert "Part one" in msg
+    assert "Part two" in msg
+
+
+def test_build_merge_message_includes_schema_fields():
+    persona = _make_persona({
+        "overview": {"type": "string", "description": "summary"},
+        "points": {"type": "list", "description": "key points"},
+    })
+    s = _make_orchestrator()
+    msg = s._build_merge_message([{}], persona)
+    assert '"overview"' in msg
+    assert '"points"' in msg
+
+
+# --- summarize with chunking ---
+
+def _llm_response(content: dict) -> MagicMock:
+    return MagicMock(choices=[MagicMock(message=MagicMock(content=json.dumps(content)))])
+
+
+def test_summarize_single_chunk_makes_one_llm_call():
+    persona = _make_persona({"overview": {"type": "string", "description": "x"}})
+    s = _make_orchestrator()
+    s._client.chat.completions.create.return_value = _llm_response({"overview": "hi"})
+    s.summarize("short transcript", persona)
+    assert s._client.chat.completions.create.call_count == 1
+
+
+def test_summarize_long_transcript_makes_chunk_plus_merge_calls():
+    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
+    persona = _make_persona({"overview": {"type": "string", "description": "x"}})
+    s = _make_orchestrator()
+    # Two chunks → 2 extract calls + 1 merge call = 3 total
+    long_transcript = "a" * (_CHUNK_SIZE_CHARS + 1000)
+    s._client.chat.completions.create.return_value = _llm_response({"overview": "merged"})
+    result = s.summarize(long_transcript, persona)
+    assert s._client.chat.completions.create.call_count == 3
+    assert result["overview"] == "merged"
+
+
+def test_summarize_merge_call_receives_partial_results():
+    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
+    persona = _make_persona({"overview": {"type": "string", "description": "x"}})
+    s = _make_orchestrator()
+    long_transcript = "b" * (_CHUNK_SIZE_CHARS + 1000)
+
+    chunk_response = _llm_response({"overview": "chunk summary"})
+    merge_response = _llm_response({"overview": "final merged"})
+    s._client.chat.completions.create.side_effect = [
+        chunk_response, chunk_response, merge_response
+    ]
+
+    result = s.summarize(long_transcript, persona)
+    # Third call is the merge; its user message should contain partial results
+    merge_call_messages = s._client.chat.completions.create.call_args_list[2][1]["messages"]
+    user_msg = next(m["content"] for m in merge_call_messages if m["role"] == "user")
+    assert "chunk summary" in user_msg
+    assert result["overview"] == "final merged"
+
+
+def test_summarize_all_chunks_fail_returns_defaults():
+    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
+    persona = _make_persona({
+        "overview": {"type": "string", "description": "x"},
+        "items": {"type": "list", "description": "x"},
+    })
+    s = _make_orchestrator()
+    long_transcript = "c" * (_CHUNK_SIZE_CHARS + 1000)
+    s._client.chat.completions.create.side_effect = Exception("API down")
+    result = s.summarize(long_transcript, persona)
+    assert result == {"overview": "", "items": []}
