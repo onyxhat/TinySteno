@@ -173,5 +173,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Coding helpers and tools
 .gitnexus/
 .cocoindex_code/
+.claude/
+.claude-flow/
+docs/superpowers/
