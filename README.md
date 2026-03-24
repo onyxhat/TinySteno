@@ -9,7 +9,9 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 - Captures mic + system audio simultaneously — no virtual audio device required
 - Transcribe with faster-whisper (local, runs on CPU)
 - Summarize via OpenAI-compatible API (Ollama, OpenAI, OpenRouter, etc.)
+- Handles long transcripts automatically — splits into chunks, summarizes each, then merges
 - Persona system — choose how recordings are summarized and formatted
+- Auto-generate note titles and tags from content
 - Export structured markdown notes to Obsidian vault
 
 ## Prerequisites
@@ -68,6 +70,9 @@ tinysteno list --vault /path/to/vault
 
 # Show current config
 tinysteno config
+
+# Edit config in $EDITOR
+tinysteno config --edit
 ```
 
 ## Personas
@@ -113,7 +118,7 @@ schema:
     description: Key highlights as strings
 ```
 
-Schema field types are `string` or `list` (list of strings). Field names must be valid Python identifiers and cannot collide with reserved metadata variables: `title`, `date`, `duration`, `transcript`, `detected_language`.
+Schema field types are `string` or `list` (list of strings). Field names must be valid Python identifiers and cannot collide with reserved metadata variables: `title`, `date`, `duration`, `transcript`, `detected_language`, `generated_tags`.
 
 **`template.md`** receives all schema fields plus the metadata variables above as Jinja2 context.
 
@@ -144,6 +149,7 @@ api_key: "ollama"
 base_url: "http://localhost:11434/v1"
 model: "llama3.2:3b"
 auto_title: true            # generate note titles from content
+auto_tags: true             # generate tags from content
 
 # Transcription
 # Model sizes (speed ↔ accuracy): tiny · base · small · medium · large
@@ -168,7 +174,7 @@ Note format is controlled by the active persona's template. The default persona 
 ---
 created: 2024-01-15 14:30
 type: meeting
-tags: [meeting]
+tags: [meeting, budget, planning]
 duration: 00:45:12
 participants: Alice, Bob
 ---
