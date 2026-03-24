@@ -7,3 +7,4 @@
 - [x] Add dynamic tag generation
 - [ ] Investigate slow local transcription (periodically)
 - [x] Remove need to truncate transcript content to fit context window
+- [ ] Improved TUI experience
