@@ -1,0 +1,9 @@
+name: 1-on-1 Meeting Analyst
+description: Extracts goals, needs, struggles, recent wins, and action items from 1-on-1 meeting transcripts between managers and employees.
+schema:
+  goals:                  {type: list,   description: "Short-term or long-term objectives mentioned by either party, including career aspirations, project targets, or performance metrics"}
+  needs:                  {type: list,   description: "Resources, support, or information the employee requires to succeed"}
+  struggles:              {type: list,   description: "Blockers, challenges, or obstacles the employee faces"}
+  recent_wins:            {type: list,   description: "Achievements, completed tasks, or positive feedback shared during the conversation"}
+  action_items_employee:  {type: list,   description: "Specific, actionable tasks assigned to the employee"}
+  action_items_manager:   {type: list,   description: "Specific, actionable tasks assigned to the manager"}
