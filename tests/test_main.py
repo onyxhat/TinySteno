@@ -1,12 +1,14 @@
 """Tests for tinysteno.main module."""
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import yaml
 
-from tinysteno.main import cmd_setup, load_config
+from tinysteno.main import cmd_setup, load_config, _process_audio
+from tinysteno.personas import Persona
 
 
 def _write_config(path: Path) -> None:
@@ -74,6 +76,69 @@ def test_cmd_setup_normal_seeds_interactively_after_config_write(monkeypatch):
                 cmd_setup(args)
 
     mock_seed.assert_called_once_with(interactive=True)
+
+
+def _make_list_only_persona() -> Persona:
+    return Persona(
+        slug="1on1",
+        name="1-on-1",
+        description="desc",
+        schema={
+            "goals":   {"type": "list", "description": "goals"},
+            "actions": {"type": "list", "description": "actions"},
+        },
+        system_prompt="You are a test assistant.",
+        template="{{ title }}",
+        template_path=Path("/fake/template.md"),
+    )
+
+
+def test_auto_tags_called_for_list_only_persona(tmp_path):
+    """auto_tags must fire even when the persona has no string fields."""
+    persona = _make_list_only_persona()
+    config = {
+        "api_key": "ollama",
+        "base_url": "http://localhost",
+        "model": "test",
+        "whisper_model": "small",
+        "diarization": False,
+        "auto_title": False,
+        "auto_tags": True,
+        "obsidian_vault": str(tmp_path),
+        "output_folder": "meetings",
+    }
+
+    mock_transcribe_result = {
+        "text": "hello",
+        "diarised_text": "",
+        "detected_language": "en",
+        "duration_seconds": 60.0,
+    }
+    summarize_data = {"goals": ["ship feature"], "actions": ["write tests"]}
+
+    with patch("tinysteno.main.WhisperTranscriber") as mock_transcriber_cls, \
+         patch("tinysteno.main.Orchestrator") as mock_orchestrator_cls, \
+         patch("tinysteno.main.ObsidianExporter") as mock_exporter_cls:
+
+        mock_transcriber_cls.return_value.transcribe.return_value = mock_transcribe_result
+        mock_orch = mock_orchestrator_cls.return_value
+        mock_orch.summarize.return_value = summarize_data
+        mock_orch.generate_tags.return_value = ["management", "goals"]
+        mock_exporter_cls.return_value.export.return_value = tmp_path / "note.md"
+
+        _process_audio(
+            wav_path=str(tmp_path / "audio.wav"),
+            name=None,
+            config=config,
+            logger=MagicMock(),
+            persona=persona,
+            timestamp=datetime(2024, 1, 1),
+        )
+
+    mock_orch.generate_tags.assert_called_once()
+    call_arg = mock_orch.generate_tags.call_args[0][0]
+    assert "ship feature" in call_arg
+    assert "write tests" in call_arg
 
 
 def test_setup_argparser_has_reset_personas_flag():

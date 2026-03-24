@@ -1,6 +1,6 @@
 [project]
 name = "tinysteno"
-version = "0.1.8"
+version = "0.1.9"
 description = "Minimal meeting recorder with Obsidian export"
 readme = "README.md"
 requires-python = ">=3.12"

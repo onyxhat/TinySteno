@@ -130,12 +130,19 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
         )
         data = orchestrator.summarize(transcript, persona)
 
-    # Get first string field for title/tag generation
+    # Get first string field for title/tag generation; fall back to joining
+    # all list values for list-only personas (e.g. 1on1).
     first_string_value = next(
         (data.get(field, "") for field, defn in persona.schema.items()
          if defn["type"] == "string"),
         None,
     )
+    if not first_string_value:
+        all_items: list[str] = []
+        for field, defn in persona.schema.items():
+            if defn["type"] == "list":
+                all_items.extend(data.get(field, []))
+        first_string_value = ". ".join(all_items) if all_items else None
 
     # Resolve title
     title = name  # start with --name if provided
