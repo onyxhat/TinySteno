@@ -58,7 +58,10 @@ def test_transcribe_writes_no_temp_files(tmp_path):
 
 def test_run_whisper_accepts_array():
     """_run_whisper should accept numpy array, not require a file path."""
+    import tinysteno.transcriber as mod
     from tinysteno.transcriber import WhisperTranscriber
+
+    mod._MODEL_CACHE.clear()
 
     with patch("tinysteno.transcriber.WhisperModel") as mock_wm:
         mock_model = MagicMock()
@@ -74,3 +77,18 @@ def test_run_whisper_accepts_array():
     assert lang == "en"
     call_args = mock_model.transcribe.call_args
     assert isinstance(call_args[0][0], np.ndarray)
+
+
+def test_whisper_model_cached_across_instances():
+    """Two WhisperTranscriber instances with same model_size share one WhisperModel."""
+    import tinysteno.transcriber as mod
+
+    mod._MODEL_CACHE.clear()
+
+    with patch("tinysteno.transcriber.WhisperModel") as mock_wm:
+        mock_wm.return_value = MagicMock()
+        t1 = mod.WhisperTranscriber(model_size="tiny")
+        t2 = mod.WhisperTranscriber(model_size="tiny")
+
+    assert mock_wm.call_count == 1
+    assert t1._model is t2._model

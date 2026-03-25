@@ -8,12 +8,19 @@ from faster_whisper import WhisperModel
 from scipy.signal import resample as scipy_resample
 
 
+# Module-level cache: (model_size, device, compute_type) -> WhisperModel
+_MODEL_CACHE: dict[tuple[str, str, str], "WhisperModel"] = {}
+
+
 class WhisperTranscriber:
     """Transcribe audio files using whisper."""
 
     def __init__(self, model_size: str = "small"):
         self.model_size = model_size
-        self._model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        cache_key = (model_size, "cpu", "int8")
+        if cache_key not in _MODEL_CACHE:
+            _MODEL_CACHE[cache_key] = WhisperModel(model_size, device="cpu", compute_type="int8")
+        self._model = _MODEL_CACHE[cache_key]
 
     def transcribe(self, audio_path: str, diarize: bool = False) -> dict:
         """Transcribe an audio file and return results.
