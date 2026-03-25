@@ -5,6 +5,9 @@
 - [ ] Add subcommand to generate persona stub from template that creates and populates the directory for the user
 - [ ] Basic UI/AppImage
 - [x] Add dynamic tag generation
+  - [ ] Deduplicate tags
 - [ ] Investigate slow local transcription (periodically)
 - [x] Remove need to truncate transcript content to fit context window
 - [ ] Improved TUI experience
+  - [ ] Unified task progress bar for all tasks
+  - [ ] Fix inaccurate transcription progress readout
