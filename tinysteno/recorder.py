@@ -1,12 +1,19 @@
 """Audio recording module for TinySteno."""
 
+import os
 import platform
+import tempfile
 import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
+
+try:
+    import sounddevice as sd
+except Exception:  # pragma: no cover
+    sd = None  # type: ignore
 
 
 class AudioRecorder:
@@ -35,8 +42,13 @@ class AudioRecorder:
         self.recordings_dir = recordings_dir or Path.cwd() / "recordings"
         self.recordings_dir.mkdir(parents=True, exist_ok=True)
 
-        self._buffer: list[np.ndarray] = []
-        self._loopback_buffer: list[np.ndarray] = []
+        self._buffer: list = []  # kept for is-empty check; never appended to
+        self._mic_raw_path: Optional[Path] = None
+        self._loopback_raw_path: Optional[Path] = None
+        self._mic_fh = None
+        self._loopback_fh = None
+        self._mic_channels_written = 1
+        self._loopback_channels_written = 1
         self._is_recording = False
         self._audio_interface = None
         self._loopback_interface = None
@@ -50,19 +62,24 @@ class AudioRecorder:
     def _audio_callback(self, indata, _frames, _time, status):
         if status:
             print(f"Audio callback status: {status}")
-        self._buffer.append(indata.copy())
+        self._write_mic_frame(indata)
+
+    def _write_mic_frame(self, indata: np.ndarray) -> None:
+        if self._mic_fh is not None:
+            self._mic_fh.write(indata.astype(np.float32).tobytes())
+            self._mic_channels_written = indata.shape[1] if indata.ndim > 1 else 1
 
     def _loopback_callback(self, indata, _frames, _time, status):
         if status:
             print(f"Loopback callback status: {status}")
-        self._loopback_buffer.append(indata.copy())
+        if self._loopback_fh is not None:
+            self._loopback_fh.write(indata.astype(np.float32).tobytes())
+            self._loopback_channels_written = indata.shape[1] if indata.ndim > 1 else 1
 
     # ── device discovery ──────────────────────────────────────────────────────
 
     def _get_default_input_device(self) -> Optional[tuple[int, int]]:
         """Return (device_index, max_input_channels) for the default input device."""
-        import sounddevice as sd
-
         try:
             device = sd.query_devices(device=None, kind="input")
             max_ch = device.get("max_input_channels", 0)
@@ -84,8 +101,6 @@ class AudioRecorder:
 
     def _find_wasapi_loopback(self) -> Optional[tuple[int, int]]:
         """Find a WASAPI loopback device on Windows."""
-        import sounddevice as sd
-
         hostapis = sd.query_hostapis()
         wasapi_idx = next(
             (i for i, h in enumerate(hostapis) if "WASAPI" in h.get("name", "")),
@@ -120,8 +135,6 @@ class AudioRecorder:
 
     def _find_pulse_monitor(self) -> Optional[tuple[int, int]]:
         """Find a PulseAudio/PipeWire monitor source on Linux."""
-        import sounddevice as sd
-
         devices = sd.query_devices()
         for i, dev in enumerate(devices):
             if (
@@ -135,13 +148,21 @@ class AudioRecorder:
 
     def start(self, name: Optional[str] = None) -> str:
         """Start recording and return the output WAV path."""
-        import sounddevice as sd
-
         self.output_path = self._generate_output_path(name)
         self._buffer = []
-        self._loopback_buffer = []
         self._is_recording = True
         self._has_loopback = False
+
+        # open temp raw files for streaming audio
+        fd, mic_path = tempfile.mkstemp(suffix=".f32")
+        os.close(fd)
+        self._mic_raw_path = Path(mic_path)
+        self._mic_fh = open(mic_path, "wb")
+
+        fd, lb_path = tempfile.mkstemp(suffix=".f32")
+        os.close(fd)
+        self._loopback_raw_path = Path(lb_path)
+        self._loopback_fh = open(lb_path, "wb")
 
         # ── microphone ────────────────────────────────────────────────────────
         result = self._get_default_input_device()
@@ -196,7 +217,9 @@ class AudioRecorder:
 
             self._macos_loopback = MacOSLoopback(
                 sample_rate=self.sample_rate,
-                callback=self._loopback_buffer.append,
+                callback=lambda indata: self._loopback_fh and self._loopback_fh.write(
+                    np.array(indata, dtype=np.float32).tobytes()
+                ),
             )
             self._macos_loopback.start()
             return True
@@ -229,24 +252,46 @@ class AudioRecorder:
                 self._macos_loopback.stop()
                 self._macos_loopback = None
 
-            if not self._buffer:
+            # close file handles
+            if self._mic_fh:
+                self._mic_fh.close()
+                self._mic_fh = None
+            if self._loopback_fh:
+                self._loopback_fh.close()
+                self._loopback_fh = None
+
+            try:
+                raw = np.frombuffer(self._mic_raw_path.read_bytes(), dtype=np.float32)
+            except Exception:
+                return False
+            finally:
+                if self._mic_raw_path and self._mic_raw_path.exists():
+                    self._mic_raw_path.unlink(missing_ok=True)
+
+            if raw.size == 0:
                 return False
 
-            mic_data = np.concatenate(self._buffer, axis=0).astype(np.float32)
+            ch = self._mic_channels_written
+            mic_data = raw.reshape(-1, ch) if ch > 1 else raw.reshape(-1, 1)
 
-            if self._has_loopback and self._loopback_buffer:
-                lb_data = np.concatenate(self._loopback_buffer, axis=0).astype(np.float32)
+            loopback_raw_bytes = b""
+            if self._loopback_raw_path and self._loopback_raw_path.exists():
+                loopback_raw_bytes = self._loopback_raw_path.read_bytes()
+                self._loopback_raw_path.unlink(missing_ok=True)
+
+            if self._has_loopback and loopback_raw_bytes:
+                lb_raw = np.frombuffer(loopback_raw_bytes, dtype=np.float32)
+                lbch = self._loopback_channels_written
+                lb_data = lb_raw.reshape(-1, lbch) if lbch > 1 else lb_raw.reshape(-1, 1)
                 if loopback_sr and abs(loopback_sr - self.sample_rate) > 1:
                     n_out = int(round(len(lb_data) * self.sample_rate / loopback_sr))
                     x = np.linspace(0, len(lb_data) - 1, n_out)
-                    lb_data = np.interp(
-                        x, np.arange(len(lb_data)), lb_data.squeeze()
-                    ).reshape(-1, 1)
+                    lb_data = np.interp(x, np.arange(len(lb_data)), lb_data.squeeze()).reshape(-1, 1)
                 audio_data = self._mix_stereo(mic_data, lb_data)
                 out_channels = 2
             else:
                 audio_data = mic_data
-                out_channels = self._active_channels
+                out_channels = ch
 
             max_val = np.max(np.abs(audio_data))
             if max_val > 0:
