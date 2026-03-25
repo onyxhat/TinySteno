@@ -3,6 +3,7 @@
 import os
 import platform
 import tempfile
+import threading
 import wave
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +57,7 @@ class AudioRecorder:
         self._active_channels = channels
         self._has_loopback = False
         self.output_path: Optional[Path] = None
+        self._fh_lock = threading.Lock()
 
     # ── audio callbacks ───────────────────────────────────────────────────────
 
@@ -65,16 +67,23 @@ class AudioRecorder:
         self._write_mic_frame(indata)
 
     def _write_mic_frame(self, indata: np.ndarray) -> None:
-        if self._mic_fh is not None:
-            self._mic_fh.write(indata.astype(np.float32).tobytes())
-            self._mic_channels_written = indata.shape[1] if indata.ndim > 1 else 1
+        with self._fh_lock:
+            if self._mic_fh is not None:
+                self._mic_fh.write(indata.astype(np.float32).tobytes())
+                self._mic_channels_written = indata.shape[1] if indata.ndim > 1 else 1
 
     def _loopback_callback(self, indata, _frames, _time, status):
         if status:
             print(f"Loopback callback status: {status}")
-        if self._loopback_fh is not None:
-            self._loopback_fh.write(indata.astype(np.float32).tobytes())
-            self._loopback_channels_written = indata.shape[1] if indata.ndim > 1 else 1
+        with self._fh_lock:
+            if self._loopback_fh is not None:
+                self._loopback_fh.write(indata.astype(np.float32).tobytes())
+                self._loopback_channels_written = indata.shape[1] if indata.ndim > 1 else 1
+
+    def _write_loopback_frame(self, indata) -> None:
+        with self._fh_lock:
+            if self._loopback_fh is not None:
+                self._loopback_fh.write(np.array(indata, dtype=np.float32).tobytes())
 
     # ── device discovery ──────────────────────────────────────────────────────
 
@@ -153,17 +162,6 @@ class AudioRecorder:
         self._is_recording = True
         self._has_loopback = False
 
-        # open temp raw files for streaming audio
-        fd, mic_path = tempfile.mkstemp(suffix=".f32")
-        os.close(fd)
-        self._mic_raw_path = Path(mic_path)
-        self._mic_fh = open(mic_path, "wb")
-
-        fd, lb_path = tempfile.mkstemp(suffix=".f32")
-        os.close(fd)
-        self._loopback_raw_path = Path(lb_path)
-        self._loopback_fh = open(lb_path, "wb")
-
         # ── microphone ────────────────────────────────────────────────────────
         result = self._get_default_input_device()
         if result is None:
@@ -177,6 +175,17 @@ class AudioRecorder:
                 f"{max_channels}; recording with {self._active_channels}."
             )
 
+        # open temp raw files for streaming audio (after device check passes)
+        fd, mic_path = tempfile.mkstemp(suffix=".f32")
+        os.close(fd)
+        self._mic_raw_path = Path(mic_path)
+        self._mic_fh = open(mic_path, "wb")
+
+        fd, lb_path = tempfile.mkstemp(suffix=".f32")
+        os.close(fd)
+        self._loopback_raw_path = Path(lb_path)
+        self._loopback_fh = open(lb_path, "wb")
+
         try:
             self._audio_interface = sd.InputStream(
                 callback=self._audio_callback,
@@ -186,6 +195,7 @@ class AudioRecorder:
             )
             self._audio_interface.start()
         except sd.PortAudioError as e:
+            self._cleanup_temp_files()
             raise RuntimeError(f"Failed to start audio recording: {e}") from e
 
         # ── system audio loopback ─────────────────────────────────────────────
@@ -217,9 +227,7 @@ class AudioRecorder:
 
             self._macos_loopback = MacOSLoopback(
                 sample_rate=self.sample_rate,
-                callback=lambda indata: self._loopback_fh and self._loopback_fh.write(
-                    np.array(indata, dtype=np.float32).tobytes()
-                ),
+                callback=lambda indata: self._write_loopback_frame(indata),
             )
             self._macos_loopback.start()
             return True
@@ -253,31 +261,34 @@ class AudioRecorder:
                 self._macos_loopback = None
 
             # close file handles
-            if self._mic_fh:
-                self._mic_fh.close()
-                self._mic_fh = None
-            if self._loopback_fh:
-                self._loopback_fh.close()
-                self._loopback_fh = None
+            with self._fh_lock:
+                if self._mic_fh:
+                    self._mic_fh.close()
+                    self._mic_fh = None
+                if self._loopback_fh:
+                    self._loopback_fh.close()
+                    self._loopback_fh = None
 
             try:
                 raw = np.frombuffer(self._mic_raw_path.read_bytes(), dtype=np.float32)
+                loopback_raw_bytes = b""
+                if self._loopback_raw_path and self._loopback_raw_path.exists():
+                    loopback_raw_bytes = self._loopback_raw_path.read_bytes()
             except Exception:
                 return False
             finally:
                 if self._mic_raw_path and self._mic_raw_path.exists():
                     self._mic_raw_path.unlink(missing_ok=True)
+                    self._mic_raw_path = None
+                if self._loopback_raw_path and self._loopback_raw_path.exists():
+                    self._loopback_raw_path.unlink(missing_ok=True)
+                    self._loopback_raw_path = None
 
             if raw.size == 0:
                 return False
 
             ch = self._mic_channels_written
             mic_data = raw.reshape(-1, ch) if ch > 1 else raw.reshape(-1, 1)
-
-            loopback_raw_bytes = b""
-            if self._loopback_raw_path and self._loopback_raw_path.exists():
-                loopback_raw_bytes = self._loopback_raw_path.read_bytes()
-                self._loopback_raw_path.unlink(missing_ok=True)
 
             if self._has_loopback and loopback_raw_bytes:
                 lb_raw = np.frombuffer(loopback_raw_bytes, dtype=np.float32)
@@ -312,6 +323,21 @@ class AudioRecorder:
             raise RuntimeError(f"Failed to save recording: {e}") from e
 
     # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _cleanup_temp_files(self) -> None:
+        """Close and delete temp raw audio files if they exist."""
+        if self._mic_fh:
+            self._mic_fh.close()
+            self._mic_fh = None
+        if self._loopback_fh:
+            self._loopback_fh.close()
+            self._loopback_fh = None
+        if self._mic_raw_path and self._mic_raw_path.exists():
+            self._mic_raw_path.unlink(missing_ok=True)
+            self._mic_raw_path = None
+        if self._loopback_raw_path and self._loopback_raw_path.exists():
+            self._loopback_raw_path.unlink(missing_ok=True)
+            self._loopback_raw_path = None
 
     def _mix_stereo(self, mic: np.ndarray, loopback: np.ndarray) -> np.ndarray:
         """Combine mic and loopback into a stereo array [n, 2] (L=mic, R=loopback)."""
