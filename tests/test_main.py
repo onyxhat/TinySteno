@@ -151,3 +151,77 @@ def test_setup_argparser_has_reset_personas_flag():
             main()
 
     mock_seed.assert_called_once_with(force=True)
+
+
+def test_title_and_tags_generated_in_parallel(tmp_path):
+    """generate_title and generate_tags should start concurrently."""
+    import time
+    from datetime import datetime
+    from unittest.mock import MagicMock, patch
+    from tinysteno.main import _process_audio
+    from tinysteno.personas import Persona
+    from pathlib import Path
+
+    persona = Persona(
+        slug="default",
+        name="Default",
+        description="desc",
+        schema={"summary": {"type": "string", "description": "summary"}},
+        system_prompt="You are a test assistant.",
+        template="{{ title }}",
+        template_path=Path("/fake/template.md"),
+    )
+    config = {
+        "api_key": "ollama",
+        "base_url": "http://localhost",
+        "model": "test",
+        "whisper_model": "small",
+        "diarization": False,
+        "auto_title": True,
+        "auto_tags": True,
+        "obsidian_vault": str(tmp_path),
+        "output_folder": "meetings",
+    }
+
+    call_start_times: dict = {}
+
+    def fake_title(text):
+        call_start_times["title"] = time.monotonic()
+        time.sleep(0.05)
+        return "Test Title"
+
+    def fake_tags(text):
+        call_start_times["tags"] = time.monotonic()
+        time.sleep(0.05)
+        return ["test"]
+
+    mock_transcribe_result = {
+        "text": "hello world",
+        "diarised_text": "",
+        "detected_language": "en",
+        "duration_seconds": 10.0,
+    }
+
+    with patch("tinysteno.main.WhisperTranscriber") as mock_tc, \
+         patch("tinysteno.main.Orchestrator") as mock_oc, \
+         patch("tinysteno.main.ObsidianExporter") as mock_ec:
+
+        mock_tc.return_value.transcribe.return_value = mock_transcribe_result
+        mock_orch = mock_oc.return_value
+        mock_orch.summarize.return_value = {"summary": "hello world"}
+        mock_orch.generate_title.side_effect = fake_title
+        mock_orch.generate_tags.side_effect = fake_tags
+        mock_ec.return_value.export.return_value = tmp_path / "note.md"
+
+        _process_audio(
+            wav_path=str(tmp_path / "audio.wav"),
+            name=None,
+            config=config,
+            logger=MagicMock(),
+            persona=persona,
+            timestamp=datetime(2024, 1, 1),
+        )
+
+    assert "title" in call_start_times and "tags" in call_start_times
+    overlap = abs(call_start_times["title"] - call_start_times["tags"])
+    assert overlap < 0.02, f"title and tags should start concurrently, gap={overlap:.3f}s"

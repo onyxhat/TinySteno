@@ -157,21 +157,31 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
                 all_items.extend(data.get(field, []))
         first_string_value = ". ".join(all_items) if all_items else None
 
+    # Generate title and tags in parallel when both are enabled
+    from concurrent.futures import ThreadPoolExecutor
+
+    title_future = None
+    tags_future = None
+
+    if (config.get("auto_title") or config.get("auto_tags")) and orchestrator and first_string_value:
+        print("Generating title and tags...")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            if config.get("auto_title"):
+                title_future = executor.submit(orchestrator.generate_title, first_string_value)
+            if config.get("auto_tags"):
+                tags_future = executor.submit(orchestrator.generate_tags, first_string_value)
+
     # Resolve title
-    title = name  # start with --name if provided
+    title = name
     if not title:
-        if config.get("auto_title") and orchestrator and first_string_value:
-            print("Generating title...")
-            generated = orchestrator.generate_title(first_string_value)
+        if title_future is not None:
+            generated = title_future.result()
             title = generated if generated else Path(wav_path).stem
         else:
             title = Path(wav_path).stem
 
     # Resolve generated tags
-    generated_tags: list = []
-    if config.get("auto_tags") and orchestrator and first_string_value:
-        print("Generating tags...")
-        generated_tags = orchestrator.generate_tags(first_string_value)
+    generated_tags: list = tags_future.result() if tags_future is not None else []
 
     date_str = timestamp.strftime("%Y-%m-%d %H:%M")
     duration_str = _format_duration(result.get("duration_seconds", 0.0))
