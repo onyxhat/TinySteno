@@ -7,6 +7,7 @@
 - [x] Add dynamic tag generation
   - [ ] Deduplicate tags
 - [ ] Investigate slow local transcription (periodically)
+  - [ ] Handling for GPU-based transcription (when available)
 - [x] Remove need to truncate transcript content to fit context window
 - [ ] Improved TUI experience
   - [ ] Unified task progress bar for all tasks
