@@ -97,6 +97,22 @@ def _format_duration(duration_seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+def _extract_summary_text(persona: Persona, data: dict) -> Optional[str]:
+    """Extract the best text from summarized data for title/tag generation."""
+    first_string_value = next(
+        (data.get(field, "") for field, defn in persona.schema.items()
+         if defn["type"] == "string"),
+        None,
+    )
+    if not first_string_value:
+        all_items: list[str] = []
+        for field, defn in persona.schema.items():
+            if defn["type"] == "list":
+                all_items.extend(data.get(field, []))
+        return ". ".join(all_items) if all_items else None
+    return first_string_value
+
+
 def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals  # pipeline requires all params; locals are distinct processing steps
     wav_path: str,
     name: Optional[str],
@@ -145,17 +161,7 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
 
     # Get first string field for title/tag generation; fall back to joining
     # all list values for list-only personas (e.g. 1on1).
-    first_string_value = next(
-        (data.get(field, "") for field, defn in persona.schema.items()
-         if defn["type"] == "string"),
-        None,
-    )
-    if not first_string_value:
-        all_items: list[str] = []
-        for field, defn in persona.schema.items():
-            if defn["type"] == "list":
-                all_items.extend(data.get(field, []))
-        first_string_value = ". ".join(all_items) if all_items else None
+    first_string_value = _extract_summary_text(persona, data)
 
     # Generate title and tags in parallel when both are enabled
     from concurrent.futures import ThreadPoolExecutor

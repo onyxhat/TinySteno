@@ -238,27 +238,32 @@ class AudioRecorder:
             print(f"Warning: macOS system audio capture unavailable: {e}")
             return False
 
+    def _stop_streams(self) -> Optional[int]:
+        """Stop all active audio streams; return macOS loopback sample rate if applicable."""
+        if self._audio_interface:
+            self._audio_interface.stop()
+            self._audio_interface.close()
+            self._audio_interface = None
+
+        if self._loopback_interface:
+            self._loopback_interface.stop()
+            self._loopback_interface.close()
+            self._loopback_interface = None
+
+        loopback_sr = None
+        if self._macos_loopback:
+            loopback_sr = self._macos_loopback.detected_sample_rate
+            self._macos_loopback.stop()
+            self._macos_loopback = None
+        return loopback_sr
+
     def stop(self) -> bool:
         """Stop recording and save WAV file."""
         if not self._is_recording:
             return False
 
         try:
-            if self._audio_interface:
-                self._audio_interface.stop()
-                self._audio_interface.close()
-                self._audio_interface = None
-
-            if self._loopback_interface:
-                self._loopback_interface.stop()
-                self._loopback_interface.close()
-                self._loopback_interface = None
-
-            loopback_sr = None
-            if self._macos_loopback:
-                loopback_sr = self._macos_loopback.detected_sample_rate
-                self._macos_loopback.stop()
-                self._macos_loopback = None
+            loopback_sr = self._stop_streams()
 
             # close file handles
             with self._fh_lock:

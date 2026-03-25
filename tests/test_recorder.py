@@ -1,9 +1,7 @@
 """Tests for AudioRecorder streaming behavior."""
 import wave
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 import numpy as np
-import pytest
 
 from tinysteno.recorder import AudioRecorder
 
@@ -21,7 +19,7 @@ def test_buffer_not_used_during_recording(tmp_path):
         mock_sd.InputStream.return_value.__exit__ = MagicMock(return_value=False)
         mock_sd.InputStream.return_value.start = MagicMock()
         rec.start()
-    assert rec._buffer == [], "Buffer should be empty; data streams to file"
+    assert not rec._buffer, "Buffer should be empty; data streams to file"  # pylint: disable=protected-access
 
 
 def test_stop_produces_valid_wav(tmp_path):
@@ -36,7 +34,7 @@ def test_stop_produces_valid_wav(tmp_path):
         mock_sd.InputStream.return_value.close = MagicMock()
         rec.start()
         for _ in range(10):
-            rec._write_mic_frame(fake_chunk)
+            rec._write_mic_frame(fake_chunk)  # pylint: disable=protected-access
         rec.stop()
 
     assert rec.output_path is not None

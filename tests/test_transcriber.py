@@ -1,7 +1,8 @@
 """Tests for WhisperTranscriber."""
-import numpy as np
-import pytest
+# pylint: disable=protected-access
 from unittest.mock import MagicMock, patch
+
+import numpy as np
 
 
 def _make_transcriber(model_size="tiny"):
@@ -14,8 +15,6 @@ def _make_transcriber(model_size="tiny"):
 
 def test_resample_uses_scipy_not_np_interp():
     """_convert_to_16khz_array should resample without calling np.interp."""
-    import tinysteno.transcriber as mod
-
     t = _make_transcriber()
     data_44k = np.random.rand(44100).astype(np.float32)  # 1 second at 44.1kHz
 
@@ -97,7 +96,6 @@ def test_whisper_model_cached_across_instances():
 def test_transcribe_calls_progress_callback(tmp_path):
     """on_progress callback should be called with values between 0.0 and 1.0."""
     import soundfile as sf
-    from unittest.mock import patch, MagicMock
     import tinysteno.transcriber as mod
 
     audio = np.zeros(32000, dtype=np.float32)  # 2 seconds at 16kHz
@@ -121,7 +119,7 @@ def test_transcribe_calls_progress_callback(tmp_path):
         mock_wm.return_value = mock_model
         t = mod.WhisperTranscriber()
 
-    t.transcribe(str(wav_path), on_progress=lambda r: progress_values.append(r))
+    t.transcribe(str(wav_path), on_progress=progress_values.append)
 
     assert len(progress_values) >= 1
     assert all(0.0 <= v <= 1.0 for v in progress_values)

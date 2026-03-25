@@ -156,11 +156,6 @@ def test_setup_argparser_has_reset_personas_flag():
 def test_title_and_tags_generated_in_parallel(tmp_path):
     """generate_title and generate_tags should start concurrently."""
     import time
-    from datetime import datetime
-    from unittest.mock import MagicMock, patch
-    from tinysteno.main import _process_audio
-    from tinysteno.personas import Persona
-    from pathlib import Path
 
     persona = Persona(
         slug="default",
@@ -185,12 +180,12 @@ def test_title_and_tags_generated_in_parallel(tmp_path):
 
     call_start_times: dict = {}
 
-    def fake_title(text):
+    def fake_title(_text):
         call_start_times["title"] = time.monotonic()
         time.sleep(0.05)
         return "Test Title"
 
-    def fake_tags(text):
+    def fake_tags(_text):
         call_start_times["tags"] = time.monotonic()
         time.sleep(0.05)
         return ["test"]
