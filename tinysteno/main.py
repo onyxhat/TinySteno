@@ -230,7 +230,7 @@ def cmd_record(args, config):
         recordings_dir=_recordings_dir(config),
     )
 
-    print("Recording started... Press Ctrl+C to stop.")
+    print("Recording started...\nPress Ctrl+C to stop.")
     wav_path = recorder.start(name)
     logger.debug("Recording to: %s", wav_path)
 
