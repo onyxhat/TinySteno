@@ -163,7 +163,8 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
     title_future = None
     tags_future = None
 
-    if (config.get("auto_title") or config.get("auto_tags")) and orchestrator and first_string_value:
+    wants_llm_metadata = config.get("auto_title") or config.get("auto_tags")
+    if wants_llm_metadata and orchestrator and first_string_value:
         print("Generating title and tags...")
         with ThreadPoolExecutor(max_workers=2) as executor:
             if config.get("auto_title"):

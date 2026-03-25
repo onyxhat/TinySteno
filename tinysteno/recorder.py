@@ -14,7 +14,7 @@ import numpy as np
 try:
     import sounddevice as sd
 except Exception:  # pragma: no cover
-    sd = None  # type: ignore
+    sd = None  # type: ignore  # pylint: disable=invalid-name
 
 
 class AudioRecorder:
@@ -179,12 +179,12 @@ class AudioRecorder:
         fd, mic_path = tempfile.mkstemp(suffix=".f32")
         os.close(fd)
         self._mic_raw_path = Path(mic_path)
-        self._mic_fh = open(mic_path, "wb")
+        self._mic_fh = open(mic_path, "wb")  # pylint: disable=consider-using-with
 
         fd, lb_path = tempfile.mkstemp(suffix=".f32")
         os.close(fd)
         self._loopback_raw_path = Path(lb_path)
-        self._loopback_fh = open(lb_path, "wb")
+        self._loopback_fh = open(lb_path, "wb")  # pylint: disable=consider-using-with
 
         try:
             self._audio_interface = sd.InputStream(
@@ -227,7 +227,7 @@ class AudioRecorder:
 
             self._macos_loopback = MacOSLoopback(
                 sample_rate=self.sample_rate,
-                callback=lambda indata: self._write_loopback_frame(indata),
+                callback=self._write_loopback_frame,
             )
             self._macos_loopback.start()
             return True
@@ -290,19 +290,9 @@ class AudioRecorder:
             ch = self._mic_channels_written
             mic_data = raw.reshape(-1, ch) if ch > 1 else raw.reshape(-1, 1)
 
-            if self._has_loopback and loopback_raw_bytes:
-                lb_raw = np.frombuffer(loopback_raw_bytes, dtype=np.float32)
-                lbch = self._loopback_channels_written
-                lb_data = lb_raw.reshape(-1, lbch) if lbch > 1 else lb_raw.reshape(-1, 1)
-                if loopback_sr and abs(loopback_sr - self.sample_rate) > 1:
-                    from scipy.signal import resample as scipy_resample
-                    n_out = int(round(len(lb_data) * self.sample_rate / loopback_sr))
-                    lb_data = scipy_resample(lb_data.squeeze(), n_out).astype(np.float32).reshape(-1, 1)
-                audio_data = self._mix_stereo(mic_data, lb_data)
-                out_channels = 2
-            else:
-                audio_data = mic_data
-                out_channels = ch
+            audio_data, out_channels = self._build_audio_data(
+                mic_data, ch, loopback_raw_bytes, loopback_sr
+            )
 
             max_val = np.max(np.abs(audio_data))
             if max_val > 0:
@@ -338,6 +328,27 @@ class AudioRecorder:
         if self._loopback_raw_path and self._loopback_raw_path.exists():
             self._loopback_raw_path.unlink(missing_ok=True)
             self._loopback_raw_path = None
+
+    def _build_audio_data(
+        self,
+        mic_data: np.ndarray,
+        mic_ch: int,
+        loopback_raw_bytes: bytes,
+        loopback_sr: Optional[int],
+    ) -> tuple[np.ndarray, int]:
+        """Mix mic and loopback raw bytes into final audio array."""
+        if not (self._has_loopback and loopback_raw_bytes):
+            return mic_data, mic_ch
+
+        from scipy.signal import resample as scipy_resample  # pylint: disable=import-outside-toplevel
+
+        lb_raw = np.frombuffer(loopback_raw_bytes, dtype=np.float32)
+        lbch = self._loopback_channels_written
+        lb_data = lb_raw.reshape(-1, lbch) if lbch > 1 else lb_raw.reshape(-1, 1)
+        if loopback_sr and abs(loopback_sr - self.sample_rate) > 1:
+            n_out = int(round(len(lb_data) * self.sample_rate / loopback_sr))
+            lb_data = scipy_resample(lb_data.squeeze(), n_out).astype(np.float32).reshape(-1, 1)
+        return self._mix_stereo(mic_data, lb_data), 2
 
     def _mix_stereo(self, mic: np.ndarray, loopback: np.ndarray) -> np.ndarray:
         """Combine mic and loopback into a stereo array [n, 2] (L=mic, R=loopback)."""

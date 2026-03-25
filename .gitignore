@@ -180,3 +180,4 @@ cython_debug/
 .claude/
 .claude-flow/
 docs/superpowers/
+.swarm/
