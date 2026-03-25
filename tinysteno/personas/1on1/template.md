@@ -1,7 +1,7 @@
 ---
 created: {{ date }}
 type: 1on1
-tags: [1on1{% for tag in generated_tags %}, {{ tag }}{% endfor %}]
+tags: [1on1{% for tag in generated_tags if tag not in ['1on1'] %}, {{ tag }}{% endfor %}]
 duration: {{ duration }}
 participants: {{ (participants or []) | join(', ') }}
 ---

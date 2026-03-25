@@ -1,7 +1,7 @@
 ---
 created: {{ date }}
 type: sprint
-tags: [sprint, agile{% for tag in generated_tags %}, {{ tag }}{% endfor %}]
+tags: [sprint, agile{% for tag in generated_tags if tag not in ['sprint', 'agile'] %}, {{ tag }}{% endfor %}]
 duration: {{ duration }}
 ceremony: {{ ceremony_type }}
 ---

@@ -1,7 +1,7 @@
 ---
 created: {{ date }}
 type: irm
-tags: [incident, response{% for tag in generated_tags %}, {{ tag }}{% endfor %}]
+tags: [incident, response{% for tag in generated_tags if tag not in ['incident', 'response'] %}, {{ tag }}{% endfor %}]
 duration: {{ duration }}
 severity: {{ severity }}
 ---

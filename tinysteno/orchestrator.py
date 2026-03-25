@@ -299,7 +299,7 @@ class Orchestrator:
             tag = tag.strip("_")                     # trim leading/trailing underscores
             if tag:
                 tags.append(tag)
-        return tags
+        return list(dict.fromkeys(tags))
 
     def _clean_title(self, title: str) -> str:
         title = title.replace('"', "").replace("'", "").replace(":", "")

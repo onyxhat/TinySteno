@@ -122,63 +122,55 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
     timestamp: datetime,
 ) -> None:
     """Shared pipeline: transcribe → summarize → export."""
-    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from concurrent.futures import ThreadPoolExecutor
 
-    transcriber = WhisperTranscriber(
-        model_size=config.get("whisper_model", "small")
-    )
+    transcriber = WhisperTranscriber(model_size=config.get("whisper_model", "small"))
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("{task.percentage:>3.0f}%"),
         transient=True,
     ) as progress:
-        task = progress.add_task("Transcribing...", total=100)
-        result = transcriber.transcribe(
-            wav_path,
-            diarize=config.get("diarization", False),
-            on_progress=lambda r: progress.update(task, completed=int(r * 100)),
-        )
-    logger.debug(f"Detected language: {result['detected_language']}")
-    logger.debug(f"Duration: {result['duration_seconds']:.0f}s")
+        t = progress.add_task("Transcribing...", total=None)
+        result = transcriber.transcribe(wav_path, diarize=config.get("diarization", False))
+        progress.remove_task(t)
 
-    transcript = result["diarised_text"] or result["text"]
-    if not transcript.strip():
-        print("No speech detected, skipping export.")
-        return
+        logger.debug(f"Detected language: {result['detected_language']}")
+        logger.debug(f"Duration: {result['duration_seconds']:.0f}s")
 
-    data: dict = {}
-    orchestrator = None
-    if config.get("api_key"):
-        print("Summarizing...")
-        orchestrator = Orchestrator(
-            api_key=config["api_key"],
-            base_url=config["base_url"],
-            model=config["model"],
-        )
-        data = orchestrator.summarize(transcript, persona)
+        transcript = result["diarised_text"] or result["text"]
+        if not transcript.strip():
+            print("No speech detected, skipping export.")
+            return
 
-    # Get first string field for title/tag generation; fall back to joining
-    # all list values for list-only personas (e.g. 1on1).
-    first_string_value = _extract_summary_text(persona, data)
+        data: dict = {}
+        orchestrator = None
+        if config.get("api_key"):
+            t = progress.add_task("Summarizing...", total=None)
+            orchestrator = Orchestrator(
+                api_key=config["api_key"],
+                base_url=config["base_url"],
+                model=config["model"],
+            )
+            data = orchestrator.summarize(transcript, persona)
+            progress.remove_task(t)
 
-    # Generate title and tags in parallel when both are enabled
-    from concurrent.futures import ThreadPoolExecutor
+        # Get first string field for title/tag generation; fall back to joining
+        # all list values for list-only personas (e.g. 1on1).
+        first_string_value = _extract_summary_text(persona, data)
 
-    title_future = None
-    tags_future = None
+        title_future = None
+        tags_future = None
+        wants_llm_metadata = config.get("auto_title") or config.get("auto_tags")
+        if wants_llm_metadata and orchestrator and first_string_value:
+            t = progress.add_task("Generating title and tags...", total=None)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                if config.get("auto_title"):
+                    title_future = executor.submit(orchestrator.generate_title, first_string_value)
+                if config.get("auto_tags"):
+                    tags_future = executor.submit(orchestrator.generate_tags, first_string_value)
+            progress.remove_task(t)
 
-    wants_llm_metadata = config.get("auto_title") or config.get("auto_tags")
-    if wants_llm_metadata and orchestrator and first_string_value:
-        print("Generating title and tags...")
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            if config.get("auto_title"):
-                title_future = executor.submit(orchestrator.generate_title, first_string_value)
-            if config.get("auto_tags"):
-                tags_future = executor.submit(orchestrator.generate_tags, first_string_value)
-
-    # Resolve title
     title = name
     if not title:
         if title_future is not None:
@@ -187,7 +179,6 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
         else:
             title = Path(wav_path).stem
 
-    # Resolve generated tags
     generated_tags: list = tags_future.result() if tags_future is not None else []
 
     date_str = timestamp.strftime("%Y-%m-%d %H:%M")

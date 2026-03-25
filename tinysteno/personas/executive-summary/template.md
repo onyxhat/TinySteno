@@ -1,7 +1,7 @@
 ---
 created: {{ date }}
 type: executive-summary
-tags: [executive, summary{% for tag in generated_tags %}, {{ tag }}{% endfor %}]
+tags: [executive, summary{% for tag in generated_tags if tag not in ['executive', 'summary'] %}, {{ tag }}{% endfor %}]
 duration: {{ duration }}
 ---
 
