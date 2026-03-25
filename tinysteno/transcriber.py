@@ -1,7 +1,7 @@
 """Whisper transcription module for TinySteno."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Callable
 import numpy as np
 import soundfile as sf
 from faster_whisper import WhisperModel
@@ -22,7 +22,12 @@ class WhisperTranscriber:
             _MODEL_CACHE[cache_key] = WhisperModel(model_size, device="cpu", compute_type="int8")
         self._model = _MODEL_CACHE[cache_key]
 
-    def transcribe(self, audio_path: str, diarize: bool = False) -> dict:
+    def transcribe(
+        self,
+        audio_path: str,
+        diarize: bool = False,
+        on_progress: Optional[Callable[[float], None]] = None,
+    ) -> dict:
         """Transcribe an audio file and return results.
 
         Returns:
@@ -38,7 +43,7 @@ class WhisperTranscriber:
         is_stereo = data.ndim == 2 and data.shape[1] >= 2
 
         audio_16k = self._convert_to_16khz_array(data, sr)
-        text, language = self._run_whisper(audio_16k)
+        text, language = self._run_whisper(audio_16k, on_progress=on_progress)
         duration = len(audio_16k) / 16000.0
 
         diarised_text = None
@@ -52,11 +57,22 @@ class WhisperTranscriber:
             "detected_language": language,
         }
 
-    def _run_whisper(self, audio: np.ndarray) -> tuple[str, str]:
+    def _run_whisper(
+        self,
+        audio: np.ndarray,
+        on_progress: Optional[Callable[[float], None]] = None,
+    ) -> tuple[str, str]:
         """Run Whisper on a 16kHz mono float32 numpy array."""
+        duration = len(audio) / 16000.0
         segments, info = self._model.transcribe(audio, beam_size=5)
-        text = "".join(segment.text for segment in segments)
-        return text, info.language
+        parts = []
+        for seg in segments:
+            parts.append(seg.text)
+            if on_progress is not None and duration > 0:
+                on_progress(min(seg.start / duration, 1.0))
+        if on_progress is not None:
+            on_progress(1.0)
+        return "".join(parts), info.language
 
     def _run_whisper_segments(self, audio: np.ndarray) -> list[tuple[float, str]]:
         """Run Whisper and return (start_seconds, text) tuples."""

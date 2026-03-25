@@ -92,3 +92,36 @@ def test_whisper_model_cached_across_instances():
 
     assert mock_wm.call_count == 1
     assert t1._model is t2._model
+
+
+def test_transcribe_calls_progress_callback(tmp_path):
+    """on_progress callback should be called with values between 0.0 and 1.0."""
+    import soundfile as sf
+    from unittest.mock import patch, MagicMock
+    import tinysteno.transcriber as mod
+
+    audio = np.zeros(32000, dtype=np.float32)  # 2 seconds at 16kHz
+    wav_path = tmp_path / "t.wav"
+    sf.write(str(wav_path), audio, 16000)
+
+    seg1 = MagicMock()
+    seg1.text = " hello"
+    seg1.start = 0.5
+
+    seg2 = MagicMock()
+    seg2.text = " world"
+    seg2.start = 1.5
+
+    progress_values = []
+
+    mod._MODEL_CACHE.clear()
+    with patch("tinysteno.transcriber.WhisperModel") as mock_wm:
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = (iter([seg1, seg2]), MagicMock(language="en"))
+        mock_wm.return_value = mock_model
+        t = mod.WhisperTranscriber()
+
+    t.transcribe(str(wav_path), on_progress=lambda r: progress_values.append(r))
+
+    assert len(progress_values) >= 1
+    assert all(0.0 <= v <= 1.0 for v in progress_values)

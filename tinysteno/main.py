@@ -106,11 +106,24 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
     timestamp: datetime,
 ) -> None:
     """Shared pipeline: transcribe → summarize → export."""
-    print("Transcribing...")
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+
     transcriber = WhisperTranscriber(
         model_size=config.get("whisper_model", "small")
     )
-    result = transcriber.transcribe(wav_path, diarize=config.get("diarization", False))
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.percentage:>3.0f}%"),
+        transient=True,
+    ) as progress:
+        task = progress.add_task("Transcribing...", total=100)
+        result = transcriber.transcribe(
+            wav_path,
+            diarize=config.get("diarization", False),
+            on_progress=lambda r: progress.update(task, completed=int(r * 100)),
+        )
     logger.debug(f"Detected language: {result['detected_language']}")
     logger.debug(f"Duration: {result['duration_seconds']:.0f}s")
 
