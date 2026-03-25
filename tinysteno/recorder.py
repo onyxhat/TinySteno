@@ -295,9 +295,9 @@ class AudioRecorder:
                 lbch = self._loopback_channels_written
                 lb_data = lb_raw.reshape(-1, lbch) if lbch > 1 else lb_raw.reshape(-1, 1)
                 if loopback_sr and abs(loopback_sr - self.sample_rate) > 1:
+                    from scipy.signal import resample as scipy_resample
                     n_out = int(round(len(lb_data) * self.sample_rate / loopback_sr))
-                    x = np.linspace(0, len(lb_data) - 1, n_out)
-                    lb_data = np.interp(x, np.arange(len(lb_data)), lb_data.squeeze()).reshape(-1, 1)
+                    lb_data = scipy_resample(lb_data.squeeze(), n_out).astype(np.float32).reshape(-1, 1)
                 audio_data = self._mix_stereo(mic_data, lb_data)
                 out_channels = 2
             else:

@@ -6,6 +6,7 @@ from typing import Optional
 import numpy as np
 import soundfile as sf
 from faster_whisper import WhisperModel
+from scipy.signal import resample as scipy_resample
 
 
 class WhisperTranscriber:
@@ -116,6 +117,28 @@ class WhisperTranscriber:
         tagged.sort(key=lambda x: x[1])
 
         return "\n".join(f"[{speaker}] {text}" for speaker, _, text in tagged)
+
+    def _convert_to_16khz_array(
+        self,
+        data: np.ndarray,
+        sr: int,
+    ) -> np.ndarray:
+        """Convert audio data to 16kHz mono float32 numpy array.
+
+        Uses scipy FFT-based resampling instead of np.interp to avoid
+        large index array allocations and improve accuracy.
+        """
+        # Collapse to mono
+        if data.ndim > 1:
+            data = data[:, 0]
+
+        data = data.astype(np.float32)
+
+        if sr != 16000:
+            num_samples = int(len(data) * 16000 / sr)
+            data = scipy_resample(data, num_samples).astype(np.float32)
+
+        return data
 
     def _calculate_duration(self, audio_path: Path) -> float:
         """Calculate audio duration in seconds."""

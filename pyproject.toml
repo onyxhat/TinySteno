@@ -15,6 +15,7 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "pyobjc-framework-ScreenCaptureKit>=12.1; sys_platform == 'darwin'",
     "jinja2>=3.1.6",
+    "scipy>=1.13",
 ]
 
 [build-system]
