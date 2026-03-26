@@ -1,4 +1,5 @@
 name: Executive Summary
+tags: [executive, summary]
 description: Produces a concise executive summary with key decisions, risks, and asks from a meeting transcript.
 schema:
   summary:       {type: string, description: "3-5 sentence executive summary"}

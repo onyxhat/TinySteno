@@ -234,13 +234,31 @@ def cmd_record(args, config):
     wav_path = recorder.start(name)
     logger.debug("Recording to: %s", wav_path)
 
+    import time
+    import termios
+
+    _tty_fd = None
+    _old_term = None
     try:
-        import time
+        _tty_fd = sys.stdin.fileno()
+        _old_term = termios.tcgetattr(_tty_fd)
+        _new_term = termios.tcgetattr(_tty_fd)
+        _new_term[3] &= ~termios.ECHOCTL
+        termios.tcsetattr(_tty_fd, termios.TCSANOW, _new_term)
+    except Exception:
+        _tty_fd = None
+
+    try:
         while True:
             time.sleep(0.1)
     except KeyboardInterrupt:
         pass
     finally:
+        if _tty_fd is not None and _old_term is not None:
+            try:
+                termios.tcsetattr(_tty_fd, termios.TCSANOW, _old_term)
+            except Exception:
+                pass
         recorder.stop()
 
     print("Recording stopped.")

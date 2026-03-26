@@ -1,4 +1,5 @@
 name: Root Cause Analysis
+tags: [incident, rca]
 description: Processes incident transcripts (chat logs, call recordings, ticket notes, runbook outputs) and produces structured RCA reports with timeline, root cause, contributing factors, resolution, action items, and open questions.
 schema:
   overview:             {type: string, description: "One paragraph covering what failed, who was affected, duration, and business impact"}

@@ -1,4 +1,5 @@
 name: Meeting Summary
+tags: [meeting]
 description: Extracts overview, participants, key points, and action items from a meeting transcript.
 schema:
   overview:      {type: string, description: "A brief summary paragraph of the meeting"}

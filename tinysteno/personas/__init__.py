@@ -32,6 +32,7 @@ class Persona:
     system_prompt: str
     template: str
     template_path: Path  # absolute path to template.md, for error reporting
+    tags: list  # static tags prepended before generated_tags; dedup handled by exporter
 
 
 class PersonaNotFoundError(Exception):
@@ -107,6 +108,7 @@ def _load_from_dir(slug: str, path: Path) -> Persona:
         system_prompt=(path / "system_prompt.md").read_text(),
         template=(path / "template.md").read_text(),
         template_path=(path / "template.md").resolve(),
+        tags=data.get("tags") or [],
     )
 
 

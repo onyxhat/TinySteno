@@ -1,7 +1,7 @@
 ---
 created: {{ date }}
 type: rca
-tags: [incident, rca{% for tag in generated_tags if tag not in ['incident', 'rca'] %}, {{ tag }}{% endfor %}]
+tags: [{{ tags | join(', ') }}]
 duration: {{ duration }}
 ---
 

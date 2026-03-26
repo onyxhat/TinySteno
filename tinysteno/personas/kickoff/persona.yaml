@@ -1,4 +1,5 @@
 name: Project Kickoff
+tags: [project, kickoff]
 description: Captures objectives, stakeholders, scope, risks, decisions, and next steps from a project kickoff meeting.
 schema:
   overview:     {type: string, description: "Brief project summary"}

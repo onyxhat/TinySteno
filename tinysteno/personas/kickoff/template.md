@@ -1,7 +1,7 @@
 ---
 created: {{ date }}
 type: kickoff
-tags: [project, kickoff{% for tag in generated_tags if tag not in ['project', 'kickoff'] %}, {{ tag }}{% endfor %}]
+tags: [{{ tags | join(', ') }}]
 duration: {{ duration }}
 ---
 

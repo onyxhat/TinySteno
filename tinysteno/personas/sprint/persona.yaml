@@ -1,4 +1,5 @@
 name: Sprint Ceremony
+tags: [sprint, agile]
 description: Captures sprint planning, review, or retrospective outcomes including completed work, blockers, and action items.
 schema:
   ceremony_type:       {type: string, description: "Type of ceremony: Planning, Review, or Retrospective"}
