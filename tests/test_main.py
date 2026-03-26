@@ -90,6 +90,7 @@ def _make_list_only_persona() -> Persona:
         system_prompt="You are a test assistant.",
         template="{{ title }}",
         template_path=Path("/fake/template.md"),
+        tags=[],
     )
 
 
@@ -165,6 +166,7 @@ def test_title_and_tags_generated_in_parallel(tmp_path):
         system_prompt="You are a test assistant.",
         template="{{ title }}",
         template_path=Path("/fake/template.md"),
+        tags=[],
     )
     config = {
         "api_key": "ollama",
