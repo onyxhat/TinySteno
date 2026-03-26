@@ -1,4 +1,5 @@
 name: Incident Response & Management
+tags: [incident, response]
 description: Captures severity, impact, responders, mitigations, and follow-ups from incident response meetings.
 schema:
   overview:   {type: string, description: "Brief incident description"}

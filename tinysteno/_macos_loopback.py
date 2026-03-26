@@ -272,7 +272,7 @@ class MacOSLoopback:
             run_loop = NSRunLoop.currentRunLoop()
             deadline = time.monotonic() + 5.0
             while not content_ready.is_set() and time.monotonic() < deadline:
-                run_loop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+                run_loop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.1))
 
             if not content_ready.is_set() or content_holder[0] is None:
                 raise RuntimeError("Timed out waiting for SCShareableContent")
@@ -333,7 +333,7 @@ class MacOSLoopback:
             # Keep spinning the run loop so SCK callbacks keep firing
             run_loop = NSRunLoop.currentRunLoop()
             while self._stream is not None:
-                run_loop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.05))
+                run_loop.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.1))
 
         except Exception as exc:
             self._error = exc

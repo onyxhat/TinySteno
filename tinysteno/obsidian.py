@@ -45,6 +45,11 @@ class ObsidianExporter:
         # Context: metadata first, then data fields (data overwrites on collision)
         context = {**metadata, **data}
 
+        # Build deduplicated tag list: persona static tags first, then generated tags
+        static = list(persona.tags)
+        generated = metadata.get("generated_tags") or []
+        context["tags"] = list(dict.fromkeys(static + generated))
+
         try:
             env = Environment(
                 loader=BaseLoader(), keep_trailing_newline=True, undefined=StrictUndefined

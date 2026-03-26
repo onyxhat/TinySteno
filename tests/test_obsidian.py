@@ -8,7 +8,7 @@ from tinysteno.personas import Persona
 
 # pylint: disable=missing-function-docstring
 
-def _make_persona(template: str, schema: dict | None = None) -> Persona:
+def _make_persona(template: str, schema: dict | None = None, tags: list | None = None) -> Persona:
     return Persona(
         slug="test",
         name="Test",
@@ -17,6 +17,7 @@ def _make_persona(template: str, schema: dict | None = None) -> Persona:
         system_prompt="x",
         template=template,
         template_path=Path("/fake/test/template.md"),
+        tags=tags or [],
     )
 
 
@@ -141,3 +142,45 @@ def test_export_file_in_correct_output_folder(tmp_path):
     persona = _make_persona("x")
     path = exporter.export({}, persona, _make_metadata())
     assert "notes" in str(path)
+
+
+def test_export_tags_combines_static_and_generated(tmp_path):
+    exporter = _make_exporter(tmp_path)
+    persona = _make_persona("{{ tags | join(',') }}", tags=["meeting"])
+    metadata = {**_make_metadata(), "generated_tags": ["ai", "weekly"]}
+
+    path = exporter.export({}, persona, metadata)
+    content = Path(path).read_text(encoding="utf-8")
+    assert "meeting" in content
+    assert "ai" in content
+    assert "weekly" in content
+
+
+def test_export_tags_deduplicates(tmp_path):
+    exporter = _make_exporter(tmp_path)
+    persona = _make_persona("{{ tags | join(',') }}", tags=["meeting", "ai"])
+    metadata = {**_make_metadata(), "generated_tags": ["ai", "weekly"]}
+
+    path = exporter.export({}, persona, metadata)
+    content = Path(path).read_text(encoding="utf-8")
+    assert content.count("ai") == 1
+
+
+def test_export_tags_static_order_preserved(tmp_path):
+    exporter = _make_exporter(tmp_path)
+    persona = _make_persona("{{ tags | join(',') }}", tags=["incident", "rca"])
+    metadata = {**_make_metadata(), "generated_tags": ["postmortem"]}
+
+    path = exporter.export({}, persona, metadata)
+    content = Path(path).read_text(encoding="utf-8")
+    assert content.startswith("incident,rca,postmortem")
+
+
+def test_export_tags_no_generated_tags(tmp_path):
+    exporter = _make_exporter(tmp_path)
+    persona = _make_persona("{{ tags | join(',') }}", tags=["sprint"])
+    metadata = _make_metadata()  # no generated_tags key
+
+    path = exporter.export({}, persona, metadata)
+    content = Path(path).read_text(encoding="utf-8")
+    assert content == "sprint"

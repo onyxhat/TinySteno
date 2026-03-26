@@ -1,4 +1,5 @@
 name: 1-on-1 Meeting Analyst
+tags: [1on1]
 description: Extracts goals, needs, struggles, recent wins, and action items from 1-on-1 meeting transcripts between managers and employees.
 schema:
   participants:           {type: list,   description: "Names or roles of the people in the meeting (e.g. 'Alice (manager)', 'Bob (employee)')"}

@@ -17,6 +17,7 @@ def _make_persona(schema: dict) -> Persona:
         system_prompt="You are a test assistant.",
         template="{{ title }}",
         template_path=Path("/fake/template.md"),
+        tags=[],
     )
 
 
@@ -140,6 +141,7 @@ def test_summarize_uses_persona_system_prompt():
         schema=persona.schema,
         system_prompt="CUSTOM SYSTEM PROMPT",
         template=persona.template, template_path=persona.template_path,
+        tags=persona.tags,
     )
     s = _make_orchestrator()
     s._client.chat.completions.create.return_value = MagicMock(

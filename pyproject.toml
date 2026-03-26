@@ -1,6 +1,6 @@
 [project]
 name = "tinysteno"
-version = "0.1.9"
+version = "0.2.0"
 description = "Minimal meeting recorder with Obsidian export"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,6 +15,7 @@ dependencies = [
     "faster-whisper>=1.2.1",
     "pyobjc-framework-ScreenCaptureKit>=12.1; sys_platform == 'darwin'",
     "jinja2>=3.1.6",
+    "scipy>=1.13",
 ]
 
 [build-system]

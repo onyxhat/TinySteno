@@ -1,10 +1,14 @@
 # TODO
-- [ ] Add HF_TOKEN for authenticated model downloads from Hugging Face
+- [x] Add HF_TOKEN for authenticated model downloads from Hugging Face
 - [ ] Allow external faster-whisper API for transcription
 - [ ] Add user info/knowledge config (name, job, title, etc.)
 - [ ] Add subcommand to generate persona stub from template that creates and populates the directory for the user
 - [ ] Basic UI/AppImage
 - [x] Add dynamic tag generation
+  - [x] Deduplicate tags
 - [ ] Investigate slow local transcription (periodically)
+  - [ ] Handling for GPU-based transcription (when available)
 - [x] Remove need to truncate transcript content to fit context window
 - [ ] Improved TUI experience
+  - [x] Unified task progress bar for all tasks
+  - [x] Fix inaccurate transcription progress readout

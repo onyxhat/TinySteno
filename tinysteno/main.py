@@ -97,41 +97,8 @@ def _format_duration(duration_seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals  # pipeline requires all params; locals are distinct processing steps
-    wav_path: str,
-    name: Optional[str],
-    config: dict,
-    logger: logging.Logger,
-    persona: Persona,
-    timestamp: datetime,
-) -> None:
-    """Shared pipeline: transcribe → summarize → export."""
-    print("Transcribing...")
-    transcriber = WhisperTranscriber(
-        model_size=config.get("whisper_model", "small")
-    )
-    result = transcriber.transcribe(wav_path, diarize=config.get("diarization", False))
-    logger.debug(f"Detected language: {result['detected_language']}")
-    logger.debug(f"Duration: {result['duration_seconds']:.0f}s")
-
-    transcript = result["diarised_text"] or result["text"]
-    if not transcript.strip():
-        print("No speech detected, skipping export.")
-        return
-
-    data: dict = {}
-    orchestrator = None
-    if config.get("api_key"):
-        print("Summarizing...")
-        orchestrator = Orchestrator(
-            api_key=config["api_key"],
-            base_url=config["base_url"],
-            model=config["model"],
-        )
-        data = orchestrator.summarize(transcript, persona)
-
-    # Get first string field for title/tag generation; fall back to joining
-    # all list values for list-only personas (e.g. 1on1).
+def _extract_summary_text(persona: Persona, data: dict) -> Optional[str]:
+    """Extract the best text from summarized data for title/tag generation."""
     first_string_value = next(
         (data.get(field, "") for field, defn in persona.schema.items()
          if defn["type"] == "string"),
@@ -142,23 +109,77 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
         for field, defn in persona.schema.items():
             if defn["type"] == "list":
                 all_items.extend(data.get(field, []))
-        first_string_value = ". ".join(all_items) if all_items else None
+        return ". ".join(all_items) if all_items else None
+    return first_string_value
 
-    # Resolve title
-    title = name  # start with --name if provided
+
+def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals  # pipeline requires all params; locals are distinct processing steps
+    wav_path: str,
+    name: Optional[str],
+    config: dict,
+    logger: logging.Logger,
+    persona: Persona,
+    timestamp: datetime,
+) -> None:
+    """Shared pipeline: transcribe → summarize → export."""
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from concurrent.futures import ThreadPoolExecutor
+
+    transcriber = WhisperTranscriber(model_size=config.get("whisper_model", "small"))
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+    ) as progress:
+        t = progress.add_task("Transcribing...", total=None)
+        result = transcriber.transcribe(wav_path, diarize=config.get("diarization", False))
+        progress.remove_task(t)
+
+        logger.debug(f"Detected language: {result['detected_language']}")
+        logger.debug(f"Duration: {result['duration_seconds']:.0f}s")
+
+        transcript = result["diarised_text"] or result["text"]
+        if not transcript.strip():
+            print("No speech detected, skipping export.")
+            return
+
+        data: dict = {}
+        orchestrator = None
+        if config.get("api_key"):
+            t = progress.add_task("Summarizing...", total=None)
+            orchestrator = Orchestrator(
+                api_key=config["api_key"],
+                base_url=config["base_url"],
+                model=config["model"],
+            )
+            data = orchestrator.summarize(transcript, persona)
+            progress.remove_task(t)
+
+        # Get first string field for title/tag generation; fall back to joining
+        # all list values for list-only personas (e.g. 1on1).
+        first_string_value = _extract_summary_text(persona, data)
+
+        title_future = None
+        tags_future = None
+        wants_llm_metadata = config.get("auto_title") or config.get("auto_tags")
+        if wants_llm_metadata and orchestrator and first_string_value:
+            t = progress.add_task("Generating title and tags...", total=None)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                if config.get("auto_title"):
+                    title_future = executor.submit(orchestrator.generate_title, first_string_value)
+                if config.get("auto_tags"):
+                    tags_future = executor.submit(orchestrator.generate_tags, first_string_value)
+            progress.remove_task(t)
+
+    title = name
     if not title:
-        if config.get("auto_title") and orchestrator and first_string_value:
-            print("Generating title...")
-            generated = orchestrator.generate_title(first_string_value)
+        if title_future is not None:
+            generated = title_future.result()
             title = generated if generated else Path(wav_path).stem
         else:
             title = Path(wav_path).stem
 
-    # Resolve generated tags
-    generated_tags: list = []
-    if config.get("auto_tags") and orchestrator and first_string_value:
-        print("Generating tags...")
-        generated_tags = orchestrator.generate_tags(first_string_value)
+    generated_tags: list = tags_future.result() if tags_future is not None else []
 
     date_str = timestamp.strftime("%Y-%m-%d %H:%M")
     duration_str = _format_duration(result.get("duration_seconds", 0.0))
@@ -209,17 +230,35 @@ def cmd_record(args, config):
         recordings_dir=_recordings_dir(config),
     )
 
-    print("Recording started... Press Ctrl+C to stop.")
+    print("Recording started...\nPress Ctrl+C to stop.")
     wav_path = recorder.start(name)
     logger.debug("Recording to: %s", wav_path)
 
+    import time
+    import termios
+
+    _tty_fd = None
+    _old_term = None
     try:
-        import time
+        _tty_fd = sys.stdin.fileno()
+        _old_term = termios.tcgetattr(_tty_fd)
+        _new_term = termios.tcgetattr(_tty_fd)
+        _new_term[3] &= ~termios.ECHOCTL
+        termios.tcsetattr(_tty_fd, termios.TCSANOW, _new_term)
+    except Exception:
+        _tty_fd = None
+
+    try:
         while True:
             time.sleep(0.1)
     except KeyboardInterrupt:
         pass
     finally:
+        if _tty_fd is not None and _old_term is not None:
+            try:
+                termios.tcsetattr(_tty_fd, termios.TCSANOW, _old_term)
+            except Exception:
+                pass
         recorder.stop()
 
     print("Recording stopped.")
