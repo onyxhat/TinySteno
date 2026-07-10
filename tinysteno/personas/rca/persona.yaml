@@ -7,5 +7,5 @@ schema:
   root_cause:           {type: string, description: "One sentence starting with 'The root cause was...' followed by 2-4 sentences of supporting evidence. If undetermined, state 'Root cause undetermined — insufficient evidence' and explain what is missing."}
   contributing_factors: {type: list,   description: "Conditions that allowed the root cause to have impact (e.g., missing alerting, config drift, deployment gap)"}
   resolution:           {type: string, description: "What fixed the incident, when service was restored, and who confirmed recovery. If unresolved at transcript end, state that explicitly."}
-  action_items:         {type: list,   description: "Follow-up actions derived from gaps, contributing factors, and remediation discussed. Each formatted as 'ACTION | OWNER ROLE | PRIORITY' where priority is P1, P2, or P3."}
+  action_items:         {type: list,   description: "Follow-up actions derived from gaps, contributing factors, and remediation discussed. Each formatted as 'ACTION | OWNER ROLE | PRIORITY' where priority is P1, P2, or P3. Use an owner role only when the transcript makes ownership clear; otherwise use 'unassigned'."}
   open_questions:       {type: list,   description: "Anything that remains unresolved or unanswered in the transcript"}

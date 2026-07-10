@@ -4,6 +4,7 @@ type: irm
 tags: [{{ tags | join(', ') }}]
 duration: {{ duration }}
 severity: {{ severity }}
+responders: {{ (responders or []) | join(', ') }}
 ---
 
 # {{ title }}
@@ -14,30 +15,24 @@ severity: {{ severity }}
 **Severity:** {{ severity }}
 **Impact:** {{ impact }}
 
-{% if responders %}
-## Responders
-{% for r in responders %}- {{ r }}
-{% endfor %}
-{% endif %}
-
 {% if timeline %}
 ## Timeline
 {% for event in timeline %}- {{ event }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if mitigations %}
 ## Mitigations Applied
 {% for m in mitigations %}- {{ m }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if follow_ups %}
 ## Follow-Ups
 {% for item in follow_ups %}- [ ] {{ item }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if transcript %}
 ## Transcript
 ```

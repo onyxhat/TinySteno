@@ -8,4 +8,4 @@ schema:
   scope:        {type: string, description: "What is and isn't in scope"}
   risks:        {type: list,   description: "Identified risks as strings"}
   decisions:    {type: list,   description: "Key decisions made during kickoff as strings"}
-  next_steps:   {type: list,   description: "Immediate next steps, formatted as 'task (owner)'"}
+  next_steps:   {type: list,   description: "Immediate next steps, formatted as 'task (owner)'. Name an owner only when the transcript explicitly assigns the task; otherwise use 'unassigned'."}
