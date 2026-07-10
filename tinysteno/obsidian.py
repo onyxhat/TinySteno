@@ -52,10 +52,14 @@ class ObsidianExporter:
 
         try:
             env = Environment(
-                loader=BaseLoader(), keep_trailing_newline=True, undefined=StrictUndefined
+                loader=BaseLoader(),
+                keep_trailing_newline=True,
+                undefined=StrictUndefined,
+                trim_blocks=True,
+                lstrip_blocks=True,
             )
             tmpl = env.from_string(persona.template)
-            content = tmpl.render(**context)
+            content = self._collapse_blank_lines(tmpl.render(**context))
         except TemplateError as e:
             raise RuntimeError(
                 f"Template render error in {persona.template_path}: {e}"
@@ -66,6 +70,15 @@ class ObsidianExporter:
         filepath = meetings_dir / f"{filename}.md"
         filepath.write_text(content)
         return str(filepath)
+
+    def _collapse_blank_lines(self, content: str) -> str:
+        """Collapse runs of 2+ blank lines to one, leaving fenced code blocks untouched."""
+        import re
+
+        parts = re.split(r"(```.*?```)", content, flags=re.DOTALL)
+        for i in range(0, len(parts), 2):
+            parts[i] = re.sub(r"\n{3,}", "\n\n", parts[i])
+        return "".join(parts)
 
     def _sanitize_filename(self, name: str) -> str:
         import re

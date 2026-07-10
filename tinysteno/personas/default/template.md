@@ -13,12 +13,6 @@ participants: {{ (participants or []) | join(', ') }}
 {{ overview }}
 
 {% endif %}
-{% if participants %}
-## Participants
-{% for p in participants %}- {{ p }}
-{% endfor %}
-
-{% endif %}
 {% if key_points %}
 ## Key Points
 {% for point in key_points %}{{ loop.index }}. {{ point }}

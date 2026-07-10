@@ -14,14 +14,14 @@ duration: {{ duration }}
 ## Objectives
 {% for obj in objectives %}- {{ obj }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if stakeholders %}
 ## Stakeholders
 {% for s in stakeholders %}- {{ s }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 ## Scope
 {{ scope }}
 
@@ -29,20 +29,20 @@ duration: {{ duration }}
 ## Risks
 {% for r in risks %}- {{ r }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if decisions %}
 ## Decisions
 {% for d in decisions %}- {{ d }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if next_steps %}
 ## Next Steps
 {% for step in next_steps %}- [ ] {{ step }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if transcript %}
 ## Transcript
 ```

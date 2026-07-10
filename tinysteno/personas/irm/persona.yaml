@@ -6,6 +6,6 @@ schema:
   timeline:   {type: list,   description: "Chronological response events as strings"}
   severity:   {type: string, description: "Incident severity level (e.g., SEV1, P0, Critical)"}
   impact:     {type: string, description: "Description of business and user impact"}
-  responders: {type: list,   description: "Names and roles of responders, formatted as 'name (role)'"}
+  responders: {type: list,   description: "Names and roles of people who actively participated in the response, formatted as 'name (role)'. Exclude people who were only mentioned."}
   mitigations: {type: list,   description: "Mitigations applied during the incident as strings"}
-  follow_ups: {type: list,   description: "Post-incident follow-up tasks, formatted as 'task (owner)'"}
+  follow_ups: {type: list,   description: "Post-incident follow-up tasks, formatted as 'task (owner)'. Name an owner only when the transcript explicitly assigns the task; otherwise use 'unassigned'."}

@@ -222,7 +222,7 @@ class Orchestrator:
             value = parsed.get(field_name)
             if field_def["type"] == "string":
                 if isinstance(value, str):
-                    result[field_name] = value
+                    result[field_name] = self._clean_string(value)
                 else:
                     if value is not None:
                         logger.warning(
@@ -233,7 +233,8 @@ class Orchestrator:
                     result[field_name] = ""
             else:  # list
                 if isinstance(value, list):
-                    result[field_name] = [str(item) for item in value]
+                    items = [self._clean_list_item(str(item)) for item in value]
+                    result[field_name] = [item for item in items if item]
                 else:
                     if value is not None:
                         logger.warning(
@@ -243,6 +244,16 @@ class Orchestrator:
                         )
                     result[field_name] = []
         return result
+
+    @staticmethod
+    def _clean_string(value: str) -> str:
+        """Trim surrounding whitespace and collapse runs of blank lines to one."""
+        return re.sub(r"\n{3,}", "\n\n", value.strip())
+
+    @staticmethod
+    def _clean_list_item(item: str) -> str:
+        """Flatten a list item to a single line so it renders as one Markdown bullet."""
+        return re.sub(r"\s*\n\s*", " ", item.strip())
 
     def _defaults(self, persona: "Persona") -> dict:
         """Return default empty values for all schema fields."""

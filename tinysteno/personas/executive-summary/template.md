@@ -14,20 +14,20 @@ duration: {{ duration }}
 ## Key Decisions
 {% for d in key_decisions %}- {{ d }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if risks %}
 ## Risks
 {% for r in risks %}- {{ r }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if asks %}
 ## Asks
 {% for ask in asks %}- {{ ask }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if transcript %}
 ## Transcript
 ```

@@ -8,4 +8,4 @@ schema:
   incomplete_items:    {type: list,   description: "Work items not completed, with brief reason"}
   blockers:            {type: list,   description: "Current blockers or impediments as strings"}
   retrospective_notes: {type: list,   description: "Retrospective observations (what went well / what didn't)"}
-  action_items:        {type: list,   description: "Action items, formatted as 'task (owner)'"}
+  action_items:        {type: list,   description: "Action items, formatted as 'task (owner)'. Name an owner only when the transcript explicitly assigns the task or someone volunteers; otherwise use 'unassigned'."}

@@ -17,32 +17,32 @@ ceremony: {{ ceremony_type }}
 ## Completed
 {% for item in completed_items %}- {{ item }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if incomplete_items %}
 ## Not Completed
 {% for item in incomplete_items %}- {{ item }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if blockers %}
 ## Blockers
 {% for b in blockers %}- {{ b }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if retrospective_notes %}
 ## Retrospective Notes
 {% for note in retrospective_notes %}- {{ note }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if action_items %}
 ## Action Items
 {% for item in action_items %}- [ ] {{ item }}
 {% endfor %}
-{% endif %}
 
+{% endif %}
 {% if transcript %}
 ## Transcript
 ```
