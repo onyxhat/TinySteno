@@ -663,9 +663,12 @@ def main():
     record_parser.add_argument("--verbose", action="store_true", help="Verbose output")
     record_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
     record_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
-    record_parser.add_argument("--whisper-compute-type", help="Whisper compute type override (int8, float16, auto)")
-    record_parser.add_argument("--whisper-api-key", help="API key for API transcription backend")
-    record_parser.add_argument("--whisper-api-model", help="Model name for API transcription backend")
+    record_parser.add_argument(
+        "--whisper-compute-type",
+        help="Whisper compute type (int8, float16, auto)",
+    )
+    record_parser.add_argument("--whisper-api-key", help="API key for API backend")
+    record_parser.add_argument("--whisper-api-model", help="Model name for API backend")
 
     process_parser = subparsers.add_parser("process", help="Process existing audio")
     process_parser.add_argument("audio", help="Audio file path")
@@ -673,10 +676,13 @@ def main():
     process_parser.add_argument("--persona", help="Persona slug to use for this audio file")
     process_parser.add_argument("--verbose", action="store_true", help="Verbose output")
     process_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
-    process_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
-    process_parser.add_argument("--whisper-compute-type", help="Whisper compute type override (int8, float16, auto)")
-    process_parser.add_argument("--whisper-api-key", help="API key for API transcription backend")
-    process_parser.add_argument("--whisper-api-model", help="Model name for API transcription backend")
+    process_parser.add_argument("--whisper-device", help="Whisper device (cpu, cuda, auto)")
+    process_parser.add_argument(
+        "--whisper-compute-type",
+        help="Whisper compute type (int8, float16, auto)",
+    )
+    process_parser.add_argument("--whisper-api-key", help="API key for API backend")
+    process_parser.add_argument("--whisper-api-model", help="Model name for API backend")
 
     list_parser = subparsers.add_parser("list", help="List meetings")
     list_parser.add_argument("--vault", default="", help="Vault path")

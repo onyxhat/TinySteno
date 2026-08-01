@@ -154,8 +154,8 @@ def test_whisper_transcriber_different_devices_separate_cache():
 
     with patch("tinysteno.transcriber.WhisperModel") as mock_wm:
         mock_wm.return_value = MagicMock()
-        t1 = mod.WhisperTranscriber(model_size="tiny", device="cpu", compute_type="int8")
-        t2 = mod.WhisperTranscriber(model_size="tiny", device="cuda", compute_type="float16")
+        _t1 = mod.WhisperTranscriber(model_size="tiny", device="cpu", compute_type="int8")
+        _t2 = mod.WhisperTranscriber(model_size="tiny", device="cuda", compute_type="float16")
 
     # Two different cache keys → two WhisperModel constructor calls
     assert mock_wm.call_count == 2

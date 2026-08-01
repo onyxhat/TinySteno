@@ -1,4 +1,6 @@
 """Tests for ApiTranscriber."""
+# pylint: disable=redefined-outer-name,unused-argument
+
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -19,7 +21,9 @@ def test_init(mock_openai):
     mock_class, _ = mock_openai
     from tinysteno.api_transcriber import ApiTranscriber
 
-    t = ApiTranscriber(api_key="test-key", base_url="https://test.example.com/v1", model="whisper-1")
+    t = ApiTranscriber(
+        api_key="test-key", base_url="https://test.example.com/v1", model="whisper-1"
+    )
 
     assert t.model == "whisper-1"
     mock_class.assert_called_once_with(
@@ -164,6 +168,8 @@ def test_language_fallback(mock_openai, tmp_path):
     sf.write(str(wav_path), audio, 16000)
 
     class FakeResponse:
+        """Minimal response-like object without language attribute."""
+
         text = "hello"
         duration = 1.0
 
