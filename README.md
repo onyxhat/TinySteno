@@ -7,7 +7,9 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 
 - Record meetings (indefinite duration, Ctrl+C to stop)
 - Captures mic + system audio simultaneously — no virtual audio device required
-- Transcribe with faster-whisper (local, runs on CPU)
+- Transcribe with faster-whisper (local CPU/GPU) or OpenAI Whisper API
+- GPU auto-detection — CUDA, Apple Silicon (MPS), and CPU fallback
+- Stereo diarization — speaker labels when system audio is captured
 - Summarize via OpenAI-compatible API (Ollama, OpenAI, OpenRouter, etc.)
 - Handles long transcripts automatically — splits into chunks, summarizes each, then merges
 - Persona system — choose how recordings are summarized and formatted
@@ -56,8 +58,17 @@ tinysteno record --name "Budget Review"
 # Record using a specific persona
 tinysteno record --persona rca
 
+# Record with Whisper API backend
+tinysteno record --backend api --whisper-api-key sk-...
+
+# Record with explicit GPU device override
+tinysteno record --whisper-device cuda --whisper-compute-type float16
+
 # Process existing audio file
 tinysteno process recordings/Meeting.wav
+
+# Process with API backend and specific model
+tinysteno process recordings/Meeting.wav --backend api --whisper-api-model whisper-large-v3
 
 # Process with a specific persona
 tinysteno process recordings/Meeting.wav --persona executive-summary
@@ -155,6 +166,23 @@ auto_tags: true             # generate tags from content
 # Model sizes (speed ↔ accuracy): tiny · base · small · medium · large
 whisper_model: "small"
 
+# Backend: "local" (default, faster-whisper) or "api" (OpenAI Whisper API)
+transcription_backend: "local"
+
+# Device override for local backend: "auto" (default, auto-detect), "cpu", "cuda"
+# Architecture is auto-detected when set to "auto":
+#   - CUDA available → cuda + float16
+#   - Apple Silicon → auto + auto (CTranslate2 MPS)
+#   - Fallback → cpu + int8
+whisper_device: "auto"
+whisper_compute_type: "auto"
+
+# API endpoint for remote transcription
+# Uses the same base_url/api_key as the summarizer if not set
+# whisper_base_url: "https://api.openai.com/v1"
+# whisper_api_key: "sk-..."
+# whisper_api_model: "whisper-1"
+
 # Feature flags
 diarization: false          # enable [You]/[Others] speaker labels
                             # when system audio is captured, output is automatically
@@ -222,6 +250,52 @@ TinySteno captures system audio via ScreenCaptureKit (macOS 12.3+). To enable it
 2. Enable permission for your terminal application (e.g. Terminal, iTerm2, Ghostty)
 
 Without this permission, only the microphone will be recorded.
+
+## Transcription Backends
+
+TinySteno supports two transcription backends, selected via `transcription_backend` in config or `--backend` on the CLI.
+
+### Local (default) — faster-whisper
+
+Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2) to transcribe entirely on-device. No data leaves your machine.
+
+**GPU auto-detection:** The first time a local transcriber is created with `device=auto`, TinySteno probes the hardware:
+
+- **CUDA** — detected via CTranslate2's `get_supported_devices()`; uses `cuda` + `float16`
+- **Apple Silicon (M1+)** — detected via `platform.machine() == "arm64"`; uses `auto` + `auto` (delegates to CTranslate2 MPS backend)
+- **CPU fallback** — no GPU found; uses `cpu` + `int8`
+
+Override detection explicitly in config:
+
+```yaml
+whisper_device: cuda
+whisper_compute_type: float16
+```
+
+Or on the CLI:
+
+```bash
+tinysteno record --whisper-device cuda --whisper-compute-type float16
+```
+
+### API — OpenAI Whisper API
+
+Transmits audio to a remote Whisper-compatible API endpoint. Useful for machines without a GPU or when you need a larger model than local memory supports.
+
+```yaml
+transcription_backend: api
+whisper_api_key: "sk-..."                # falls back to api_key if unset
+whisper_api_model: "whisper-large-v3"    # defaults to whisper-1
+```
+
+The API backend supports the same features as the local backend:
+
+- Mono transcription
+- Stereo diarization (two API calls, one per channel)
+- Language detection fallback
+- Progress callbacks
+
+Audio files are uploaded to the configured API endpoint. At ~30-40 MB per hour of recording, consider privacy implications when using a cloud API.
 
 ## License
 

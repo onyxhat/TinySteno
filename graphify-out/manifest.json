@@ -1,0 +1,227 @@
+{
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/.mcp.json": {
+    "mtime": 1785595063.6864614,
+    "ast_hash": "96eceb92d082e052c4d77fa7005a952f",
+    "semantic_hash": "96eceb92d082e052c4d77fa7005a952f"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/pyproject.toml": {
+    "mtime": 1785595063.6890988,
+    "ast_hash": "6922572cd53196c6cf3f67f4d117c62f",
+    "semantic_hash": "6922572cd53196c6cf3f67f4d117c62f"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tests/__init__.py": {
+    "mtime": 1785595063.6891837,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tests/conftest.py": {
+    "mtime": 1785595063.6892838,
+    "ast_hash": "1547fc65f461ac2c2cbeb6defc3c1569",
+    "semantic_hash": "1547fc65f461ac2c2cbeb6defc3c1569"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tests/test_main.py": {
+    "mtime": 1785595063.6896863,
+    "ast_hash": "14d35655410b80970fc60be5f026f74e",
+    "semantic_hash": "14d35655410b80970fc60be5f026f74e"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tests/test_obsidian.py": {
+    "mtime": 1785595063.6901224,
+    "ast_hash": "37f8d59e2ea0e419191975966b662305",
+    "semantic_hash": "37f8d59e2ea0e419191975966b662305"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tests/test_orchestrator.py": {
+    "mtime": 1785595063.6904085,
+    "ast_hash": "b299ccb401fbc80340888ab19762eec0",
+    "semantic_hash": "b299ccb401fbc80340888ab19762eec0"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tests/test_personas.py": {
+    "mtime": 1785595063.6905282,
+    "ast_hash": "78e3a0ab94185a50728433c27abb906d",
+    "semantic_hash": "78e3a0ab94185a50728433c27abb906d"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tests/test_recorder.py": {
+    "mtime": 1785595063.6909802,
+    "ast_hash": "c7ff6fba841593564694821bbc7ef293",
+    "semantic_hash": "c7ff6fba841593564694821bbc7ef293"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tests/test_transcriber.py": {
+    "mtime": 1785595063.6913838,
+    "ast_hash": "7c20b02a3902dbf3bd30be42923b29bf",
+    "semantic_hash": "7c20b02a3902dbf3bd30be42923b29bf"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/__init__.py": {
+    "mtime": 1785595063.6915002,
+    "ast_hash": "d0ec8944f22cd6a2043e1cfb742c4dd5",
+    "semantic_hash": "d0ec8944f22cd6a2043e1cfb742c4dd5"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/_macos_loopback.py": {
+    "mtime": 1785595063.691787,
+    "ast_hash": "f696a7e3d43f66dcf96bd8a887311859",
+    "semantic_hash": "f696a7e3d43f66dcf96bd8a887311859"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/main.py": {
+    "mtime": 1785595063.6920664,
+    "ast_hash": "c11f8f5ede06c3a67c22bd9008268beb",
+    "semantic_hash": "c11f8f5ede06c3a67c22bd9008268beb"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/obsidian.py": {
+    "mtime": 1785595063.6923811,
+    "ast_hash": "40d2db3026f656776d9831fde4d86ef8",
+    "semantic_hash": "40d2db3026f656776d9831fde4d86ef8"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/orchestrator.py": {
+    "mtime": 1785595063.6928756,
+    "ast_hash": "edb163646658a63af5f0d8abd83f5e1b",
+    "semantic_hash": "edb163646658a63af5f0d8abd83f5e1b"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/__init__.py": {
+    "mtime": 1785595063.694207,
+    "ast_hash": "367386bda2becc275e8161872a460987",
+    "semantic_hash": "367386bda2becc275e8161872a460987"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/recorder.py": {
+    "mtime": 1785595063.6983647,
+    "ast_hash": "007239dcd0b5bb102d0289ecf1803fa1",
+    "semantic_hash": "007239dcd0b5bb102d0289ecf1803fa1"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/transcriber.py": {
+    "mtime": 1785595063.698767,
+    "ast_hash": "b8c29e6a171c53ec96d767bc65fb7380",
+    "semantic_hash": "b8c29e6a171c53ec96d767bc65fb7380"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/.github/workflows/pylint.yml": {
+    "mtime": 1785595063.6856525,
+    "ast_hash": "27e4805735ccdf2e14d434af6ed6c678",
+    "semantic_hash": "27e4805735ccdf2e14d434af6ed6c678"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/AGENTS.md": {
+    "mtime": 1785595063.687055,
+    "ast_hash": "dd8f76cf62bd3477ef82d5ef0a2a87c7",
+    "semantic_hash": "dd8f76cf62bd3477ef82d5ef0a2a87c7"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/CLAUDE.md": {
+    "mtime": 1785595063.6873705,
+    "ast_hash": "dd8f76cf62bd3477ef82d5ef0a2a87c7",
+    "semantic_hash": "dd8f76cf62bd3477ef82d5ef0a2a87c7"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/PLAN.md": {
+    "mtime": 1785595063.687921,
+    "ast_hash": "e3d6cf020093585e9e14a67bf5828774",
+    "semantic_hash": "e3d6cf020093585e9e14a67bf5828774"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/README.md": {
+    "mtime": 1785595063.6883457,
+    "ast_hash": "44d79fbdf19e89ed7966205a3bb5b8e0",
+    "semantic_hash": "44d79fbdf19e89ed7966205a3bb5b8e0"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/TODO.md": {
+    "mtime": 1785595063.6887689,
+    "ast_hash": "51ced1ce5923d16f60225fbbd8622756",
+    "semantic_hash": "51ced1ce5923d16f60225fbbd8622756"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/1on1/persona.yaml": {
+    "mtime": 1785595063.693249,
+    "ast_hash": "2fad098a571740d8a9288d65b3f208d3",
+    "semantic_hash": "2fad098a571740d8a9288d65b3f208d3"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/1on1/system_prompt.md": {
+    "mtime": 1785595063.693531,
+    "ast_hash": "4616d3d0c87cc7961780ccb9e16f4aa1",
+    "semantic_hash": "4616d3d0c87cc7961780ccb9e16f4aa1"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/1on1/template.md": {
+    "mtime": 1785595063.693826,
+    "ast_hash": "270b7594fe578e3110f06e6feda89c97",
+    "semantic_hash": "270b7594fe578e3110f06e6feda89c97"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/default/persona.yaml": {
+    "mtime": 1785595063.6945398,
+    "ast_hash": "7aa26471df55ca14afd4fcc650a2cd8c",
+    "semantic_hash": "7aa26471df55ca14afd4fcc650a2cd8c"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/default/system_prompt.md": {
+    "mtime": 1785595063.6946745,
+    "ast_hash": "a84c488ce1ee3e12905f8c0f4e52c21a",
+    "semantic_hash": "a84c488ce1ee3e12905f8c0f4e52c21a"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/default/template.md": {
+    "mtime": 1785595063.6948211,
+    "ast_hash": "95ecbb69914b9193bc5b71110dd2a11a",
+    "semantic_hash": "95ecbb69914b9193bc5b71110dd2a11a"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/executive-summary/persona.yaml": {
+    "mtime": 1785595063.6951323,
+    "ast_hash": "1424d3ae5256e8fc0d8df123b64b2c4e",
+    "semantic_hash": "1424d3ae5256e8fc0d8df123b64b2c4e"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/executive-summary/system_prompt.md": {
+    "mtime": 1785595063.6952713,
+    "ast_hash": "25877f78b7c44fc10e9c4b6e09d2c1f9",
+    "semantic_hash": "25877f78b7c44fc10e9c4b6e09d2c1f9"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/executive-summary/template.md": {
+    "mtime": 1785595063.695416,
+    "ast_hash": "1289732eb9a4f74833488529b32ae165",
+    "semantic_hash": "1289732eb9a4f74833488529b32ae165"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/irm/persona.yaml": {
+    "mtime": 1785595063.6956818,
+    "ast_hash": "0502ea7cc2e169bbcc552c11511a69a6",
+    "semantic_hash": "0502ea7cc2e169bbcc552c11511a69a6"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/irm/system_prompt.md": {
+    "mtime": 1785595063.695812,
+    "ast_hash": "b1e3f285bafdf7252ee92f18b7985236",
+    "semantic_hash": "b1e3f285bafdf7252ee92f18b7985236"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/irm/template.md": {
+    "mtime": 1785595063.6959522,
+    "ast_hash": "d84601775f894ac4a8edcb7fbe35d9d1",
+    "semantic_hash": "d84601775f894ac4a8edcb7fbe35d9d1"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/kickoff/persona.yaml": {
+    "mtime": 1785595063.6962104,
+    "ast_hash": "74d36a89a5a5f0693c58bda747bc0f59",
+    "semantic_hash": "74d36a89a5a5f0693c58bda747bc0f59"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/kickoff/system_prompt.md": {
+    "mtime": 1785595063.6965082,
+    "ast_hash": "d9c0e7903303c41a4421effa35b6b5c4",
+    "semantic_hash": "d9c0e7903303c41a4421effa35b6b5c4"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/kickoff/template.md": {
+    "mtime": 1785595063.696728,
+    "ast_hash": "164d61867d310062be8aa2525236f7df",
+    "semantic_hash": "164d61867d310062be8aa2525236f7df"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/rca/persona.yaml": {
+    "mtime": 1785595063.6971526,
+    "ast_hash": "4c9523676def4bf8df1144ac3636a52a",
+    "semantic_hash": "4c9523676def4bf8df1144ac3636a52a"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/rca/system_prompt.md": {
+    "mtime": 1785595063.6973572,
+    "ast_hash": "62ae4a92c0910226cc199784cc8da200",
+    "semantic_hash": "62ae4a92c0910226cc199784cc8da200"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/rca/template.md": {
+    "mtime": 1785595063.6974866,
+    "ast_hash": "d1fb2e090eb0c851885a00ee7a36ba2b",
+    "semantic_hash": "d1fb2e090eb0c851885a00ee7a36ba2b"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/sprint/persona.yaml": {
+    "mtime": 1785595063.697675,
+    "ast_hash": "e07c4f81eae897cf488309e867c62d3a",
+    "semantic_hash": "e07c4f81eae897cf488309e867c62d3a"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/sprint/system_prompt.md": {
+    "mtime": 1785595063.6979291,
+    "ast_hash": "56c1b4c91a8c4ea0ef2909ca1408f923",
+    "semantic_hash": "56c1b4c91a8c4ea0ef2909ca1408f923"
+  },
+  "/Users/idspringer/Repos/TinySteno/.worktrees/dev-hermes/tinysteno/personas/sprint/template.md": {
+    "mtime": 1785595063.6980693,
+    "ast_hash": "f29b52b74aa40a5a53953d62c8322249",
+    "semantic_hash": "f29b52b74aa40a5a53953d62c8322249"
+  }
+}

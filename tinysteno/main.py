@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Optional
 
 from tinysteno.recorder import AudioRecorder
-from tinysteno.transcriber import WhisperTranscriber
+from tinysteno.api_transcriber import ApiTranscriber
+from tinysteno.transcriber import Transcriber, WhisperTranscriber
 from tinysteno.orchestrator import Orchestrator
 from tinysteno.obsidian import ObsidianExporter
 from tinysteno.personas import (
@@ -39,6 +40,12 @@ def load_config() -> dict:
             "base_url": "http://localhost:11434/v1",
             "model": "llama3.2:3b",
             "whisper_model": "small",
+            "transcription_backend": "local",
+            "whisper_device": "auto",
+            "whisper_compute_type": "auto",
+            "whisper_api_key": "",
+            "whisper_base_url": "",
+            "whisper_api_model": "whisper-1",
             "diarization": False,
             "auto_title": True,
             "auto_tags": True,
@@ -113,6 +120,37 @@ def _extract_summary_text(persona: Persona, data: dict) -> Optional[str]:
     return first_string_value
 
 
+def create_transcriber(config: dict) -> Transcriber:
+    """Factory: build the appropriate transcriber backend from config."""
+    backend = config.get("transcription_backend", "local")
+    if backend == "api":
+        return ApiTranscriber(
+            api_key=config.get("whisper_api_key") or config["api_key"],
+            base_url=config.get("whisper_base_url") or config.get("base_url"),
+            model=config.get("whisper_api_model", "whisper-1"),
+        )
+    return WhisperTranscriber(
+        model_size=config.get("whisper_model", "small"),
+        device=config.get("whisper_device", "auto"),
+        compute_type=config.get("whisper_compute_type", "auto"),
+    )
+
+
+def _apply_cli_overrides(config: dict, args: argparse.Namespace) -> None:
+    """Merge CLI flags into config in-place (CLI overrides take precedence)."""
+    cli_to_config = {
+        "backend": "transcription_backend",
+        "whisper_device": "whisper_device",
+        "whisper_compute_type": "whisper_compute_type",
+        "whisper_api_key": "whisper_api_key",
+        "whisper_api_model": "whisper_api_model",
+    }
+    for cli_key, config_key in cli_to_config.items():
+        val = getattr(args, cli_key, None)
+        if val is not None:
+            config[config_key] = val
+
+
 def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals  # pipeline requires all params; locals are distinct processing steps
     wav_path: str,
     name: Optional[str],
@@ -125,7 +163,7 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
     from rich.progress import Progress, SpinnerColumn, TextColumn
     from concurrent.futures import ThreadPoolExecutor
 
-    transcriber = WhisperTranscriber(model_size=config.get("whisper_model", "small"))
+    transcriber = create_transcriber(config)
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -224,6 +262,8 @@ def cmd_record(args, config):
     name = args.name or None
     timestamp = datetime.now()  # capture at start of recording
 
+    _apply_cli_overrides(config, args)
+
     recorder = AudioRecorder(
         sample_rate=config.get("sample_rate", 44100),
         channels=config.get("channels", 1),
@@ -265,6 +305,8 @@ def cmd_process(args, config):
         sys.exit(1)
 
     timestamp = datetime.fromtimestamp(audio_file.stat().st_mtime)
+
+    _apply_cli_overrides(config, args)
 
     logger = logging.getLogger(__name__)
     _process_audio(str(audio_file), args.name or None, config, logger, persona, timestamp)
@@ -619,12 +661,28 @@ def main():
     record_parser.add_argument("--name", help="Meeting name")
     record_parser.add_argument("--persona", help="Persona slug to use for this recording")
     record_parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    record_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
+    record_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
+    record_parser.add_argument(
+        "--whisper-compute-type",
+        help="Whisper compute type (int8, float16, auto)",
+    )
+    record_parser.add_argument("--whisper-api-key", help="API key for API backend")
+    record_parser.add_argument("--whisper-api-model", help="Model name for API backend")
 
     process_parser = subparsers.add_parser("process", help="Process existing audio")
     process_parser.add_argument("audio", help="Audio file path")
     process_parser.add_argument("--name", help="Meeting name")
     process_parser.add_argument("--persona", help="Persona slug to use for this audio file")
     process_parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    process_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
+    process_parser.add_argument("--whisper-device", help="Whisper device (cpu, cuda, auto)")
+    process_parser.add_argument(
+        "--whisper-compute-type",
+        help="Whisper compute type (int8, float16, auto)",
+    )
+    process_parser.add_argument("--whisper-api-key", help="API key for API backend")
+    process_parser.add_argument("--whisper-api-model", help="Model name for API backend")
 
     list_parser = subparsers.add_parser("list", help="List meetings")
     list_parser.add_argument("--vault", default="", help="Vault path")

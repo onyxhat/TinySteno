@@ -181,3 +181,5 @@ cython_debug/
 .claude-flow/
 docs/superpowers/
 .swarm/
+.DS_Store
+/.hermes
