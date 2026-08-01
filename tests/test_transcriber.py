@@ -9,17 +9,19 @@ def _make_transcriber(model_size="tiny"):
     with patch("tinysteno.transcriber.WhisperModel") as mock_wm:
         mock_wm.return_value = MagicMock()
         from tinysteno.transcriber import WhisperTranscriber
+
         t = WhisperTranscriber(model_size=model_size)
     return t
 
 
 def test_resample_uses_scipy_not_np_interp():
-    """_convert_to_16khz_array should resample without calling np.interp."""
-    t = _make_transcriber()
+    """convert_to_16khz_array should resample without calling np.interp."""
+    from tinysteno.transcriber import convert_to_16khz_array
+
     data_44k = np.random.rand(44100).astype(np.float32)  # 1 second at 44.1kHz
 
     with patch("tinysteno.transcriber.np.interp") as mock_interp:
-        result = t._convert_to_16khz_array(data_44k, sr=44100)
+        result = convert_to_16khz_array(data_44k, sr=44100)
         mock_interp.assert_not_called()
 
     assert result.shape[0] == 16000
@@ -28,9 +30,10 @@ def test_resample_uses_scipy_not_np_interp():
 
 def test_resample_passthrough_at_16khz():
     """No resampling performed when input is already 16kHz."""
-    t = _make_transcriber()
+    from tinysteno.transcriber import convert_to_16khz_array
+
     data = np.ones(16000, dtype=np.float32)
-    result = t._convert_to_16khz_array(data, sr=16000)
+    result = convert_to_16khz_array(data, sr=16000)
     np.testing.assert_array_equal(result, data)
 
 
@@ -120,6 +123,49 @@ def test_transcribe_calls_progress_callback(tmp_path):
         t = mod.WhisperTranscriber()
 
     t.transcribe(str(wav_path), on_progress=progress_values.append)
+    assert len(progress_values) >= 2
+    for val in progress_values:
+        assert 0.0 <= val <= 1.0
 
-    assert len(progress_values) >= 1
-    assert all(0.0 <= v <= 1.0 for v in progress_values)
+
+def test_whisper_transcriber_explicit_device():
+    """WhisperTranscriber should accept explicit device and compute_type."""
+    import tinysteno.transcriber as mod
+
+    mod._MODEL_CACHE.clear()
+
+    with patch("tinysteno.transcriber.WhisperModel") as mock_wm:
+        mock_model = MagicMock()
+        mock_model.transcribe.return_value = (iter([]), MagicMock(language="en"))
+        mock_wm.return_value = mock_model
+        from tinysteno.transcriber import WhisperTranscriber
+
+        t = WhisperTranscriber(model_size="tiny", device="cpu", compute_type="int8")
+
+    assert t.device == "cpu"
+    assert t.compute_type == "int8"
+
+
+def test_whisper_transcriber_different_devices_separate_cache():
+    """Different device/compute_type values should create separate model instances."""
+    import tinysteno.transcriber as mod
+
+    mod._MODEL_CACHE.clear()
+
+    with patch("tinysteno.transcriber.WhisperModel") as mock_wm:
+        mock_wm.return_value = MagicMock()
+        t1 = mod.WhisperTranscriber(model_size="tiny", device="cpu", compute_type="int8")
+        t2 = mod.WhisperTranscriber(model_size="tiny", device="cuda", compute_type="float16")
+
+    # Two different cache keys → two WhisperModel constructor calls
+    assert mock_wm.call_count == 2
+
+
+def test_detect_device_returns_tuple():
+    """_detect_device should return a tuple of two strings."""
+    from tinysteno.transcriber import _detect_device
+
+    device, compute_type = _detect_device()
+    assert isinstance(device, str)
+    assert isinstance(compute_type, str)
+    assert device in ("cpu", "cuda", "auto")
