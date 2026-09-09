@@ -101,7 +101,7 @@ Built-in personas are seeded to `~/.tinysteno/personas/` on first run, so you ca
 | `irm` | Incident Response & Management | Incident calls — severity, impact, responders, mitigations, follow-ups |
 | `sprint` | Sprint Ceremony | Planning/review/retros — completed work, blockers, retrospective notes |
 | `kickoff` | Project Kickoff | Project kickoffs — objectives, stakeholders, scope, risks, decisions |
-| `executive-summary` | Executive Summary | Concise summaries — key decisions, risks, asks |
+| `executive-summary` | Executive Summary | Decision-ready briefing — bottom line, key decisions, risks, asks |
 
 ### Custom personas
 

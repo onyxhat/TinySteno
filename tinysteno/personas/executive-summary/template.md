@@ -7,6 +7,9 @@ duration: {{ duration }}
 
 # {{ title }}
 
+## Bottom Line
+{{ bottom_line }}
+
 ## Summary
 {{ summary }}
 
