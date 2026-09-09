@@ -104,6 +104,20 @@ def _git(*args: str) -> str:
     return result.stdout.strip()
 
 
+def _relock() -> None:
+    """Refresh ``uv.lock`` so its tinysteno entry tracks the new version.
+
+    Best effort: a missing ``uv`` or a lock failure is reported to stderr but is
+    not fatal, so the bump still succeeds where ``uv`` is unavailable.
+    """
+    try:
+        subprocess.run(
+            ["uv", "lock"], check=True, cwd=ROOT, capture_output=True, text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"warning: could not refresh uv.lock ({exc}); run 'uv lock' by hand", file=sys.stderr)
+
+
 def head_subject() -> str:
     """Return the subject line of HEAD, or ``""`` outside a git checkout."""
     try:
@@ -157,6 +171,7 @@ def main(argv: list[str] | None = None) -> int:
 
     PYPROJECT.write_text(replace_pyproject_version(pyproject_text, new))
     INIT.write_text(replace_init_version(INIT.read_text(), new))
+    _relock()
 
     section = render_section(new, dt.date.today().isoformat(), commit_subjects_since_last_tag())
     existing = CHANGELOG.read_text() if CHANGELOG.exists() else ""

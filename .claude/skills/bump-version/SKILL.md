@@ -10,9 +10,10 @@ description: >-
 # Bumping the version
 
 `scripts/bump_version.py` is the single source of truth: it rewrites the version
-in `pyproject.toml` and `tinysteno/__init__.py` together and prepends a dated
-section to `CHANGELOG.md` from the commit subjects since the last tag. This skill
-runs that script and wraps it in a release commit and tag. It never pushes.
+in `pyproject.toml` and `tinysteno/__init__.py` together, refreshes `uv.lock`, and
+prepends a dated section to `CHANGELOG.md` from the commit subjects since the last
+tag. This skill runs that script and wraps it in a release commit and tag. It
+never pushes.
 
 The same script runs in CI (`.github/workflows/version-bump.yml`) on every push
 to `main`, so normally you do **not** need this skill — reach for it only when
@@ -30,14 +31,15 @@ bumping by hand, e.g. a manual release or a `--set` version jump.
    HEAD commit is already a bump, or `--set` matched the current version), stop
    here. Nothing was changed; there is nothing to commit.
 4. **Review.** Show the user `git diff` for `pyproject.toml`,
-   `tinysteno/__init__.py`, and `CHANGELOG.md`. Fix the changelog wording if a
-   commit subject reads badly.
+   `tinysteno/__init__.py`, `CHANGELOG.md`, and `uv.lock`. Fix the changelog
+   wording if a commit subject reads badly.
 5. **Test.** `uv run pytest` and `uv run pylint $(git ls-files '*.py')` — the
    version change must not break either.
-6. **Commit.** Stage exactly those three files, then
+6. **Commit.** Stage exactly those four files, then
    `git commit -m "chore: bump version to $NEW [skip ci]"`. The `[skip ci]`
    marker and the `chore: bump version` prefix are what stop the CI workflow from
    bumping again on top of this commit — keep both.
-7. **Tag.** `git tag "v$NEW"`.
+7. **Tag.** `git tag -a "v$NEW" -m "v$NEW"` (annotated, so `--follow-tags` will
+   push it).
 8. **Report.** Tell the user the new version and that they can publish it with
    `git push --follow-tags`. Do not push for them.

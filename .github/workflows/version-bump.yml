@@ -1,8 +1,8 @@
 name: Version Bump
 
 # Auto-increments the patch version on every push to main, then commits the
-# change (pyproject.toml + tinysteno/__init__.py + CHANGELOG.md) and pushes a
-# vX.Y.Z tag. scripts/bump_version.py is stdlib-only, so no dependency install.
+# change (pyproject.toml + tinysteno/__init__.py + CHANGELOG.md + uv.lock) and
+# pushes an annotated vX.Y.Z tag.
 #
 # Loop protection is twofold: the bump commit carries "[skip ci]" and the job
 # `if:` below skips any commit whose subject starts with "chore: bump version".
@@ -39,6 +39,9 @@ jobs:
       with:
         python-version-file: .python-version
 
+    - name: astral-sh/setup-uv
+      uses: astral-sh/setup-uv@v7.6.0
+
     - name: Bump version
       id: bump
       run: echo "new=$(python scripts/bump_version.py | tail -1)" >> "$GITHUB_OUTPUT"
@@ -49,9 +52,10 @@ jobs:
           echo "No version change to commit."
           exit 0
         fi
+        NEW="${{ steps.bump.outputs.new }}"
         git config user.name  "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        git add pyproject.toml tinysteno/__init__.py CHANGELOG.md
-        git commit -m "chore: bump version to ${{ steps.bump.outputs.new }} [skip ci]"
-        git tag "v${{ steps.bump.outputs.new }}"
-        git push --follow-tags
+        git add pyproject.toml tinysteno/__init__.py CHANGELOG.md uv.lock
+        git commit -m "chore: bump version to $NEW [skip ci]"
+        git tag -a "v$NEW" -m "v$NEW"
+        git push origin HEAD "refs/tags/v$NEW"

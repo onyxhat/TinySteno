@@ -1,6 +1,6 @@
 """Tests for scripts/bump_version.py."""
 
-# pylint: disable=missing-function-docstring,redefined-outer-name
+# pylint: disable=missing-function-docstring,redefined-outer-name,protected-access
 
 import importlib.util
 from pathlib import Path
@@ -132,6 +132,7 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(bump_version, "CHANGELOG", changelog)
     monkeypatch.setattr(bump_version, "head_subject", lambda: "feat: something")
     monkeypatch.setattr(bump_version, "commit_subjects_since_last_tag", lambda: ["feat: something"])
+    monkeypatch.setattr(bump_version, "_relock", lambda: None)
     return tmp_path
 
 
@@ -160,6 +161,15 @@ def test_main_is_idempotent_when_head_is_a_bump(sandbox, capsys, monkeypatch):
     assert rc == 0
     assert capsys.readouterr().out.strip().splitlines()[-1] == "0.2.0"
     assert (sandbox / "pyproject.toml").read_text() == SAMPLE_PYPROJECT
+
+
+def test_relock_is_best_effort(monkeypatch, capsys):
+    def boom(*_args, **_kwargs):
+        raise OSError("no uv")
+
+    monkeypatch.setattr(bump_version.subprocess, "run", boom)
+    bump_version._relock()  # must not raise
+    assert "could not refresh uv.lock" in capsys.readouterr().err
 
 
 def test_main_no_op_when_set_equals_current(sandbox, capsys):
