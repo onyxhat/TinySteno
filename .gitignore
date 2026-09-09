@@ -174,12 +174,10 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-# Coding helpers and tools
-.gitnexus/
-.cocoindex_code/
-.claude/
-.claude-flow/
-docs/superpowers/
-.swarm/
+# Claude Code - personal settings
+.claude/settings.local.json
+
 .DS_Store
-/.hermes
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
