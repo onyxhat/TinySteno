@@ -1,0 +1,57 @@
+name: Version Bump
+
+# Auto-increments the patch version on every push to main, then commits the
+# change (pyproject.toml + tinysteno/__init__.py + CHANGELOG.md) and pushes a
+# vX.Y.Z tag. scripts/bump_version.py is stdlib-only, so no dependency install.
+#
+# Loop protection is twofold: the bump commit carries "[skip ci]" and the job
+# `if:` below skips any commit whose subject starts with "chore: bump version".
+#
+# NOTE: if `main` is a protected branch that blocks direct pushes, the default
+# GITHUB_TOKEN push will fail. Either enable "Allow specified actors to bypass
+# required pull requests" for github-actions[bot], or swap in a PAT / deploy key
+# with push access on the checkout and git push steps.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: version-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: bump version') }}"
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Python
+      uses: actions/setup-python@v6.2.0
+      with:
+        python-version-file: .python-version
+
+    - name: Bump version
+      id: bump
+      run: echo "new=$(python scripts/bump_version.py | tail -1)" >> "$GITHUB_OUTPUT"
+
+    - name: Commit, tag, and push
+      run: |
+        if git diff --quiet && git diff --cached --quiet; then
+          echo "No version change to commit."
+          exit 0
+        fi
+        git config user.name  "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add pyproject.toml tinysteno/__init__.py CHANGELOG.md
+        git commit -m "chore: bump version to ${{ steps.bump.outputs.new }} [skip ci]"
+        git tag "v${{ steps.bump.outputs.new }}"
+        git push --follow-tags
