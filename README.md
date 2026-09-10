@@ -97,6 +97,7 @@ Built-in personas are seeded to `~/.tinysteno/personas/` on first run, so you ca
 | Slug | Name | Use for |
 |------|------|---------|
 | `default` | Meeting Summary | General meetings — overview, participants, key points, action items |
+| `1on1` | 1-on-1 Meeting Analyst | Manager/report 1-on-1s — goals, needs, struggles, recent wins, per-side actions |
 | `rca` | Root Cause Analysis | Postmortems — timeline, root cause, contributing factors, corrective actions |
 | `irm` | Incident Response & Management | Incident calls — severity, impact, responders, mitigations, follow-ups |
 | `sprint` | Sprint Ceremony | Planning/review/retros — completed work, blockers, retrospective notes |

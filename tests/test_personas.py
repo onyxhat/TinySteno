@@ -29,7 +29,7 @@ def test_list_personas_returns_all_builtins(seeded_user_dir):
 
 def test_list_personas_builtin_order_is_fixed():
     assert BUILTIN_ORDER == [
-        "default", "rca", "irm", "sprint", "kickoff", "executive-summary"
+        "default", "1on1", "rca", "irm", "sprint", "kickoff", "executive-summary"
     ]
 
 

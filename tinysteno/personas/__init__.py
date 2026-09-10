@@ -11,7 +11,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-BUILTIN_ORDER = ["default", "rca", "irm", "sprint", "kickoff", "executive-summary"]
+BUILTIN_ORDER = ["default", "1on1", "rca", "irm", "sprint", "kickoff", "executive-summary"]
 
 _RESERVED_NAMES = frozenset({"title", "date", "duration", "transcript", "detected_language"})
 _VALID_TYPES = frozenset({"string", "list"})

@@ -7,7 +7,7 @@ TinySteno is a minimal meeting recorder that captures audio (microphone + system
 - **Language:** Python 3.12+
 - **Package manager:** uv
 - **Lines of code:** ~1,100 core + ~1,200 tests
-- **Modules:** 7 core modules, 9 built-in personas
+- **Modules:** 7 core modules, 7 built-in personas
 - **CLI entry:** `tinysteno` command (installed via `pip install`)
 
 ---
@@ -127,21 +127,19 @@ Encapsulates all persona configuration: schema definition, system prompt, and Ji
 - Required files: `persona.yaml`, `system_prompt.md`, `template.md`
 - `persona.yaml` must declare `name`, `description`, `schema`
 - Schema fields validated: only `string` and `list` types allowed
-- Reserved field names cannot be overridden: `title`, `date`, `duration`, `transcript`, `detected_language`
+- Reserved field names cannot be overridden: `title`, `date`, `duration`, `transcript`, `detected_language`, `generated_tags`
 
-**Built-in personas (9):**
+**Built-in personas (7), in `BUILTIN_ORDER`:**
 
 | Slug | Purpose |
 |------|---------|
 | default | General meeting summary |
-| 1on1 | One-on-one meeting notes |
-| executive-summary | High-level executive briefing |
-| irm | Incident response management |
-| kickoff | Project kickoff notes |
+| 1on1 | Manager/report 1-on-1: goals, needs, struggles, recent wins, per-side actions |
 | rca | Root cause analysis |
-| sprint | Sprint retrospective |
-| leadership | Leadership meeting notes |
-| meeting | General meeting (extended) |
+| irm | Incident response management |
+| sprint | Sprint ceremony (planning / review / retrospective) |
+| kickoff | Project kickoff notes |
+| executive-summary | Decision-ready executive briefing |
 
 Each persona directory contains:
 - `persona.yaml` -- name, tags, description, schema definition
