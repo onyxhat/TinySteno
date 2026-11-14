@@ -113,27 +113,31 @@ The happy path is `tinysteno`, `Enter` to record, `Enter` to stop, and the finis
 | Home | `Enter` on Record, or `r` | Start recording with the current name and persona |
 | Home | `Enter` in the Name box | Start recording |
 | Home | `Enter` on a recent recording | Process that WAV with the selected persona |
-| Recording | `Enter`, `Space`, `s` | Stop and process |
+| Recording | `Enter`, `Space`, `s` | Stop and process (ignored, with a `Still starting…` notice, until the recorder has started) |
 | Recording | `k` | Keep recording: cancel the auto-stop for this session |
 | Recording | `+` | Extend the auto-stop by 15 minutes |
-| Recording | `d` | Discard: opens a confirmation (`y` discards, `n` or `Esc` keeps recording) |
-| Processing | `r` | Retry, after a failure |
+| Recording | `d` | Discard: opens a confirmation (`y` discards, `n` or `Esc` keeps recording, `q` quits and saves) |
+| Processing | `r` | Retry, after a failed stage (not after "No speech detected") |
 | Processing | `n` | Back to Home (once the pipeline is no longer running) |
 | Result | `o` | Open the note in Obsidian |
 | Result | `n` | Back to Home |
 | Home, Recording, Processing, Result | `q` | Quit (see below) |
 | Any screen, including the discard confirmation | `Ctrl+Q` | Quit |
 
-`r` and `q` are ordinary text while the Name box has focus. The discard confirmation swallows a plain `q`; use `Ctrl+Q` there.
+`r` and `q` are ordinary text while the Name box has focus. In the discard confirmation `q` quits the same way as everywhere else: the recording is saved, not discarded. The footer only lists keys that do something right now: `r` and `n` appear on the Processing screen once the pipeline has stopped running.
 
 Things to know:
 
 - **Timeout.** The Home screen shows the limit that applies to the selected persona (`Auto-stop after 75 min` or `No time limit`). In the last 60 seconds the Recording panel turns to the warning colour, a toast appears and the terminal bell rings; press `k` to keep recording. When the timer reaches zero the recording stops and is processed normally; nothing is discarded. `+` with no limit set does nothing but say so.
-- **Quitting while recording** stops the recording and saves the WAV, but does not process it. TinySteno exits and prints the saved path and the `tinysteno process` command to run. If saving fails it prints an error naming the file to stderr and exits with code 1.
-- **Quitting during processing** exits immediately; the pipeline is not waited for, so it is abandoned and may not finish writing a note. The WAV stays on disk and TinySteno prints the `tinysteno process` command to finish the job.
-- **Failures keep your audio.** A failed stage (or "No speech detected") leaves the WAV where it is and says so on the Processing screen; `r` runs the pipeline again from the top.
+- **Starting takes a moment.** On macOS, starting system-audio capture can take several seconds; the Recording screen says `Starting…` meanwhile. Stop keys pressed then are ignored (a second `Enter` from Home will not end the recording as it begins); `q` still works and saves whatever was recorded.
+- **Quitting while recording** stops the recording and saves the WAV, but does not process it. TinySteno exits and prints the saved path and the `tinysteno process` command to run. Closing the terminal window (SIGHUP) or `kill` (SIGTERM) does the same, and if the interface itself crashes the recording is still stopped and saved before TinySteno exits.
+- **A failed save keeps the raw audio.** If the WAV cannot be written (for example a full disk), the raw microphone and system-audio files are kept rather than deleted, and the error names them; TinySteno prints it to stderr and exits with code 1.
+- **Quitting during processing** exits immediately; the pipeline is not waited for, so it is abandoned and may not finish writing a note. The WAV stays on disk and TinySteno prints the `tinysteno process` command to finish the job. The same message is printed when you quit after a failed stage or "No speech detected".
+- **Failures keep your audio.** A failed stage or "No speech detected" leaves the WAV where it is and says so on the Processing screen. After a failed stage `r` runs the pipeline again from the top; after "No speech detected" there is nothing to retry, so only `n` (Home) is offered.
 - **Only `d`, confirmed, deletes audio.**
-- **System audio.** If system audio is not being captured, the System meter reads `System audio unavailable` and only the microphone is recorded.
+- **Level meters.** Each meter is on a fixed scale from -60 dBFS (empty) to 0 dBFS (full), with the newest sound at the right; green is normal speech, amber is loud, red is close to clipping. An empty meter, just a faint baseline, means that input is at or below -60 dBFS: silent, muted, or the wrong device.
+- **System audio.** If system audio is not being captured, the System meter reads `System audio unavailable` and only the microphone is recorded. When macOS capture failed to start (usually missing Screen Recording permission), a warning toast says why.
+- **Log file.** While the TUI runs, log messages go to `~/.tinysteno/tui.log` (appended) instead of the terminal, so they cannot paint over the screen; `--verbose` logs at DEBUG level there. When the session logged a warning or exited with an error, TinySteno's last line of output is `Log: ~/.tinysteno/tui.log`. The other commands still log to stderr.
 - **Processing a recent recording from Home** uses the file's modification time as the meeting date and no meeting name.
 - **Themes.** The command palette (`Ctrl+P`) switches between Textual's built-in themes; set `tui_theme` in `config.yaml` (for example `tokyo-night`, `nord`, `gruvbox`) to choose the one TinySteno starts with.
 

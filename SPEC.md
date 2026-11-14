@@ -39,7 +39,7 @@ Each stage is independent and communicates through well-defined data contracts (
 - `main()` -- argparse CLI dispatcher. Subcommands: `tui`, `record`, `process`, `list`, `config`, `setup`, `test`. With no subcommand it launches the TUI when stdin and stdout are both terminals, otherwise it prints help
 - `load_config()` -- loads/saves `~/.tinysteno/config.yaml`. Seeds built-in personas on first run.
 - `cmd_record()` -- record audio, then immediately transcribe + summarize + export. Stops on Ctrl+C or when the session timeout elapses (`--timeout MINUTES`; resolved by `resolve_timeout_seconds`)
-- `cmd_tui()` -- imports `tinysteno.tui` lazily, builds a `TuiDeps` (recorder factory, `run_pipeline` bound to the config, persona loaders, recordings directory) and calls `run_tui`. Prints the returned exit message (stderr when the exit code is non-zero) and exits with that code. The `tui` subcommand takes `--now`, `--name`, `--persona`, `--timeout` and the transcription override flags
+- `cmd_tui()` -- imports `tinysteno.tui` lazily, builds a `TuiDeps` (recorder factory, `run_pipeline` bound to the config, persona loaders, recordings directory) and calls `run_tui`. While the app runs, logging goes to `~/.tinysteno/tui.log` instead of the terminal (`log_file.log_to_file`; DEBUG with `--verbose`) and the previous root handlers are restored afterwards. Prints the returned exit message (stderr when the exit code is non-zero), plus a final `Log: <path>` line when the exit code is non-zero or the session logged a warning, and exits with that code. The `tui` subcommand takes `--now`, `--name`, `--persona`, `--timeout` and the transcription override flags
 - `cmd_process()` -- transcribe + summarize + export a pre-recorded WAV
 - `cmd_setup()` -- interactive wizard to set config values, including the session timeout in minutes
 - `_process_audio()` -- shared by `record` and `process`: delegates to `run_pipeline` with a Rich progress reporter. A template (`RuntimeError`) failure at export prints `Error rendering note`; any other stage failure re-raises the underlying exception
@@ -52,7 +52,7 @@ Each stage is independent and communicates through well-defined data contracts (
 - `auto_title`, `auto_tags` -- LLM-generated title and tags
 - `sample_rate`, `channels` -- audio capture settings
 - `persona` -- active persona slug
-- `session_timeout_minutes` -- maximum recording length in minutes, a number `>= 0` (default 75; `0` disables)
+- `session_timeout_minutes` -- maximum recording length in minutes, a finite number `>= 0` (default 75; `0` disables). `inf` and `nan` are rejected here, by `--timeout` and in `persona.yaml`
 - `tui_theme` -- optional starting theme for the TUI (a Textual theme name)
 
 ### 2. `tinysteno/recorder.py` -- Audio Recording
@@ -68,6 +68,8 @@ Captures microphone audio via `sounddevice` (PortAudio) and, on macOS, system au
 - Fallback handling: macOS uses ScreenCaptureKit via `_macos_loopback.py`; Windows uses WASAPI loopback; Linux uses PulseAudio/PipeWire monitor
 - Records into `recordings/` subdirectory (configurable)
 - Live levels for the TUI: `mic_level` and `system_level` are the RMS (0.0 to 1.0) of the most recent frame from each stream, and `has_loopback` says whether system audio is being captured. Audio threads write them; the UI thread reads them
+- `stop()` returns `False` when no audio was captured. The raw temp files are deleted only after the WAV has been written; if saving fails they are kept, listed in `raw_paths` (a tuple of paths, empty otherwise), and the `RuntimeError` names them
+- `loopback_error` holds why macOS system-audio capture failed to start (usually Screen Recording permission), or `None`; the reason is also printed for headless use
 - `discard()` stops the streams and throws the audio away: no WAV is written and the temp files are deleted
 
 ### 3. `tinysteno/transcriber.py` -- Whisper Transcription
@@ -174,13 +176,15 @@ A pure countdown with no threads or sleeping. `SessionTimer(limit_seconds, clock
 
 The only package that imports `textual`; `main.py` imports it lazily inside `cmd_tui`, and nothing under `tui/` imports `tinysteno.main`. Everything with a side effect arrives through the `TuiDeps` dataclass (`make_recorder`, `run_pipeline`, `list_personas`, `load_persona`, `recordings_dir`, `clock`, and `live_updates`, which tests turn off to keep interval timers out of pilot tests).
 
-- `__init__.py` -- `run_tui(config, deps, *, autostart, name, persona, timeout_override) -> tuple[str | None, int]`: runs the app and returns its exit message and exit code.
-- `app.py` -- `TinyStenoApp`: pushes Home, applies `tui_theme`, resolves the per-persona timeout (`timeout_seconds_for`), and moves between screens (`start_recording`, `finish_recording`, `process_file`, `show_result`). Its `action_quit` stops and saves a recording in progress (exit message: the saved path and the `tinysteno process` command; a failed save exits with code 1 and the error as the message) and abandons a running pipeline without waiting for it. Navigation is logged in `events` for tests.
-- `home.py` -- `HomeScreen`: name, persona selector, a hint with the timeout that applies, the Record button and the recent recordings list (`recent_recordings`).
-- `recording.py` -- `RecordingScreen` and the `ConfirmDiscard` modal: the clock, one rolling `Sparkline` per stream (Mic, System; the System row reads "System audio unavailable" when there is no loopback), the auto-stop countdown with a warning in the last 60 seconds, and the `k`, `+`, `d` keys. `recorder.start()` and `stop()` run in thread workers; `tick()` is one UI refresh.
-- `processing.py` -- `ProcessingScreen`: a row per stage (`-pending`, `-active`, `-done`, `-skipped`, `-failed`), a transcription progress bar, retry and home. The pipeline runs in a daemon thread because it cannot be cancelled.
+- `__init__.py` -- `run_tui(config, deps, *, autostart, name, persona, timeout_override) -> tuple[str | None, int]`: runs the app and returns its exit message and exit code. Its `finally` is the safety net: a recorder that was started and never stopped or discarded (the app crashed, or ended some other way) is stopped there and the message says where the WAV is (or, if saving failed, where the raw audio is, with exit code 1).
+- `app.py` -- `TinyStenoApp`: pushes Home, applies `tui_theme`, resolves the per-persona timeout (`timeout_seconds_for`), and moves between screens (`start_recording`, `finish_recording`, `process_file`, `show_result`; the last two first close any dialog, such as the command palette, above the screen they replace). Its `action_quit` stops and saves a recording in progress (exit message: the saved path and the `tinysteno process` command; a failed save exits with code 1 and the error as the message), abandons a running pipeline without waiting for it, and gives the same saved-recording message when quitting a Processing screen that ended without a note. SIGHUP and SIGTERM are routed to `action_quit` on the app's event loop while it runs (where the platform has them) and the previous handlers are restored on exit. `recorder_guard` holds the started recorder until the UI has reported its outcome; `final_result()` is what `run_tui` returns. Navigation is logged in `events` for tests.
+- `guard.py` -- `RecorderGuard`: wraps the started recorder so `stop()` / `discard()` reach it at most once whichever thread gets there first, and `final_message()` for the safety net; `saved_message` and `save_failed_message` build the user-facing text.
+- `home.py` -- `HomeScreen`: name and persona on one line each, a hint with the timeout that applies, a one-row Record button and the recent recordings list (`recent_recordings`), which takes the remaining height and scrolls; fits 80x24. An unknown `--persona` falls back to the configured persona (else the first) with an error toast; with no personas at all the hint says to run `tinysteno setup` and Record is disabled.
+- `recording.py` -- `RecordingScreen` and the `ConfirmDiscard` modal (with its own footer: `y` discard, `n`/`Esc` keep recording, `q` quit and save): the clock, one `LevelMeter` per stream (Mic, System; the System row reads "System audio unavailable" when there is no loopback, and the recorder's `loopback_error` is shown once as a warning toast), the auto-stop countdown with a warning in the last 60 seconds, and the `k`, `+`, `d` keys. Stop keys are ignored with a `Still starting…` notice until `recorder.start()` has returned. `recorder.start()` and `stop()` run in thread workers; `tick()` is one UI refresh.
+- `meter.py` -- `LevelMeter`: a two-row, fixed-scale meter (-60 dBFS empty to 0 dBFS full, 16 steps, colour from `$success` through `$warning` to `$error`) with 120 samples of history in `data`, newest at the right; `level_fraction`, `level_steps`, `column_steps` and `meter_rows` are the pure parts.
+- `processing.py` -- `ProcessingScreen`: a row per stage (`-pending`, `-active`, `-done`, `-skipped`, `-failed`), a transcription progress bar, retry and home; `check_action` shows `r` only after a failed stage and `n` only once the pipeline has stopped. The pipeline runs in a daemon thread because it cannot be cancelled.
 - `result.py` -- `ResultScreen`: renders the exported note (front matter removed) with `Markdown`, and opens it in Obsidian through an `obsidian://open?path=` URL (`obsidian_url`).
-- `styles.tcss` -- shared styles and the warning transition.
+- `styles.tcss` -- shared styles and the warning transition (the border animates; the panel background changes in one step, because Textual 8.2 does not repaint children while an ancestor's background transitions).
 
 ---
 
@@ -322,7 +326,8 @@ tinysteno/
 │   ├── _macos_loopback.py      # macOS ScreenCaptureKit audio capture
 │   ├── session.py              # Session timeout countdown and resolution
 │   ├── pipeline.py             # UI-free transcribe -> summarize -> export with stage reporting
-│   ├── tui/                    # Textual interface (app, home, recording, processing, result)
+│   ├── log_file.py             # Logging to ~/.tinysteno/tui.log while the TUI runs
+│   ├── tui/                    # Textual interface (app, guard, home, recording, meter, processing, result)
 │   └── personas/
 │       ├── __init__.py         # Persona loading, validation, discovery
 │       ├── default/            # Built-in personas (each has: persona.yaml, system_prompt.md, template.md)
