@@ -69,6 +69,10 @@ class AudioRecorder:
         self._fh_lock = threading.Lock()
         self._mic_level = 0.0
         self._system_level = 0.0
+        # Raw audio files left on disk because saving the WAV failed (empty otherwise).
+        self.raw_paths: tuple[Path, ...] = ()
+        # Why macOS system-audio capture could not start, when it was attempted and failed.
+        self.loopback_error: Optional[str] = None
 
     # ── live levels (written by audio threads, read by the UI thread) ─────────
 
@@ -195,6 +199,8 @@ class AudioRecorder:
         self._buffer = []
         self._is_recording = True
         self._has_loopback = False
+        self.raw_paths = ()
+        self.loopback_error = None
 
         # ── microphone ────────────────────────────────────────────────────────
         result = self._get_default_input_device()
@@ -270,6 +276,7 @@ class AudioRecorder:
             return False
         except Exception as e:
             print(f"Warning: macOS system audio capture unavailable: {e}")
+            self.loopback_error = str(e) or type(e).__name__
             return False
 
     def _stop_streams(self) -> Optional[int]:
@@ -292,40 +299,24 @@ class AudioRecorder:
         return loopback_sr
 
     def stop(self) -> bool:
-        """Stop recording and save WAV file."""
+        """Stop recording and save the WAV file; False when no audio was captured.
+
+        The raw audio files are deleted only once the WAV has been written. If saving fails
+        they are kept, listed in ``raw_paths``, and the RuntimeError names them.
+        """
         if not self._is_recording:
             return False
-
+        self._is_recording = False
         try:
             loopback_sr = self._stop_streams()
-            self._reset_levels()
-
-            # close file handles
-            with self._fh_lock:
-                if self._mic_fh:
-                    self._mic_fh.close()
-                    self._mic_fh = None
-                if self._loopback_fh:
-                    self._loopback_fh.close()
-                    self._loopback_fh = None
-
-            try:
-                raw = np.frombuffer(self._mic_raw_path.read_bytes(), dtype=np.float32)
-                loopback_raw_bytes = b""
-                if self._loopback_raw_path and self._loopback_raw_path.exists():
-                    loopback_raw_bytes = self._loopback_raw_path.read_bytes()
-            except Exception:
-                return False
-            finally:
-                if self._mic_raw_path and self._mic_raw_path.exists():
-                    self._mic_raw_path.unlink(missing_ok=True)
-                    self._mic_raw_path = None
-                if self._loopback_raw_path and self._loopback_raw_path.exists():
-                    self._loopback_raw_path.unlink(missing_ok=True)
-                    self._loopback_raw_path = None
-
+            self._close_raw_files()
+            raw = np.frombuffer(self._mic_raw_path.read_bytes(), dtype=np.float32)
             if raw.size == 0:
+                self._cleanup_temp_files()
                 return False
+            loopback_raw_bytes = b""
+            if self._loopback_raw_path and self._loopback_raw_path.exists():
+                loopback_raw_bytes = self._loopback_raw_path.read_bytes()
 
             ch = self._mic_channels_written
             mic_data = raw.reshape(-1, ch) if ch > 1 else raw.reshape(-1, 1)
@@ -345,13 +336,22 @@ class AudioRecorder:
                 wav_file.setsampwidth(2)  # pylint: disable=no-member
                 wav_file.setframerate(self.sample_rate)  # pylint: disable=no-member
                 wav_file.writeframes(audio_data.tobytes())  # pylint: disable=no-member
-
-            self._is_recording = False
-            return True
         except Exception as e:
-            self._is_recording = False
+            self._close_raw_files()
+            self.raw_paths = tuple(
+                p for p in (self._mic_raw_path, self._loopback_raw_path)
+                if p is not None and p.exists()
+            )
+            kept = (
+                f"Raw audio kept at {' and '.join(str(p) for p in self.raw_paths)}"
+                if self.raw_paths else "No raw audio was kept"
+            )
+            raise RuntimeError(f"Failed to save recording: {e}. {kept}") from e
+        finally:
             self._reset_levels()
-            raise RuntimeError(f"Failed to save recording: {e}") from e
+
+        self._cleanup_temp_files()
+        return True
 
     def discard(self) -> None:
         """Stop recording and throw the audio away: no WAV is written, temp files are deleted."""
@@ -370,14 +370,20 @@ class AudioRecorder:
         self._mic_level = 0.0
         self._system_level = 0.0
 
+    def _close_raw_files(self) -> None:
+        """Close the raw audio file handles (the audio threads stop writing to them)."""
+        with self._fh_lock:
+            if self._mic_fh:
+                self._mic_fh.close()
+                self._mic_fh = None
+            if self._loopback_fh:
+                self._loopback_fh.close()
+                self._loopback_fh = None
+
     def _cleanup_temp_files(self) -> None:
         """Close and delete temp raw audio files if they exist."""
-        if self._mic_fh:
-            self._mic_fh.close()
-            self._mic_fh = None
-        if self._loopback_fh:
-            self._loopback_fh.close()
-            self._loopback_fh = None
+        self._close_raw_files()
+        self.raw_paths = ()
         if self._mic_raw_path and self._mic_raw_path.exists():
             self._mic_raw_path.unlink(missing_ok=True)
             self._mic_raw_path = None
