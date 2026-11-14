@@ -1,4 +1,5 @@
 """Test doubles for TUI tests."""
+import threading
 from pathlib import Path
 
 from tinysteno.personas import Persona
@@ -17,12 +18,22 @@ class FakeClock:
         return self.now
 
 
-class FakeRecorder:
-    """AudioRecorder-shaped fake; safe to call from worker threads."""
+class FakeRecorder:  # pylint: disable=too-many-instance-attributes
+    """AudioRecorder-shaped fake; safe to call from worker threads.
+
+    ``start_gate`` / ``stop_gate`` (threading.Event) make start() / stop() block until set,
+    to simulate slow hardware. ``stop_result=False`` simulates "no audio captured";
+    ``stop_error`` / ``discard_error`` are raised from stop() / discard().
+    """
 
     def __init__(self, tmp_path: Path, start_error: Exception | None = None):
         self.wav_path = str(tmp_path / "Meeting.wav")
         self.start_error = start_error
+        self.stop_error: Exception | None = None
+        self.discard_error: Exception | None = None
+        self.stop_result = True
+        self.start_gate: threading.Event | None = None
+        self.stop_gate: threading.Event | None = None
         self.calls: list[str] = []
         self.mic_level = 0.3
         self.system_level = 0.6
@@ -31,19 +42,28 @@ class FakeRecorder:
     def start(self, name=None) -> str:  # pylint: disable=unused-argument
         """Record the call and return the WAV path, or raise start_error."""
         self.calls.append("start")
+        if self.start_gate is not None:
+            self.start_gate.wait(5)
         if self.start_error is not None:
             raise self.start_error
         return self.wav_path
 
     def stop(self) -> bool:
-        """Write an empty WAV at the path and report success."""
+        """Write an empty WAV at the path and report success (or stop_result/stop_error)."""
         self.calls.append("stop")
-        Path(self.wav_path).write_bytes(b"")
-        return True
+        if self.stop_gate is not None:
+            self.stop_gate.wait(5)
+        if self.stop_error is not None:
+            raise self.stop_error
+        if self.stop_result:
+            Path(self.wav_path).write_bytes(b"")
+        return self.stop_result
 
     def discard(self) -> None:
-        """Record the call."""
+        """Record the call, or raise discard_error."""
         self.calls.append("discard")
+        if self.discard_error is not None:
+            raise self.discard_error
 
 
 def _persona(slug: str, timeout: float | None) -> Persona:
@@ -79,6 +99,8 @@ def make_deps(tmp_path: Path, **overrides) -> TuiDeps:
         "load_persona": lambda slug: _persona(slug, persona_timeouts.get(slug)),
         "recordings_dir": tmp_path,
         "clock": FakeClock(),
+        # Tests drive RecordingScreen.tick() by hand; a real-time interval would race them.
+        "live_updates": False,
     }
     fields.update(overrides)
     return TuiDeps(**fields)

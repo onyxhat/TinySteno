@@ -1,11 +1,15 @@
 """The TinySteno Textual application shell."""
 
+import shlex
+from datetime import datetime
+
 from textual.app import App
 
 from tinysteno.personas import Persona
 from tinysteno.session import resolve_timeout_seconds
 from tinysteno.tui.deps import TuiDeps
 from tinysteno.tui.home import HomeScreen
+from tinysteno.tui.recording import RecordingScreen
 
 
 class TinyStenoApp(App):
@@ -42,7 +46,8 @@ class TinyStenoApp(App):
         self.push_screen(HomeScreen(persona=self.initial_persona))
         if self.autostart:
             slug = self.initial_persona or self.config.get("persona", "default")
-            self.start_recording(self.initial_name, slug)
+            # After Home has mounted, so a failed start can fall back to a ready Home screen.
+            self.call_after_refresh(self.start_recording, self.initial_name, slug)
 
     def timeout_seconds_for(self, persona: Persona) -> float | None:
         """Auto-stop limit in seconds for a persona, or None for no limit."""
@@ -53,7 +58,28 @@ class TinyStenoApp(App):
     def start_recording(self, name: str | None, persona_slug: str) -> None:
         """Begin a recording session."""
         self.events.append(("record", name, persona_slug))
+        self.push_screen(RecordingScreen(name, persona_slug))
+
+    def finish_recording(  # pylint: disable=unused-argument
+        self, wav_path: str, name: str | None, persona_slug: str, started_at: datetime
+    ) -> None:
+        """Hand a successfully stopped recording to processing."""
+        self.events.append(("process", wav_path, persona_slug))
 
     def process_file(self, wav_path: str, persona_slug: str) -> None:
         """Process an existing recording."""
         self.events.append(("process", wav_path, persona_slug))
+
+    async def action_quit(self) -> None:
+        """Quit; a recording in progress is stopped and saved first, never lost."""
+        recording = next(
+            (s for s in reversed(self.screen_stack) if isinstance(s, RecordingScreen)), None
+        )
+        if recording is not None:
+            wav = await recording.stop_for_quit()
+            if wav:
+                self.exit_message = (
+                    f"Saved recording: {wav}\n"
+                    f"Process it with: tinysteno process {shlex.quote(wav)}"
+                )
+        self.exit()

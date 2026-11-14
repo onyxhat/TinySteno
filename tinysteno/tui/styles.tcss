@@ -31,3 +31,114 @@ HomeScreen {
     height: auto;
     max-height: 10;
 }
+
+/* ── Recording ─────────────────────────────────────────────────────────── */
+
+RecordingScreen {
+    align: center top;
+}
+
+#rec-panel {
+    width: 100%;
+    max-width: 72;
+    height: auto;
+    padding: 1 2;
+    border: round $error;
+    border-title-color: $error;
+    border-title-style: bold;
+    transition: background 400ms, border 400ms;
+}
+
+RecordingScreen.-warning #rec-panel {
+    border: heavy $warning;
+    border-title-color: $warning;
+    background: $warning 15%;
+}
+
+#rec-indicator {
+    color: $error;
+    text-style: bold;
+}
+
+#elapsed {
+    width: auto;
+    margin: 1 0;
+}
+
+.meter {
+    height: 1;
+    margin-bottom: 1;
+}
+
+.meter-label {
+    width: 8;
+    color: $text-muted;
+}
+
+#mic-level, #system-level {
+    width: 1fr;
+    height: 1;
+}
+
+#mic-level > .sparkline--min-color, #system-level > .sparkline--min-color {
+    color: $success;
+}
+
+#mic-level > .sparkline--max-color, #system-level > .sparkline--max-color {
+    color: $error;
+}
+
+#system-unavailable {
+    display: none;
+    width: 1fr;
+    color: $text-muted;
+    text-style: italic;
+}
+
+#timeout-label {
+    margin-top: 1;
+}
+
+RecordingScreen.-warning #timeout-label {
+    color: $warning;
+    text-style: bold;
+}
+
+#timeout-bar {
+    width: 100%;
+}
+
+#timeout-bar Bar {
+    width: 1fr;
+}
+
+/* ── Discard confirmation ──────────────────────────────────────────────── */
+
+ConfirmDiscard {
+    align: center middle;
+    background: $background 60%;
+}
+
+#confirm-box {
+    width: 56;
+    max-width: 100%;
+    height: auto;
+    padding: 1 2;
+    border: thick $error;
+    background: $surface;
+}
+
+#confirm-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#confirm-buttons {
+    height: auto;
+    margin-top: 1;
+    align-horizontal: right;
+}
+
+#confirm-buttons Button {
+    margin-left: 2;
+}

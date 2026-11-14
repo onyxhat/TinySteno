@@ -22,3 +22,6 @@ class TuiDeps:
     load_persona: Callable[[str], Persona]
     recordings_dir: Path
     clock: Callable[[], float] = time.monotonic
+    # When False, screens never refresh themselves on a real-time interval (no 0.1 s tick,
+    # no pulse); tests drive RecordingScreen.tick() by hand against a fake clock.
+    live_updates: bool = True
