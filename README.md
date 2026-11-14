@@ -3,6 +3,8 @@
 Inspired by [StenoAI](https://github.com/ruzin/stenoai).
 Minimal meeting recorder with Obsidian export (local filesystem vault).
 
+![TinySteno recording a meeting: elapsed clock, microphone and system audio meters, and the auto-stop countdown](docs/images/tui-recording.svg)
+
 ## Features
 
 - Record meetings (Ctrl+C to stop; auto-stops after 75 minutes by default, change it with `--timeout` or `session_timeout_minutes`, `0` disables)
@@ -107,6 +109,32 @@ tinysteno tui --persona rca --name "Postmortem" --timeout 90
 ```
 
 The happy path is `tinysteno`, `Enter` to record, `Enter` to stop, and the finished note appears on screen. The screens are Home (name, persona, recent recordings), Recording (elapsed clock, one rolling level meter for Mic and one for System, auto-stop countdown), Processing (a checklist of transcribe, summarize, title and tags, export) and Result (the exported note rendered in the terminal).
+
+### Screens
+
+**Home.** Record is focused, so `Enter` starts straight away. The name is optional, the persona defaults to your configured one, and the line under it shows the timeout that will apply.
+
+![Home screen: name, persona, auto-stop hint, Record button and recent recordings](docs/images/tui-home.svg)
+
+**Recording.** Elapsed time, one rolling meter each for the microphone and system audio, and the auto-stop countdown.
+
+![Recording screen](docs/images/tui-recording.svg)
+
+**Last minute before auto-stop.** The panel changes colour and a notice appears; `k` keeps recording, `+` adds 15 minutes.
+
+![Recording screen in the auto-stop warning state](docs/images/tui-recording-warning.svg)
+
+**Processing.** Each stage is ticked off as it finishes; transcription shows real progress.
+
+![Processing screen: transcribing done, summarizing in progress](docs/images/tui-processing.svg)
+
+**Result.** The exported note, rendered in the terminal, with its path underneath.
+
+![Result screen showing the rendered meeting note](docs/images/tui-result.svg)
+
+The screenshots are generated from the real app with stand-in audio and a sample note: `uv run python scripts/tui_screenshots.py`.
+
+### Keys
 
 | Screen | Key | Action |
 |--------|-----|--------|
