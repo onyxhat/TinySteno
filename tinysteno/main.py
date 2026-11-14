@@ -17,10 +17,11 @@ from tinysteno.transcriber import Transcriber, WhisperTranscriber
 from tinysteno.orchestrator import Orchestrator
 from tinysteno.obsidian import ObsidianExporter
 from tinysteno.session import (
-    DEFAULT_SESSION_TIMEOUT_MINUTES, SessionTimer, resolve_timeout_seconds,
+    DEFAULT_SESSION_TIMEOUT_MINUTES, SessionTimer, resolve_timeout_seconds, saved_message,
 )
 from tinysteno.pipeline import PipelineError, Stage, run_pipeline
 from tinysteno.log_file import log_to_file
+from tinysteno.signals import deferred_exit_signals
 from tinysteno.personas import (
     load_persona, list_personas, seed_builtin_personas,
     PersonaNotFoundError, PersonaInvalidError, Persona,
@@ -227,6 +228,33 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
     print(f"Meeting: {result.note_path}")
 
 
+def _capture(recorder, timer: SessionTimer, name: Optional[str], minutes: float):
+    """Record until the timer runs out, Ctrl+C, or a kill signal; then stop and save.
+
+    Returns (wav path, whether a WAV was written, whether a signal ended it). A closed
+    terminal or a kill saves like Ctrl+C but the caller must not start processing: the
+    signal is delivered again as soon as this returns.
+    """
+    import time
+
+    with deferred_exit_signals() as exit_signals:
+        wav_path = recorder.start(name)
+        timer.start()
+        logging.getLogger(__name__).debug("Recording to: %s", wav_path)
+        try:
+            while not timer.expired and not exit_signals:
+                time.sleep(0.1)
+            if not exit_signals:
+                print(f"Session timeout reached ({minutes:g} min).")
+        except KeyboardInterrupt:
+            pass
+        finally:
+            saved = recorder.stop()
+        if exit_signals and saved:
+            print(saved_message(wav_path), flush=True)
+        return wav_path, saved, bool(exit_signals)
+
+
 def cmd_record(args, config):
     """Record audio and process into meeting notes."""
     logger = logging.getLogger(__name__)
@@ -265,22 +293,13 @@ def cmd_record(args, config):
             "Recording started...\n"
             f"Press Ctrl+C to stop. Auto-stop after {minutes:g} min (--timeout 0 to disable)."
         )
-    wav_path = recorder.start(name)
-    timer.start()
-    logger.debug("Recording to: %s", wav_path)
-
-    import time
-
-    try:
-        while not timer.expired:
-            time.sleep(0.1)
-        print(f"Session timeout reached ({minutes:g} min).")
-    except KeyboardInterrupt:
-        pass
-    finally:
-        recorder.stop()
-
+    wav_path, saved, killed = _capture(recorder, timer, name, minutes)
+    if killed:
+        return
     print("Recording stopped.")
+    if not saved:
+        print("No audio was captured.")
+        return
     _process_audio(wav_path, name, config, logger, persona, timestamp)
 
 

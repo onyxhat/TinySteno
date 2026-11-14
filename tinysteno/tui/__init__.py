@@ -2,6 +2,7 @@
 
 import sys
 
+from tinysteno.signals import deferred_exit_signals
 from tinysteno.tui.app import TinyStenoApp
 from tinysteno.tui.deps import TuiDeps
 
@@ -29,7 +30,10 @@ def run_tui(  # pylint: disable=too-many-arguments
         app.run()
         returned = True
     finally:
-        message, code = app.final_result()
-        if not returned and message:  # app.run() raised: say it before the traceback
-            print(message, file=sys.stderr)
+        # The app's own signal handling ended with the app: a kill arriving while the safety
+        # net is still writing the WAV waits until the user has been told where it is.
+        with deferred_exit_signals():
+            message, code = app.final_result()
+            if not returned and message:  # app.run() raised: say it before the traceback
+                print(message, file=sys.stderr)
     return message, code

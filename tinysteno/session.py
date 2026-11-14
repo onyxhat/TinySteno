@@ -1,6 +1,7 @@
 """Recording session timeout: a pure countdown that never sleeps or spawns threads."""
 
 import math
+import shlex
 import time
 from collections.abc import Callable
 
@@ -86,3 +87,11 @@ def format_clock(seconds: float) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
+
+
+def saved_message(wav_path: str) -> str:
+    """What to tell the user about a recording that was saved but not processed."""
+    return (
+        f"Saved recording: {wav_path}\n"
+        f"Process it with: tinysteno process {shlex.quote(wav_path)}"
+    )

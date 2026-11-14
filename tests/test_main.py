@@ -1,7 +1,10 @@
 """Tests for tinysteno.main module."""
 import argparse
 import logging
+import os
+import signal
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -479,3 +482,49 @@ def test_cmd_tui_without_warnings_or_errors_does_not_mention_the_log(tmp_path, c
          patch.object(Path, "home", return_value=tmp_path):
         run_cmd_tui(argparse.Namespace(), {"obsidian_vault": str(tmp_path)})
     assert capsys.readouterr() == ("", "")
+
+
+def _run_record(tmp_path, recorder_setup, **patches):
+    """cmd_record on a mocked recorder; returns (recorder mock, _process_audio mock)."""
+    config = {"session_timeout_minutes": 0.001, "obsidian_vault": str(tmp_path)}
+    with patch("tinysteno.main.AudioRecorder") as rec_cls, \
+         patch("tinysteno.main.load_persona", return_value=_make_list_only_persona()), \
+         patch("tinysteno.main._process_audio") as process:
+        rec_cls.return_value.start.return_value = "/tmp/x.wav"
+        recorder_setup(rec_cls.return_value)
+        for target, value in patches.items():
+            setattr(rec_cls.return_value, target, value)
+        cmd_record(_record_args(), config)
+    return rec_cls.return_value, process
+
+
+def test_cmd_record_does_not_process_when_no_audio_was_captured(tmp_path, capsys):
+    def no_audio(recorder):
+        recorder.stop.return_value = False
+
+    _recorder, process = _run_record(tmp_path, no_audio)
+    process.assert_not_called()
+    assert "No audio was captured" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGTERM"), reason="needs POSIX signals")
+def test_cmd_record_saves_and_does_not_process_when_killed(tmp_path, capsys):
+    delivered = []
+    config = {"session_timeout_minutes": 5, "obsidian_vault": str(tmp_path)}
+    previous = signal.signal(signal.SIGTERM, lambda *_: delivered.append("after"))
+    killer = threading.Timer(0.3, os.kill, (os.getpid(), signal.SIGTERM))
+    try:
+        with patch("tinysteno.main.AudioRecorder") as rec_cls, \
+             patch("tinysteno.main.load_persona", return_value=_make_list_only_persona()), \
+             patch("tinysteno.main._process_audio") as process:
+            rec_cls.return_value.start.return_value = "/tmp/x.wav"
+            rec_cls.return_value.stop.side_effect = lambda: delivered.append("saved") or True
+            killer.start()
+            cmd_record(_record_args(), config)
+    finally:
+        killer.cancel()
+        signal.signal(signal.SIGTERM, previous)
+    assert delivered == ["saved", "after"]       # the signal takes effect only after the save
+    process.assert_not_called()
+    out = capsys.readouterr().out
+    assert "Saved recording: /tmp/x.wav" in out and "tinysteno process /tmp/x.wav" in out

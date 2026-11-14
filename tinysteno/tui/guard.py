@@ -1,20 +1,13 @@
 """Keep a started recorder reachable, so no way out of the app can leave it unsaved."""
 
-import shlex
 import threading
+
+from tinysteno.session import saved_message
 
 _SAVED = "saved"
 _EMPTY = "empty"
 _FAILED = "failed"
 _DISCARDED = "discarded"
-
-
-def saved_message(wav_path: str) -> str:
-    """What to tell the user about a recording that was saved but not processed."""
-    return (
-        f"Saved recording: {wav_path}\n"
-        f"Process it with: tinysteno process {shlex.quote(wav_path)}"
-    )
 
 
 def save_failed_message(err: Exception, raw_paths) -> str:
