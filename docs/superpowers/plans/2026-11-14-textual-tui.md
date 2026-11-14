@@ -683,7 +683,7 @@ async def test_selecting_recent_recording_processes_it(tmp_path):
         app.screen.query_one("#recent").focus()
         await pilot.press("enter")
         await pilot.pause()
-        assert app.pending == ("process", str(wav), "1on1")
+        assert ("process", str(wav), "1on1") in app.events
 
 
 async def test_timeout_hint_follows_the_selected_persona(tmp_path):
