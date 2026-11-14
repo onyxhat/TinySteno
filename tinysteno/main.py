@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import math
 import os
 import shlex
 import subprocess
@@ -15,6 +16,9 @@ from tinysteno.api_transcriber import ApiTranscriber
 from tinysteno.transcriber import Transcriber, WhisperTranscriber
 from tinysteno.orchestrator import Orchestrator
 from tinysteno.obsidian import ObsidianExporter
+from tinysteno.session import (
+    DEFAULT_SESSION_TIMEOUT_MINUTES, SessionTimer, resolve_timeout_seconds,
+)
 from tinysteno.personas import (
     load_persona, list_personas, seed_builtin_personas,
     PersonaNotFoundError, PersonaInvalidError, Persona,
@@ -53,6 +57,7 @@ def load_config() -> dict:
             "sample_rate": 44100,
             "channels": 1,
             "persona": "default",
+            "session_timeout_minutes": DEFAULT_SESSION_TIMEOUT_MINUTES,
         }
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(yaml.dump(default_config, default_flow_style=False))
@@ -92,6 +97,23 @@ def _validate_config(config: dict) -> None:
             )
     if "channels" in config and config["channels"] not in (1, 2):
         raise ValueError("Config field 'channels' must be 1 or 2")
+    if "session_timeout_minutes" in config:
+        value = config["session_timeout_minutes"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ValueError(
+                "Config field 'session_timeout_minutes' must be a number >= 0 (0 disables)"
+            )
+
+
+def _non_negative_minutes(value: str) -> float:
+    """argparse type: minutes as a number >= 0."""
+    try:
+        minutes = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid minutes: {value!r}") from None
+    if math.isnan(minutes) or minutes < 0:
+        raise argparse.ArgumentTypeError(f"minutes must be >= 0, got {value!r}")
+    return minutes
 
 
 def _format_duration(duration_seconds: float) -> str:
@@ -270,15 +292,29 @@ def cmd_record(args, config):
         recordings_dir=_recordings_dir(config),
     )
 
-    print("Recording started...\nPress Ctrl+C to stop.")
+    limit = resolve_timeout_seconds(
+        config, persona.session_timeout_minutes, getattr(args, "timeout", None)
+    )
+    timer = SessionTimer(limit)
+    minutes = limit / 60 if limit is not None else 0
+
+    if limit is None:
+        print("Recording started...\nPress Ctrl+C to stop.")
+    else:
+        print(
+            "Recording started...\n"
+            f"Press Ctrl+C to stop. Auto-stop after {minutes:g} min (--timeout 0 to disable)."
+        )
     wav_path = recorder.start(name)
+    timer.start()
     logger.debug("Recording to: %s", wav_path)
 
     import time
 
     try:
-        while True:
+        while not timer.expired:
             time.sleep(0.1)
+        print(f"Session timeout reached ({minutes:g} min).")
     except KeyboardInterrupt:
         pass
     finally:
@@ -600,6 +636,20 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
     except ValueError:
         sample_rate = 44100
 
+    timeout_default = get("session_timeout_minutes", DEFAULT_SESSION_TIMEOUT_MINUTES)
+    timeout_input = _prompt(
+        console,
+        "Session timeout (minutes)",
+        str(timeout_default),
+        "auto-stop a recording after this long; 0 disables",
+    )
+    try:
+        session_timeout_minutes = _non_negative_minutes(timeout_input)
+    except argparse.ArgumentTypeError:
+        session_timeout_minutes = timeout_default
+    if session_timeout_minutes == int(session_timeout_minutes):
+        session_timeout_minutes = int(session_timeout_minutes)
+
     # --- Persona ---
     console.print()
     console.print(Rule("[dim]Persona[/dim]"))
@@ -634,6 +684,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         "channels": channels,
         "sample_rate": sample_rate,
         "persona": persona_slug,
+        "session_timeout_minutes": session_timeout_minutes,
     }
 
     _write_config(config_path, config)
@@ -660,6 +711,10 @@ def main():
     record_parser = subparsers.add_parser("record", help="Record a meeting")
     record_parser.add_argument("--name", help="Meeting name")
     record_parser.add_argument("--persona", help="Persona slug to use for this recording")
+    record_parser.add_argument(
+        "--timeout", type=_non_negative_minutes, metavar="MINUTES",
+        help="Auto-stop after MINUTES (0 disables; default from config)",
+    )
     record_parser.add_argument("--verbose", action="store_true", help="Verbose output")
     record_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
     record_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")

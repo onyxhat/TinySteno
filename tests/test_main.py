@@ -5,9 +5,12 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
 import yaml
 
-from tinysteno.main import cmd_setup, load_config, _process_audio
+from tinysteno.main import (
+    cmd_record, cmd_setup, load_config, main, _process_audio, _validate_config,
+)
 from tinysteno.personas import Persona
 
 
@@ -144,8 +147,6 @@ def test_auto_tags_called_for_list_only_persona(tmp_path):
 
 def test_setup_argparser_has_reset_personas_flag():
     """Verify the real main() parser wires --reset-personas correctly."""
-    from tinysteno.main import main
-
     with patch("tinysteno.main.seed_builtin_personas") as mock_seed:
         mock_seed.return_value = {"copied": [], "skipped": []}
         with patch.object(sys, "argv", ["tinysteno", "setup", "--reset-personas"]):
@@ -222,3 +223,68 @@ def test_title_and_tags_generated_in_parallel(tmp_path):
     assert "title" in call_start_times and "tags" in call_start_times
     overlap = abs(call_start_times["title"] - call_start_times["tags"])
     assert overlap < 0.02, f"title and tags should start concurrently, gap={overlap:.3f}s"
+
+
+@pytest.mark.parametrize("bad", ["two hours", -5, True, None])
+def test_validate_config_rejects_bad_session_timeout(bad):
+    with pytest.raises(ValueError, match="session_timeout_minutes"):
+        _validate_config({"session_timeout_minutes": bad})
+
+
+@pytest.mark.parametrize("good", [0, 120, 0.5])
+def test_validate_config_accepts_session_timeout(good):
+    _validate_config({"session_timeout_minutes": good})
+
+
+def _record_args(**overrides):
+    base = {"persona": None, "name": None, "timeout": None}
+    return argparse.Namespace(**{**base, **overrides})
+
+
+def test_cmd_record_stops_and_processes_when_timeout_elapses(tmp_path, capsys):
+    config = {"session_timeout_minutes": 0.001, "obsidian_vault": str(tmp_path)}
+    with patch("tinysteno.main.AudioRecorder") as rec_cls, \
+         patch("tinysteno.main.load_persona", return_value=_make_list_only_persona()), \
+         patch("tinysteno.main._process_audio") as process:
+        rec_cls.return_value.start.return_value = "/tmp/x.wav"
+        cmd_record(_record_args(), config)  # returns without KeyboardInterrupt
+    rec_cls.return_value.stop.assert_called_once()
+    process.assert_called_once()
+    assert "timeout" in capsys.readouterr().out.lower()
+
+
+def _timer_limit(tmp_path, *, persona_minutes, cli_minutes):
+    """Run cmd_record with a 120-minute global config; return the limit given to SessionTimer."""
+    config = {"session_timeout_minutes": 120, "obsidian_vault": str(tmp_path)}
+    persona = _make_list_only_persona()
+    persona.session_timeout_minutes = persona_minutes
+    with patch("tinysteno.main.AudioRecorder") as rec_cls, \
+         patch("tinysteno.main.load_persona", return_value=persona), \
+         patch("tinysteno.main._process_audio"), \
+         patch("tinysteno.main.SessionTimer") as timer_cls:
+        rec_cls.return_value.start.return_value = "/tmp/x.wav"
+        timer_cls.return_value.expired = True
+        cmd_record(_record_args(timeout=cli_minutes), config)
+    return timer_cls.call_args.args[0]
+
+
+def test_global_timeout_applies_when_persona_sets_none(tmp_path):
+    assert _timer_limit(tmp_path, persona_minutes=None, cli_minutes=None) == 7200
+
+
+def test_persona_timeout_overrides_global(tmp_path):
+    assert _timer_limit(tmp_path, persona_minutes=30, cli_minutes=None) == 1800
+
+
+def test_persona_can_disable_the_timeout(tmp_path):
+    assert _timer_limit(tmp_path, persona_minutes=0, cli_minutes=None) is None
+
+
+def test_timeout_flag_overrides_persona_and_global(tmp_path):
+    assert _timer_limit(tmp_path, persona_minutes=30, cli_minutes=5.0) == 300
+
+
+def test_record_rejects_negative_timeout():
+    with patch.object(sys, "argv", ["tinysteno", "record", "--timeout", "-1"]):
+        with pytest.raises(SystemExit):
+            main()
