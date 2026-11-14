@@ -288,3 +288,54 @@ def test_record_rejects_negative_timeout():
     with patch.object(sys, "argv", ["tinysteno", "record", "--timeout", "-1"]):
         with pytest.raises(SystemExit):
             main()
+
+
+def _run_process_audio(tmp_path, *, orchestrator_setup=None, exporter_setup=None):
+    """Call _process_audio with mocked backends, letting callers set side effects."""
+    config = {
+        "api_key": "ollama", "base_url": "http://localhost", "model": "test",
+        "whisper_model": "small", "diarization": False, "auto_title": False,
+        "auto_tags": False, "obsidian_vault": str(tmp_path), "output_folder": "meetings",
+    }
+    transcript = {
+        "text": "hello", "diarised_text": "", "detected_language": "en",
+        "duration_seconds": 5.0,
+    }
+    persona = Persona(
+        slug="default", name="Default", description="desc",
+        schema={"summary": {"type": "string", "description": "summary"}},
+        system_prompt="p", template="{{ title }}",
+        template_path=Path("/fake/template.md"), tags=[],
+    )
+    with patch("tinysteno.main.WhisperTranscriber") as transcriber_cls, \
+         patch("tinysteno.main.Orchestrator") as orchestrator_cls, \
+         patch("tinysteno.main.ObsidianExporter") as exporter_cls:
+        transcriber_cls.return_value.transcribe.return_value = transcript
+        orchestrator_cls.return_value.summarize.return_value = {"summary": "We met."}
+        if orchestrator_setup:
+            orchestrator_setup(orchestrator_cls.return_value)
+        if exporter_setup:
+            exporter_setup(exporter_cls.return_value)
+        _process_audio(str(tmp_path / "a.wav"), None, config, MagicMock(), persona,
+                       datetime(2024, 1, 1))
+
+
+def test_process_audio_reports_template_error_and_returns(tmp_path, capsys):
+    def setup(exporter):
+        exporter.export.side_effect = RuntimeError("Template render error")
+    _run_process_audio(tmp_path, exporter_setup=setup)
+    assert "Error rendering note: Template render error" in capsys.readouterr().out
+
+
+def test_process_audio_propagates_export_os_error(tmp_path):
+    def setup(exporter):
+        exporter.export.side_effect = OSError("disk full")
+    with pytest.raises(OSError):
+        _run_process_audio(tmp_path, exporter_setup=setup)
+
+
+def test_process_audio_propagates_summarize_error(tmp_path):
+    def setup(orchestrator):
+        orchestrator.summarize.side_effect = ConnectionError("endpoint down")
+    with pytest.raises(ConnectionError):
+        _run_process_audio(tmp_path, orchestrator_setup=setup)

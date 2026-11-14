@@ -208,13 +208,11 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
                 reporter=_RichReporter(progress),
             )
         except PipelineError as err:
-            if err.stage is Stage.EXPORT:
-                print(f"Error rendering note: {err.__cause__}")
-                return
             cause = err.__cause__
-            if isinstance(cause, BaseException):
-                raise cause from None  # pylint: disable=raising-non-exception
-            raise
+            if err.stage is Stage.EXPORT and isinstance(cause, RuntimeError):
+                print(f"Error rendering note: {cause}")
+                return
+            raise cause from None  # pylint: disable=raising-non-exception
 
     logger.debug(f"Duration: {result.duration_seconds:.0f}s")
     if result.no_speech:
