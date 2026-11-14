@@ -14,6 +14,7 @@ from tinysteno.pipeline import PipelineResult
 from tinysteno.tui.home import HomeScreen
 from tinysteno.tui.processing import ProcessingScreen
 from tinysteno.tui.recording import RecordingScreen
+from tinysteno.tui.result import ResultScreen
 
 
 class TinyStenoApp(App):
@@ -85,6 +86,7 @@ class TinyStenoApp(App):
     def show_result(self, result: PipelineResult) -> None:
         """Show the finished note."""
         self.events.append(("result", result))
+        self.switch_screen(ResultScreen(result))
 
     async def action_quit(self) -> None:
         """Quit; a recording in progress is stopped and saved first, never lost.

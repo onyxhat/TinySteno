@@ -49,15 +49,27 @@ class HomeScreen(Screen):
             yield Static("", id="timeout-hint")
             yield Button("Record", id="record", variant="success")
             yield Label("Recent recordings")
-            if self._recent:
-                yield OptionList(*[Option(p.name) for p in self._recent], id="recent")
-            else:
-                yield OptionList(Option(NO_RECORDINGS, disabled=True), id="recent")
+            yield OptionList(*self._recent_options(), id="recent")
         yield Footer()
+
+    def _recent_options(self) -> list[Option]:
+        if self._recent:
+            return [Option(p.name) for p in self._recent]
+        return [Option(NO_RECORDINGS, disabled=True)]
 
     def on_mount(self) -> None:
         self.query_one("#record", Button).focus()
         self._update_hint()
+
+    def on_screen_resume(self) -> None:
+        """Back from another screen: show recordings made meanwhile, Record ready."""
+        recent = recent_recordings(self.app.deps.recordings_dir)
+        if recent != self._recent:
+            self._recent = recent
+            listing = self.query_one("#recent", OptionList)
+            listing.clear_options()
+            listing.add_options(self._recent_options())
+        self.query_one("#record", Button).focus()
 
     def _slug(self) -> str:
         value = self.query_one("#persona", Select).value

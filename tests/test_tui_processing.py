@@ -33,7 +33,10 @@ async def _settle(app, pilot):
 
 
 async def test_success_marks_all_stages_done_and_shows_result(tmp_path):
+    gate = threading.Event()
+
     def fake(wav, name, persona, ts, reporter):  # pylint: disable=unused-argument
+        gate.wait(5)
         for stage in Stage:
             reporter.stage_started(stage)
             if stage is Stage.TRANSCRIBE:
@@ -43,10 +46,16 @@ async def test_success_marks_all_stages_done_and_shows_result(tmp_path):
 
     app = TinyStenoApp(CONFIG, make_deps(tmp_path, run_pipeline=fake))
     async with app.run_test() as pilot:
-        app.process_file(str(_wav(tmp_path)), "default")
+        try:
+            app.process_file(str(_wav(tmp_path)), "default")
+            await pilot.pause()
+            # The result screen replaces this one on success and removes its widgets.
+            rows = {s: app.screen.query_one(f"#stage-{s.value}") for s in Stage}
+        finally:
+            gate.set()
         await _settle(app, pilot)
         for stage in Stage:
-            assert app.screen.query_one(f"#stage-{stage.value}").has_class("-done")
+            assert rows[stage].has_class("-done")
         assert ("result", RESULT) in app.events
 
 
