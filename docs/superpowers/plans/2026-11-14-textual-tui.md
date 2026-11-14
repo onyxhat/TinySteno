@@ -619,7 +619,7 @@ git commit -m "feat(recorder): expose live mic and system levels and add discard
         recordings_dir: Path
         clock: Callable[[], float] = time.monotonic
     ```
-  - `tinysteno/tui/app.py`: `class TinyStenoApp(App)` with `__init__(self, config: dict, deps: TuiDeps, *, autostart: bool = False, name: str | None = None, persona: str | None = None, timeout_override: float | None = None)`; attributes `config`, `deps`, `timeout_override` (minutes from `--timeout`, or `None`), `exit_message: str | None = None`; method `timeout_seconds_for(persona: Persona) -> float | None` returning `resolve_timeout_seconds(self.config, persona.session_timeout_minutes, self.timeout_override)`; method `start_recording(name: str | None, persona_slug: str) -> None` and `process_file(wav_path: str, persona_slug: str) -> None`. In this task both only record their arguments on `self.pending` (a tuple) so Home is testable; Tasks 6 and 7 replace the bodies with the real screen pushes.
+  - `tinysteno/tui/app.py`: `class TinyStenoApp(App)` with `__init__(self, config: dict, deps: TuiDeps, *, autostart: bool = False, name: str | None = None, persona: str | None = None, timeout_override: float | None = None)`; attributes `config`, `deps`, `timeout_override` (minutes from `--timeout`, or `None`), `exit_message: str | None = None`; method `timeout_seconds_for(persona: Persona) -> float | None` returning `resolve_timeout_seconds(self.config, persona.session_timeout_minutes, self.timeout_override)`; method `start_recording(name: str | None, persona_slug: str) -> None` and `process_file(wav_path: str, persona_slug: str) -> None`. Both first append a tuple to `self.events` (a `list`, the app's navigation log: `("record", name, slug)` and `("process", wav_path, slug)`), which is what tests assert on. In this task that is all they do; Tasks 6 and 7 add the screen push after the append and keep the append.
   - `tinysteno/tui/home.py`: `class HomeScreen(Screen)` with widget ids `#name` (`Input`), `#persona` (`Select`), `#record` (`Button`), `#recent` (`OptionList`), `#timeout-hint` (`Static`); helper `recent_recordings(directory: Path, limit: int = 8) -> list[Path]` (newest first by mtime, `*.wav` only, empty list when the directory is missing)
   - `tinysteno/tui/__init__.py`: `run_tui(config: dict, deps: TuiDeps, *, autostart: bool = False, name: str | None = None, persona: str | None = None, timeout_override: float | None = None) -> str | None` (runs the app, returns `app.exit_message`)
   - `tests/tui_fakes.py`: `FakeClock` (as in Task 1), `FakeRecorder` (records calls in `.calls`; `start` returns `str(tmp/"Meeting.wav")` or raises `start_error` if set; `stop` writes an empty file at that path and returns `True`; `mic_level = 0.3`; `system_level = 0.6`; `has_loopback = True`, all plain attributes a test may reassign), and `make_deps(tmp_path, **overrides) -> TuiDeps` with `list_personas=lambda: ["default", "1on1"]`, a `load_persona(slug)` returning the Task 3 test persona with `slug` set to the argument and `session_timeout_minutes` taken from an overridable `persona_timeouts: dict[str, float]` (default `{}`, so `None`), and a `run_pipeline` fake returning a `PipelineResult` whose `note_path` is a real file under `tmp_path` containing `"---\ntitle: Sync\n---\n# Sync\n\nWe met.\n"`.
@@ -653,7 +653,7 @@ async def test_record_button_has_focus_and_enter_starts_recording(tmp_path):
         assert app.focused.id == "record"
         await pilot.press("enter")
         await pilot.pause()
-        assert app.pending == ("record", None, "1on1")
+        assert ("record", None, "1on1") in app.events
 
 
 async def test_typed_name_is_passed_and_r_does_not_fire_inside_input(tmp_path):
@@ -661,10 +661,10 @@ async def test_typed_name_is_passed_and_r_does_not_fire_inside_input(tmp_path):
     async with app.run_test() as pilot:
         app.screen.query_one("#name").focus()
         await pilot.press(*"Retro")          # contains "r": must type, not record
-        assert app.pending is None
+        assert app.events == []
         await pilot.press("enter")            # Enter in the name field starts recording
         await pilot.pause()
-        assert app.pending == ("record", "Retro", "1on1")
+        assert ("record", "Retro", "1on1") in app.events
 
 
 async def test_unknown_configured_persona_falls_back_to_first_available(tmp_path):
@@ -672,7 +672,7 @@ async def test_unknown_configured_persona_falls_back_to_first_available(tmp_path
     async with app.run_test() as pilot:
         await pilot.press("r")
         await pilot.pause()
-        assert app.pending == ("record", None, "default")
+        assert ("record", None, "default") in app.events
 
 
 async def test_selecting_recent_recording_processes_it(tmp_path):
@@ -785,7 +785,7 @@ git commit -m "feat(tui): Textual app scaffold, home screen, and tui entry point
 - Produces:
   - `class RecordingScreen(Screen)` with `__init__(self, name: str | None, persona_slug: str)`; widget ids `#rec-indicator`, `#elapsed` (`Digits`), `#mic-level` and `#system-level` (`Sparkline`), `#system-unavailable` (`Static`), `#timeout-label` (`Static`), `#timeout-bar` (`ProgressBar`); public method `tick() -> None` (one UI refresh from the timer and recorder; also what `set_interval(0.1, self.tick)` calls) and attributes `timer: SessionTimer`, `recorder`
   - `class ConfirmDiscard(ModalScreen[bool])`
-  - `TinyStenoApp.start_recording` pushes `RecordingScreen`; `TinyStenoApp.finish_recording(wav_path: str, name: str | None, persona_slug: str, started_at: datetime) -> None` is what the screen calls after a successful stop. In this task it records `self.pending = ("process", wav_path, persona_slug)`; Task 7 replaces the body.
+  - `TinyStenoApp.start_recording` pushes `RecordingScreen`; `TinyStenoApp.finish_recording(wav_path: str, name: str | None, persona_slug: str, started_at: datetime) -> None` is what the screen calls after a successful stop. In this task it appends `("process", wav_path, persona_slug)` to `self.events`; Task 7 adds the screen switch after the append.
 - Behaviour:
   - On mount the persona is loaded with `deps.load_persona(persona_slug)` and `timer = SessionTimer(app.timeout_seconds_for(persona), clock=deps.clock)`; a persona that fails to load is handled exactly like a start failure (notify, pop to Home) and the recorder is never started. Then the recorder is created and started in a thread worker; until it returns the panel shows `Starting…`. `timer.start()` and `started_at = datetime.now()` happen when `start()` returns.
   - `tick()`: updates `#elapsed` with `format_clock(timer.elapsed)`; appends `recorder.mic_level` and `recorder.system_level` each to its own `deque(maxlen=120)` (12 seconds at the 0.1 s tick) and assigns them to `#mic-level` / `#system-level`, so both meters roll right-to-left independently; when `recorder.has_loopback` is false `#system-level` is hidden, `#system-unavailable` (`System audio unavailable`) is shown, and no system samples are collected; sets `#timeout-label` to `Auto-stop in {format_clock(remaining)}`, or `No time limit` when `remaining is None` (and hides `#timeout-bar`); toggles the `-warning` class on the screen from `timer.in_warning`; on the tick that first enters the warning window calls `self.notify("Auto-stopping in 60s. Press K to keep recording.", severity="warning")` and `self.app.bell()`; when `timer.expired`, stops exactly as the Stop key does.
@@ -808,7 +808,7 @@ async def test_enter_stops_and_hands_wav_to_processing(tmp_path):
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert rec.calls == ["start", "stop"]
-        assert app.pending == ("process", rec.wav_path, "default")
+        assert ("process", rec.wav_path, "default") in app.events
 
 
 async def test_tick_shows_elapsed_and_countdown(tmp_path):
@@ -834,7 +834,7 @@ async def test_warning_window_then_auto_stop_processes_recording(tmp_path):
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert rec.calls == ["start", "stop"]
-        assert app.pending == ("process", rec.wav_path, "default")
+        assert ("process", rec.wav_path, "default") in app.events
 
 
 async def test_k_cancels_timeout_so_recording_outlives_the_limit(tmp_path):
@@ -1004,7 +1004,7 @@ git commit -m "feat(tui): recording screen with live meter and abortable session
 - Produces:
   - `class ProcessingScreen(Screen)` with `__init__(self, wav_path: str, name: str | None, persona_slug: str, timestamp: datetime)`; one row per stage with ids `#stage-transcribe`, `#stage-summarize`, `#stage-metadata`, `#stage-export`, each carrying exactly one of the classes `-pending`, `-active`, `-done`, `-skipped`, `-failed`; `#transcribe-bar` (`ProgressBar`, total 1.0); `#error` (`Static`, hidden until a failure)
   - Row labels: `Transcribing`, `Summarizing`, `Title & tags`, `Exporting note`
-  - `TinyStenoApp.finish_recording(...)` → `switch_screen(ProcessingScreen(wav, name, slug, started_at))`; `TinyStenoApp.process_file(wav_path, slug)` → `push_screen(ProcessingScreen(wav_path, None, slug, datetime.fromtimestamp(mtime)))`; `TinyStenoApp.show_result(result: PipelineResult) -> None`, in this task recording `self.pending = ("result", result)` (Task 8 replaces the body)
+  - Each of these keeps its `self.events` append and then navigates: `TinyStenoApp.finish_recording(...)` → `switch_screen(ProcessingScreen(wav, name, slug, started_at))`; `TinyStenoApp.process_file(wav_path, slug)` → `push_screen(ProcessingScreen(wav_path, None, slug, datetime.fromtimestamp(mtime)))`; `TinyStenoApp.show_result(result: PipelineResult) -> None`, in this task appending `("result", result)` to `self.events` (Task 8 adds the screen switch after the append)
 - Behaviour:
   - On mount a thread worker calls `deps.run_pipeline(wav_path, name, deps.load_persona(slug), timestamp, reporter)`, where the reporter marshals each callback onto the UI with `call_from_thread`.
   - Success with a note → `app.show_result(result)`.
@@ -1026,7 +1026,7 @@ async def test_success_marks_all_stages_done_and_shows_result(tmp_path):
             reporter.stage_finished(stage)
         return RESULT
     ...
-    assert app.pending == ("result", RESULT)
+    assert ("result", RESULT) in app.events
 
 
 async def test_progress_fraction_drives_the_transcription_bar(tmp_path):
@@ -1069,7 +1069,7 @@ async def test_failure_shows_stage_cause_and_wav_then_retry_succeeds(tmp_path):
     await pilot.press("r")
     await app.workers.wait_for_complete()
     await pilot.pause()
-    assert app.pending == ("result", RESULT) and len(attempts) == 2
+    assert ("result", RESULT) in app.events and len(attempts) == 2
 
 
 async def test_persona_load_failure_is_shown_not_raised(tmp_path):
