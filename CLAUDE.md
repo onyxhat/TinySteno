@@ -15,7 +15,7 @@ Everything Python runs through `uv` — the project is uv-managed and CI uses it
 no Node/`npm` build here; ignore the Node/claude-flow workflow in the global config.
 
 ```bash
-uv sync --extra dev                    # install with dev extras (pytest, pylint)
+uv sync                               # install, including the dev group (pytest, pylint)
 uv run tinysteno --help               # run the CLI
 uv run pytest                         # run all tests
 uv run pytest -k "test_name"          # run a single test

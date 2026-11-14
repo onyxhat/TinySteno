@@ -20,6 +20,7 @@ REFRESH_SECONDS = 0.1
 PULSE_SECONDS = 0.7
 WARNING_TEXT = "Auto-stopping in 60s. Press K to keep recording."
 STILL_STARTING = "Still starting…"
+STICKY_SECONDS = 7 * 24 * 3600  # a notice that stays until the user dismisses it
 
 
 class Phase(Enum):
@@ -316,7 +317,11 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self.save_error = save_failed_message(err, raw_paths)
         self.app.ledger.save_failed(self.save_error)
         self._finish(saved=False)
-        self.app.notify(self.save_error, severity="error", markup=False, timeout=30)
+        # Where the raw audio is must not scroll away on a timer: it stays until dismissed.
+        self.app.notify(
+            f"{self.save_error}\n(Esc to dismiss)", severity="error", markup=False,
+            timeout=STICKY_SECONDS,
+        )
         self._leave()
 
     @work(thread=True)

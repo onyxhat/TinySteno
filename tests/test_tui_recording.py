@@ -415,7 +415,8 @@ async def test_stop_error_is_notified_with_the_raw_audio_location(app, rec, tmp_
         await pilot.pause()
         assert isinstance(app.screen, HomeScreen) and app.is_running
         assert notes == [
-            (f"Could not save the recording: disk full. Raw audio kept at {raw}", "error")
+            (f"Could not save the recording: disk full. Raw audio kept at {raw}\n"
+             "(Esc to dismiss)", "error")
         ]
         assert not any(event[0] == "process" for event in app.events)
 

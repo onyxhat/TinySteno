@@ -178,3 +178,23 @@ def test_kill_signal_during_the_crash_save_waits_for_the_save(tmp_path, monkeypa
         signal.signal(signal.SIGTERM, previous)
     assert order == ["saved", "signal delivered"]
     assert f"Saved recording: {rec.wav_path}" in capsys.readouterr().err
+
+
+async def test_failed_save_notice_stays_until_dismissed_with_escape(tmp_path):
+    rec = FakeRecorder(tmp_path)
+    rec.stop_error = RuntimeError("disk full")
+    rec.raw_paths = (tmp_path / "mic.f32",)
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path, clock=FakeClock(), make_recorder=lambda: rec))
+    async with app.run_test(notifications=True) as pilot:
+        await _record(pilot, app)
+        await pilot.press("enter")               # stop: the save fails, back to Home
+        await _settle(app, pilot)
+        notices = list(app._notifications)       # pylint: disable=protected-access
+        assert len(notices) == 1
+        assert str(tmp_path / "mic.f32") in notices[0].message
+        assert "Esc" in notices[0].message
+        assert notices[0].timeout >= 24 * 3600   # does not time out on its own
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not list(app._notifications)      # pylint: disable=protected-access
+        assert isinstance(app.screen, HomeScreen)

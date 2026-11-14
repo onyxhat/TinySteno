@@ -23,7 +23,8 @@ dependencies = [
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
-[project.optional-dependencies]
+# uv installs the dev group by default, so `uv run pytest` works without flags.
+[dependency-groups]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=1.0",

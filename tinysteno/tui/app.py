@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from textual.app import App
+from textual.binding import Binding
 
 from tinysteno.personas import Persona
 from tinysteno.session import resolve_timeout_seconds
@@ -25,7 +26,10 @@ class TinyStenoApp(App):
 
     CSS_PATH = "styles.tcss"
     TITLE = "TinySteno"
-    BINDINGS = [("q", "quit", "Quit")]
+    BINDINGS = [
+        ("q", "quit", "Quit"),
+        Binding("escape", "dismiss_notices", "Dismiss notices", show=False),
+    ]
 
     def __init__(  # pylint: disable=too-many-arguments
         self,
@@ -161,6 +165,10 @@ class TinyStenoApp(App):
         while target is not None and self.screen is not target:
             self.pop_screen()
         self.switch_screen(new_screen)
+
+    def action_dismiss_notices(self) -> None:
+        """Clear every notice on screen (a failed-save notice stays until this or a click)."""
+        self.clear_notifications()
 
     async def action_quit(self) -> None:
         """Quit; a recording in progress is stopped and saved first, never lost.
