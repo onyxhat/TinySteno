@@ -11,6 +11,7 @@ import yaml
 from tinysteno.main import (
     cmd_record, cmd_setup, load_config, main, _process_audio, _validate_config,
 )
+from tinysteno.main import cmd_tui as run_cmd_tui
 from tinysteno.personas import Persona
 
 
@@ -366,3 +367,20 @@ def test_tui_subcommand_passes_now_flag(tmp_path):
         main()
     args = cmd_tui.call_args.args[0]
     assert args.now is True and args.timeout == 30.0
+
+
+def test_cmd_tui_failed_save_goes_to_stderr_and_exits_1(tmp_path, capsys):
+    message = "Could not save the recording: disk full. Any audio that was written is at x"
+    with patch("tinysteno.tui.run_tui", return_value=(message, 1)):
+        with pytest.raises(SystemExit) as exc:
+            run_cmd_tui(argparse.Namespace(), {"obsidian_vault": str(tmp_path)})
+    assert exc.value.code == 1
+    out, err = capsys.readouterr()
+    assert message in err and message not in out
+
+
+def test_cmd_tui_saved_recording_goes_to_stdout(tmp_path, capsys):
+    with patch("tinysteno.tui.run_tui", return_value=("Saved recording: x", 0)):
+        run_cmd_tui(argparse.Namespace(), {"obsidian_vault": str(tmp_path)})
+    out, err = capsys.readouterr()
+    assert out == "Saved recording: x\n" and not err

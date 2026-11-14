@@ -76,6 +76,7 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self.recorder = None
         self.wav_path: str | None = None
         self.started_at: datetime | None = None
+        self.save_error: str | None = None  # set when recorder.stop() raised
         self._phase = _LOADING
         self._stop_pending = False
         self._quitting = False
@@ -224,7 +225,10 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self._discard_recorder(self.app, self.recorder)
 
     async def stop_for_quit(self) -> str | None:
-        """Stop without processing (the app is quitting); return the saved WAV path, if any."""
+        """Stop without processing (the app is quitting); return the saved WAV path, if any.
+
+        When ``stop()`` raised, this returns None and ``save_error`` says what happened.
+        """
         self._quitting = True
         if self._phase == _LOADING:
             self._phase = _DONE
@@ -291,12 +295,12 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
             self._leave()
 
     def _on_stop_failed(self, err: Exception) -> None:
-        self._finish(saved=False)
-        self.app.notify(
+        self.save_error = (
             f"Could not save the recording: {err}. "
-            f"Any audio that was written is at {self.wav_path}",
-            severity="error", markup=False,
+            f"Any audio that was written is at {self.wav_path}"
         )
+        self._finish(saved=False)
+        self.app.notify(self.save_error, severity="error", markup=False)
         self._leave()
 
     @work(thread=True)

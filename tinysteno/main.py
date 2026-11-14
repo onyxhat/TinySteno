@@ -310,7 +310,7 @@ def cmd_tui(args, config):
         load_persona=load_persona,
         recordings_dir=_recordings_dir(config),
     )
-    message = run_tui(
+    message, code = run_tui(
         config, deps,
         autostart=getattr(args, "now", False),
         name=getattr(args, "name", None),
@@ -318,7 +318,9 @@ def cmd_tui(args, config):
         timeout_override=getattr(args, "timeout", None),
     )
     if message:
-        print(message)
+        print(message, file=sys.stderr if code else sys.stdout)
+    if code:
+        sys.exit(code)
 
 
 def cmd_process(args, config):

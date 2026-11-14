@@ -310,6 +310,34 @@ async def test_quit_while_stop_in_flight_saves_once_and_skips_processing(app, re
     assert not any(event[0] == "process" for event in app.events)
 
 
+async def test_quit_when_stop_fails_reports_the_failure_and_exits_1(app, rec):
+    rec.stop_error = RuntimeError("disk full")
+    async with app.run_test() as pilot:
+        await _recording(pilot, app)
+        await pilot.press("q")
+        await pilot.pause()
+    assert "Could not save the recording: disk full" in app.exit_message
+    assert rec.wav_path in app.exit_message
+    assert "Saved recording" not in app.exit_message
+    assert app.return_code == 1
+
+
+async def test_quit_while_failing_stop_in_flight_reports_the_failure_and_exits_1(app, rec):
+    rec.stop_error = RuntimeError("disk full")
+    rec.stop_gate = threading.Event()
+    async with app.run_test() as pilot:
+        await _recording(pilot, app)
+        await pilot.press("s")
+        _release_later(rec.stop_gate)
+        await pilot.press("q")
+        await pilot.pause()
+    assert rec.calls == ["start", "stop"]
+    assert "Could not save the recording: disk full" in app.exit_message
+    assert rec.wav_path in app.exit_message
+    assert "Saved recording" not in app.exit_message
+    assert app.return_code == 1
+
+
 async def test_quit_when_start_fails_claims_nothing(app, rec):
     rec.start_gate = threading.Event()
     rec.start_error = RuntimeError("No audio input devices found")
@@ -331,6 +359,7 @@ async def test_quit_with_no_audio_captured_claims_nothing(app, rec):
         await pilot.pause()
     assert rec.calls == ["start", "stop"]
     assert app.exit_message is None
+    assert app.return_code == 0
 
 
 async def test_ctrl_q_with_discard_dialog_open_saves_the_wav(app, rec):

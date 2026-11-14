@@ -71,12 +71,19 @@ class TinyStenoApp(App):
         self.events.append(("process", wav_path, persona_slug))
 
     async def action_quit(self) -> None:
-        """Quit; a recording in progress is stopped and saved first, never lost."""
+        """Quit; a recording in progress is stopped and saved first, never lost.
+
+        If saving fails, the app exits with code 1 and the error as its exit message.
+        """
         recording = next(
             (s for s in reversed(self.screen_stack) if isinstance(s, RecordingScreen)), None
         )
         if recording is not None:
             wav = await recording.stop_for_quit()
+            if recording.save_error:
+                self.exit_message = recording.save_error
+                self.exit(return_code=1)
+                return
             if wav:
                 self.exit_message = (
                     f"Saved recording: {wav}\n"
