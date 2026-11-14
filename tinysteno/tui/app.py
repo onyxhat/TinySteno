@@ -1,14 +1,18 @@
 """The TinySteno Textual application shell."""
 
+import os
 import shlex
 from datetime import datetime
+from pathlib import Path
 
 from textual.app import App
 
 from tinysteno.personas import Persona
 from tinysteno.session import resolve_timeout_seconds
 from tinysteno.tui.deps import TuiDeps
+from tinysteno.pipeline import PipelineResult
 from tinysteno.tui.home import HomeScreen
+from tinysteno.tui.processing import ProcessingScreen
 from tinysteno.tui.recording import RecordingScreen
 
 
@@ -60,15 +64,27 @@ class TinyStenoApp(App):
         self.events.append(("record", name, persona_slug))
         self.push_screen(RecordingScreen(name, persona_slug))
 
-    def finish_recording(  # pylint: disable=unused-argument
+    def finish_recording(
         self, wav_path: str, name: str | None, persona_slug: str, started_at: datetime
     ) -> None:
         """Hand a successfully stopped recording to processing."""
         self.events.append(("process", wav_path, persona_slug))
+        self.switch_screen(ProcessingScreen(wav_path, name, persona_slug, started_at))
 
     def process_file(self, wav_path: str, persona_slug: str) -> None:
         """Process an existing recording."""
         self.events.append(("process", wav_path, persona_slug))
+        try:
+            started_at = datetime.fromtimestamp(os.path.getmtime(wav_path))
+        except OSError:
+            self.notify(f"Recording not found: {Path(wav_path).name}", severity="error",
+                        markup=False)
+            return
+        self.push_screen(ProcessingScreen(wav_path, None, persona_slug, started_at))
+
+    def show_result(self, result: PipelineResult) -> None:
+        """Show the finished note."""
+        self.events.append(("result", result))
 
     async def action_quit(self) -> None:
         """Quit; a recording in progress is stopped and saved first, never lost.
@@ -89,4 +105,10 @@ class TinyStenoApp(App):
                     f"Saved recording: {wav}\n"
                     f"Process it with: tinysteno process {shlex.quote(wav)}"
                 )
+        processing = next(
+            (s for s in reversed(self.screen_stack) if isinstance(s, ProcessingScreen)), None
+        )
+        if processing is not None and processing.running:
+            # The pipeline thread cannot be cancelled; the WAV stays on disk.
+            self.exit_message = processing.quit_message()
         self.exit()

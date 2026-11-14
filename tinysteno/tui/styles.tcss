@@ -142,3 +142,60 @@ ConfirmDiscard {
 #confirm-buttons Button {
     margin-left: 2;
 }
+
+/* ── Processing ────────────────────────────────────────────────────────── */
+
+ProcessingScreen {
+    align: center top;
+}
+
+#proc-panel {
+    width: 100%;
+    max-width: 72;
+    height: auto;
+    padding: 1 2;
+    border: round $accent;
+    border-title-style: bold;
+}
+
+.stage {
+    height: 1;
+    transition: color 300ms;
+}
+
+.stage.-pending {
+    color: $text-muted;
+}
+
+.stage.-active {
+    color: $accent;
+    text-style: bold;
+}
+
+.stage.-done {
+    color: $success;
+}
+
+.stage.-skipped {
+    color: $text-muted;
+    text-style: italic;
+}
+
+.stage.-failed {
+    color: $error;
+}
+
+#transcribe-bar {
+    width: 100%;
+    padding-left: 2;
+}
+
+#transcribe-bar Bar {
+    width: 1fr;
+}
+
+#error {
+    display: none;
+    margin-top: 1;
+    color: $error;
+}
