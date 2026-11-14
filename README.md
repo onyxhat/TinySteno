@@ -5,7 +5,8 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 
 ## Features
 
-- Record meetings (indefinite duration, Ctrl+C to stop)
+- Record meetings (Ctrl+C to stop; auto-stops after 75 minutes by default, change it with `--timeout` or `session_timeout_minutes`, `0` disables)
+- Interactive terminal UI (`tinysteno`) with live level meters, per-stage progress and an in-terminal note preview
 - Captures mic + system audio simultaneously — no virtual audio device required
 - Transcribe with faster-whisper (local CPU/GPU) or OpenAI Whisper API
 - GPU auto-detection — CUDA, Apple Silicon (MPS), and CPU fallback
@@ -49,11 +50,20 @@ tinysteno setup
 # Reset built-in personas to defaults (overwrites any edits you've made to them)
 tinysteno setup --reset-personas
 
+# Open the terminal UI (when run in a terminal with no subcommand)
+tinysteno
+
+# Open the terminal UI and start recording immediately
+tinysteno tui --now
+
 # Record a meeting (uses default persona)
 tinysteno record
 
 # Record with custom name
 tinysteno record --name "Budget Review"
+
+# Record with a 30 minute limit (0 = no limit)
+tinysteno record --timeout 30
 
 # Record using a specific persona
 tinysteno record --persona rca
@@ -84,6 +94,54 @@ tinysteno config
 
 # Edit config in $EDITOR
 tinysteno config --edit
+```
+
+## TUI
+
+Run `tinysteno` with no subcommand in a terminal to open the interactive interface (outside a terminal it prints help, as before). `tinysteno tui` does the same and accepts `--now`, `--name`, `--persona`, `--timeout MINUTES` and the transcription override flags.
+
+```bash
+tinysteno                       # open the TUI on the Home screen
+tinysteno tui --now             # skip Home and start recording immediately
+tinysteno tui --persona rca --name "Postmortem" --timeout 90
+```
+
+The happy path is `tinysteno`, `Enter` to record, `Enter` to stop, and the finished note appears on screen. The screens are Home (name, persona, recent recordings), Recording (elapsed clock, one rolling level meter for Mic and one for System, auto-stop countdown), Processing (a checklist of transcribe, summarize, title and tags, export) and Result (the exported note rendered in the terminal).
+
+| Screen | Key | Action |
+|--------|-----|--------|
+| Home | `Enter` on Record, or `r` | Start recording with the current name and persona |
+| Home | `Enter` in the Name box | Start recording |
+| Home | `Enter` on a recent recording | Process that WAV with the selected persona |
+| Recording | `Enter`, `Space`, `s` | Stop and process |
+| Recording | `k` | Keep recording: cancel the auto-stop for this session |
+| Recording | `+` | Extend the auto-stop by 15 minutes |
+| Recording | `d` | Discard: opens a confirmation (`y` discards, `n` or `Esc` keeps recording) |
+| Processing | `r` | Retry, after a failure |
+| Processing | `n` | Back to Home (once the pipeline is no longer running) |
+| Result | `o` | Open the note in Obsidian |
+| Result | `n` | Back to Home |
+| Home, Recording, Processing, Result | `q` | Quit (see below) |
+| Any screen, including the discard confirmation | `Ctrl+Q` | Quit |
+
+`r` and `q` are ordinary text while the Name box has focus. The discard confirmation swallows a plain `q`; use `Ctrl+Q` there.
+
+Things to know:
+
+- **Timeout.** The Home screen shows the limit that applies to the selected persona (`Auto-stop after 75 min` or `No time limit`). In the last 60 seconds the Recording panel turns to the warning colour, a toast appears and the terminal bell rings; press `k` to keep recording. When the timer reaches zero the recording stops and is processed normally; nothing is discarded. `+` with no limit set does nothing but say so.
+- **Quitting while recording** stops the recording and saves the WAV, but does not process it. TinySteno exits and prints the saved path and the `tinysteno process` command to run. If saving fails it prints an error naming the file to stderr and exits with code 1.
+- **Quitting during processing** exits immediately; the pipeline is not waited for, so it is abandoned and may not finish writing a note. The WAV stays on disk and TinySteno prints the `tinysteno process` command to finish the job.
+- **Failures keep your audio.** A failed stage (or "No speech detected") leaves the WAV where it is and says so on the Processing screen; `r` runs the pipeline again from the top.
+- **Only `d`, confirmed, deletes audio.**
+- **System audio.** If system audio is not being captured, the System meter reads `System audio unavailable` and only the microphone is recorded.
+- **Processing a recent recording from Home** uses the file's modification time as the meeting date and no meeting name.
+- **Themes.** The command palette (`Ctrl+P`) switches between Textual's built-in themes; set `tui_theme` in `config.yaml` (for example `tokyo-night`, `nord`, `gruvbox`) to choose the one TinySteno starts with.
+
+Relevant config keys:
+
+```yaml
+session_timeout_minutes: 75   # auto-stop for `record` and the TUI; 0 disables
+tui_theme: "tokyo-night"      # optional starting theme for the TUI
 ```
 
 ## Personas
@@ -129,6 +187,14 @@ schema:
     type: list
     description: Key highlights as strings
 ```
+
+A persona may also set an optional `session_timeout_minutes` (a number `>= 0`; `0` means no limit) to override the global recording timeout for that persona:
+
+```yaml
+session_timeout_minutes: 120   # this persona may record for up to 2 hours
+```
+
+The timeout that applies to a recording is, in order: the `--timeout` flag, the persona's `session_timeout_minutes`, the `session_timeout_minutes` value in `config.yaml`, then 75 minutes. `0` disables the limit at any of those levels.
 
 Schema field types are `string` or `list` (list of strings). Field names must be valid Python identifiers and cannot collide with reserved metadata variables: `title`, `date`, `duration`, `transcript`, `detected_language`, `generated_tags`.
 
@@ -188,6 +254,13 @@ whisper_compute_type: "auto"
 diarization: false          # enable [You]/[Others] speaker labels
                             # when system audio is captured, output is automatically
                             # stereo (L=mic, R=system audio) and diarization will work
+
+# Recording session limit in minutes: recording stops and is processed when it
+# elapses. 0 disables. Asked for by `tinysteno setup`. A persona's session_timeout_minutes or --timeout overrides it.
+session_timeout_minutes: 75
+
+# Starting theme for the TUI (optional)
+# tui_theme: "tokyo-night"
 
 # Audio recording
 sample_rate: 44100

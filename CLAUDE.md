@@ -42,6 +42,9 @@ Built-in personas live in `tinysteno/personas/<slug>/`, each with `persona.yaml`
 - Field names must be valid Python identifiers and must not collide with the reserved
   metadata vars: `title`, `date`, `duration`, `transcript`, `detected_language`,
   `generated_tags`.
+- `persona.yaml` may set `session_timeout_minutes` (a number `>= 0`; `0` disables) to override the
+  global recording timeout for that persona. Precedence: `--timeout`, persona, global config
+  (`session_timeout_minutes`, default 75).
 - `tests/conftest.py` seeds personas from `tinysteno.personas._BUILTIN_DIR` / `BUILTIN_ORDER`.
 
 ## Notes
@@ -51,3 +54,5 @@ Built-in personas live in `tinysteno/personas/<slug>/`, each with `persona.yaml`
   `local` (faster-whisper, GPU auto-detected) and `api` (Whisper-compatible endpoint).
 - This repo is indexed by both `graft` and the GitNexus MCP for code navigation and
   impact analysis.
+- The TUI lives in `tinysteno/tui/` (Textual). It takes all side effects through `TuiDeps`, must not
+  import `tinysteno.main`, and is tested with `App.run_test()` (pytest-asyncio auto mode).

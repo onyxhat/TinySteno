@@ -7,7 +7,7 @@ TinySteno is a minimal meeting recorder that captures audio (microphone + system
 - **Language:** Python 3.12+
 - **Package manager:** uv
 - **Lines of code:** ~1,100 core + ~1,200 tests
-- **Modules:** 7 core modules, 7 built-in personas
+- **Modules:** 10 core modules (including the `tui/` package), 7 built-in personas
 - **CLI entry:** `tinysteno` command (installed via `pip install`)
 
 ---
@@ -36,12 +36,13 @@ Each stage is independent and communicates through well-defined data contracts (
 **Purpose:** Parse CLI args, load config, orchestrate the pipeline, provide interactive setup wizard.
 
 **Key functions:**
-- `main()` -- argparse CLI dispatcher. Subcommands: `record`, `process`, `list`, `config`, `setup`, `test`
+- `main()` -- argparse CLI dispatcher. Subcommands: `tui`, `record`, `process`, `list`, `config`, `setup`, `test`. With no subcommand it launches the TUI when stdin and stdout are both terminals, otherwise it prints help
 - `load_config()` -- loads/saves `~/.tinysteno/config.yaml`. Seeds built-in personas on first run.
-- `cmd_record()` -- record audio, then immediately transcribe + summarize + export
+- `cmd_record()` -- record audio, then immediately transcribe + summarize + export. Stops on Ctrl+C or when the session timeout elapses (`--timeout MINUTES`; resolved by `resolve_timeout_seconds`)
+- `cmd_tui()` -- imports `tinysteno.tui` lazily, builds a `TuiDeps` (recorder factory, `run_pipeline` bound to the config, persona loaders, recordings directory) and calls `run_tui`. Prints the returned exit message (stderr when the exit code is non-zero) and exits with that code. The `tui` subcommand takes `--now`, `--name`, `--persona`, `--timeout` and the transcription override flags
 - `cmd_process()` -- transcribe + summarize + export a pre-recorded WAV
-- `cmd_setup()` -- interactive wizard to set config values
-- `process_audio()` -- core pipeline: transcribe -> summarize -> export, shared by record and process
+- `cmd_setup()` -- interactive wizard to set config values, including the session timeout in minutes
+- `_process_audio()` -- shared by `record` and `process`: delegates to `run_pipeline` with a Rich progress reporter. A template (`RuntimeError`) failure at export prints `Error rendering note`; any other stage failure re-raises the underlying exception
 
 **Configuration** lives at `~/.tinysteno/config.yaml`:
 - `obsidian_vault`, `output_folder` -- Obsync output destination
@@ -51,6 +52,8 @@ Each stage is independent and communicates through well-defined data contracts (
 - `auto_title`, `auto_tags` -- LLM-generated title and tags
 - `sample_rate`, `channels` -- audio capture settings
 - `persona` -- active persona slug
+- `session_timeout_minutes` -- maximum recording length in minutes, a number `>= 0` (default 75; `0` disables)
+- `tui_theme` -- optional starting theme for the TUI (a Textual theme name)
 
 ### 2. `tinysteno/recorder.py` -- Audio Recording
 
@@ -64,6 +67,8 @@ Captures microphone audio via `sounddevice` (PortAudio) and, on macOS, system au
 - Generates timestamped filenames: `meeting_20250801_093000.wav`
 - Fallback handling: macOS uses ScreenCaptureKit via `_macos_loopback.py`; Windows uses WASAPI loopback; Linux uses PulseAudio/PipeWire monitor
 - Records into `recordings/` subdirectory (configurable)
+- Live levels for the TUI: `mic_level` and `system_level` are the RMS (0.0 to 1.0) of the most recent frame from each stream, and `has_loopback` says whether system audio is being captured. Audio threads write them; the UI thread reads them
+- `discard()` stops the streams and throws the audio away: no WAV is written and the temp files are deleted
 
 ### 3. `tinysteno/transcriber.py` -- Whisper Transcription
 
@@ -128,6 +133,7 @@ Encapsulates all persona configuration: schema definition, system prompt, and Ji
 - `persona.yaml` must declare `name`, `description`, `schema`
 - Schema fields validated: only `string` and `list` types allowed
 - Reserved field names cannot be overridden: `title`, `date`, `duration`, `transcript`, `detected_language`, `generated_tags`
+- Optional `session_timeout_minutes` (number `>= 0`, `0` = no limit) becomes `Persona.session_timeout_minutes` (`None` when absent) and overrides the global recording timeout for that persona
 
 **Built-in personas (7), in `BUILTIN_ORDER`:**
 
@@ -155,6 +161,26 @@ Platform-specific module for capturing system audio on macOS 12.3+ using ScreenC
 - Falls back to AVAudioEngine-based capture for macOS versions without ScreenCaptureKit support
 - Handles CoreMedia audio buffers with format conversion to float32
 - Thread-safe with callback-based audio delivery
+
+### 8. `tinysteno/session.py` -- Recording Session Timeout
+
+A pure countdown with no threads or sleeping. `SessionTimer(limit_seconds, clock=time.monotonic)` reads the injected clock when polled and exposes `start()`, `cancel()` (remove the limit), `extend(seconds=900)`, and the properties `elapsed`, `limit_seconds`, `remaining`, `expired` and `in_warning` (true in the last `TIMEOUT_WARNING_SECONDS` = 60 seconds). `resolve_timeout_seconds(config, persona_minutes, cli_minutes)` picks the limit in seconds by precedence: `--timeout` flag, then the persona's value, then `session_timeout_minutes` from config, then `DEFAULT_SESSION_TIMEOUT_MINUTES` (75); it returns `None` when the chosen value is `0`. `format_clock(seconds)` renders `MM:SS` (or `H:MM:SS` from one hour). Used by both `cmd_record` and the TUI.
+
+### 9. `tinysteno/pipeline.py` -- UI-free Pipeline
+
+`run_pipeline(wav_path, name, config, persona, timestamp, *, transcriber, orchestrator_cls, exporter_cls, reporter=None) -> PipelineResult` runs transcribe, summarize, title and tags, and export, reporting each `Stage` (`TRANSCRIBE`, `SUMMARIZE`, `METADATA`, `EXPORT`) to a `PipelineReporter` (`stage_started`, `stage_progress`, `stage_finished`, `stage_skipped`; `NullReporter` ignores them). A failure in any stage is re-raised as `PipelineError(stage)` with the original exception as `__cause__`. `PipelineResult` carries `wav_path`, `note_path`, `title`, `duration_seconds` and `no_speech`. Nothing here prints or imports a UI library, so the CLI (Rich) and the TUI (Textual) share it.
+
+### 10. `tinysteno/tui/` -- Textual Interface
+
+The only package that imports `textual`; `main.py` imports it lazily inside `cmd_tui`, and nothing under `tui/` imports `tinysteno.main`. Everything with a side effect arrives through the `TuiDeps` dataclass (`make_recorder`, `run_pipeline`, `list_personas`, `load_persona`, `recordings_dir`, `clock`, and `live_updates`, which tests turn off to keep interval timers out of pilot tests).
+
+- `__init__.py` -- `run_tui(config, deps, *, autostart, name, persona, timeout_override) -> tuple[str | None, int]`: runs the app and returns its exit message and exit code.
+- `app.py` -- `TinyStenoApp`: pushes Home, applies `tui_theme`, resolves the per-persona timeout (`timeout_seconds_for`), and moves between screens (`start_recording`, `finish_recording`, `process_file`, `show_result`). Its `action_quit` stops and saves a recording in progress (exit message: the saved path and the `tinysteno process` command; a failed save exits with code 1 and the error as the message) and abandons a running pipeline without waiting for it. Navigation is logged in `events` for tests.
+- `home.py` -- `HomeScreen`: name, persona selector, a hint with the timeout that applies, the Record button and the recent recordings list (`recent_recordings`).
+- `recording.py` -- `RecordingScreen` and the `ConfirmDiscard` modal: the clock, one rolling `Sparkline` per stream (Mic, System; the System row reads "System audio unavailable" when there is no loopback), the auto-stop countdown with a warning in the last 60 seconds, and the `k`, `+`, `d` keys. `recorder.start()` and `stop()` run in thread workers; `tick()` is one UI refresh.
+- `processing.py` -- `ProcessingScreen`: a row per stage (`-pending`, `-active`, `-done`, `-skipped`, `-failed`), a transcription progress bar, retry and home. The pipeline runs in a daemon thread because it cannot be cancelled.
+- `result.py` -- `ResultScreen`: renders the exported note (front matter removed) with `Markdown`, and opens it in Obsidian through an `obsidian://open?path=` URL (`obsidian_url`).
+- `styles.tcss` -- shared styles and the warning transition.
 
 ---
 
@@ -245,6 +271,8 @@ auto_tags: true
 sample_rate: 44100
 channels: 1
 persona: default
+session_timeout_minutes: 75
+# tui_theme: tokyo-night   # optional
 ```
 
 Personas are discovered from `~/.tinysteno/personas/<slug>/`. Built-in personas are seeded automatically on first run.
@@ -263,6 +291,9 @@ Tests live in `tests/` and use `pytest` with `pylint` linting (CI via GitHub Act
 | `test_orchestrator.py` | Orchestrator | Chunking, LLM calls, merge logic, error handling |
 | `test_obsidian.py` | ObsidianExporter | Template rendering, file writing, frontmatter |
 | `test_personas.py` | Persona loading/validation | Directory validation, schema checking, error cases |
+| `test_session.py` | `SessionTimer`, `resolve_timeout_seconds` | Countdown, warning window, cancel/extend, precedence |
+| `test_pipeline.py` | `run_pipeline` | Stage reporting, skipped stages, `PipelineError` |
+| `test_tui_*.py` (`tui_fakes.py` holds the doubles) | `tinysteno/tui/` | Home, Recording, Processing and Result screens, driven with `App.run_test()` |
 
 ---
 
@@ -289,6 +320,9 @@ tinysteno/
 │   ├── orchestrator.py         # LLM orchestration and summarization
 │   ├── obsidian.py             # Obsidian Markdown export
 │   ├── _macos_loopback.py      # macOS ScreenCaptureKit audio capture
+│   ├── session.py              # Session timeout countdown and resolution
+│   ├── pipeline.py             # UI-free transcribe -> summarize -> export with stage reporting
+│   ├── tui/                    # Textual interface (app, home, recording, processing, result)
 │   └── personas/
 │       ├── __init__.py         # Persona loading, validation, discovery
 │       ├── default/            # Built-in personas (each has: persona.yaml, system_prompt.md, template.md)
@@ -307,8 +341,11 @@ tinysteno/
     ├── test_obsidian.py        # Exporter tests
     ├── test_orchestrator.py    # LLM orchestration tests
     ├── test_personas.py        # Persona loading tests
+    ├── test_pipeline.py        # Pipeline tests
     ├── test_recorder.py        # Recorder tests
-    └── test_transcriber.py     # Transcriber tests
+    ├── test_session.py         # Session timeout tests
+    ├── test_transcriber.py     # Transcriber tests
+    └── test_tui_*.py           # TUI screen tests (pilot-driven)
 ```
 
 ---
