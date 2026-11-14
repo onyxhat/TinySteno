@@ -278,6 +278,49 @@ def cmd_record(args, config):
     _process_audio(wav_path, name, config, logger, persona, timestamp)
 
 
+def _is_interactive() -> bool:
+    """True when both stdin and stdout are terminals."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def cmd_tui(args, config):
+    """Launch the Textual interface."""
+    from tinysteno.tui import run_tui
+    from tinysteno.tui.deps import TuiDeps
+
+    _apply_cli_overrides(config, args)
+
+    def make_recorder():
+        return AudioRecorder(
+            sample_rate=config.get("sample_rate", 44100),
+            channels=config.get("channels", 1),
+            recordings_dir=_recordings_dir(config),
+        )
+
+    deps = TuiDeps(
+        make_recorder=make_recorder,
+        run_pipeline=lambda wav_path, name, persona, timestamp, reporter: run_pipeline(
+            wav_path, name, config, persona, timestamp,
+            transcriber=create_transcriber(config),
+            orchestrator_cls=Orchestrator,
+            exporter_cls=ObsidianExporter,
+            reporter=reporter,
+        ),
+        list_personas=list_personas,
+        load_persona=load_persona,
+        recordings_dir=_recordings_dir(config),
+    )
+    message = run_tui(
+        config, deps,
+        autostart=getattr(args, "now", False),
+        name=getattr(args, "name", None),
+        persona=getattr(args, "persona", None),
+        timeout_override=getattr(args, "timeout", None),
+    )
+    if message:
+        print(message)
+
+
 def cmd_process(args, config):
     """Process an existing audio file."""
     audio_file = Path(args.audio)
@@ -656,7 +699,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
     console.print()
 
 
-def main():
+def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(description="TinySteno - Meeting recorder")
 
@@ -678,6 +721,24 @@ def main():
     )
     record_parser.add_argument("--whisper-api-key", help="API key for API backend")
     record_parser.add_argument("--whisper-api-model", help="Model name for API backend")
+
+    tui_parser = subparsers.add_parser("tui", help="Interactive terminal interface")
+    tui_parser.add_argument("--now", action="store_true", help="Start recording immediately")
+    tui_parser.add_argument("--name", help="Meeting name")
+    tui_parser.add_argument("--persona", help="Persona slug to use for this recording")
+    tui_parser.add_argument(
+        "--timeout", type=_non_negative_minutes, metavar="MINUTES",
+        help="Auto-stop after MINUTES (0 disables; default from config)",
+    )
+    tui_parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    tui_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
+    tui_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
+    tui_parser.add_argument(
+        "--whisper-compute-type",
+        help="Whisper compute type (int8, float16, auto)",
+    )
+    tui_parser.add_argument("--whisper-api-key", help="API key for API backend")
+    tui_parser.add_argument("--whisper-api-model", help="Model name for API backend")
 
     process_parser = subparsers.add_parser("process", help="Process existing audio")
     process_parser.add_argument("audio", help="Audio file path")
@@ -729,13 +790,17 @@ def main():
         return
 
     if not args.command:
-        parser.print_help()
-        return
+        if not _is_interactive():
+            parser.print_help()
+            return
+        args = parser.parse_args(["tui"])
 
     setup_logging(getattr(args, "verbose", False))
     config = load_config()
 
-    if args.command == "record":
+    if args.command == "tui":
+        cmd_tui(args, config)
+    elif args.command == "record":
         cmd_record(args, config)
     elif args.command == "process":
         cmd_process(args, config)

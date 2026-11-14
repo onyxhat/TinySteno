@@ -1,0 +1,33 @@
+HomeScreen {
+    align: center top;
+}
+
+#panel {
+    width: 100%;
+    max-width: 64;
+    height: auto;
+    padding: 1 2;
+}
+
+#panel > Label {
+    margin-top: 1;
+}
+
+#timeout-hint {
+    margin-top: 1;
+    color: $text-muted;
+}
+
+#timeout-hint.error {
+    color: $error;
+}
+
+#record {
+    margin-top: 1;
+    width: 100%;
+}
+
+#recent {
+    height: auto;
+    max-height: 10;
+}

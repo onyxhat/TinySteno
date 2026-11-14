@@ -339,3 +339,30 @@ def test_process_audio_propagates_summarize_error(tmp_path):
         orchestrator.summarize.side_effect = ConnectionError("endpoint down")
     with pytest.raises(ConnectionError):
         _run_process_audio(tmp_path, orchestrator_setup=setup)
+
+
+def test_no_subcommand_launches_tui_on_a_tty(tmp_path):
+    with patch.object(sys, "argv", ["tinysteno"]), \
+         patch("tinysteno.main._is_interactive", return_value=True), \
+         patch("tinysteno.main.load_config", return_value={"obsidian_vault": str(tmp_path)}), \
+         patch("tinysteno.main.cmd_tui") as cmd_tui:
+        main()
+    cmd_tui.assert_called_once()
+
+
+def test_no_subcommand_prints_help_when_not_a_tty(capsys):
+    with patch.object(sys, "argv", ["tinysteno"]), \
+         patch("tinysteno.main._is_interactive", return_value=False), \
+         patch("tinysteno.main.cmd_tui") as cmd_tui:
+        main()
+    cmd_tui.assert_not_called()
+    assert "usage:" in capsys.readouterr().out
+
+
+def test_tui_subcommand_passes_now_flag(tmp_path):
+    with patch.object(sys, "argv", ["tinysteno", "tui", "--now", "--timeout", "30"]), \
+         patch("tinysteno.main.load_config", return_value={"obsidian_vault": str(tmp_path)}), \
+         patch("tinysteno.main.cmd_tui") as cmd_tui:
+        main()
+    args = cmd_tui.call_args.args[0]
+    assert args.now is True and args.timeout == 30.0

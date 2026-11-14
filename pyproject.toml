@@ -16,6 +16,7 @@ dependencies = [
     "pyobjc-framework-ScreenCaptureKit>=12.1; sys_platform == 'darwin'",
     "jinja2>=3.1.6",
     "scipy>=1.13",
+    "textual>=8.2",
 ]
 
 [build-system]
@@ -25,6 +26,7 @@ build-backend = "setuptools.build_meta"
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "pytest-asyncio>=1.0",
     "pylint==4.0.5",
 ]
 
@@ -33,9 +35,13 @@ include = ["tinysteno*"]
 
 [tool.setuptools.package-data]
 "tinysteno.personas" = ["*/persona.yaml", "*/system_prompt.md", "*/template.md"]
+"tinysteno.tui" = ["*.tcss"]
 
 [project.scripts]
 tinysteno = "tinysteno.main:main"
 
 [tool.uv]
 package = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
