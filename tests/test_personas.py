@@ -283,14 +283,46 @@ def test_seed_warns_and_skips_missing_source(tmp_path, caplog):
     assert any("default" in r.message for r in caplog.records)
 
 
+def test_persona_timeout_defaults_to_none(tmp_path):
+    _write_valid_persona_dir(tmp_path / "personas" / "p", "p")
+    with patch("tinysteno.personas._USER_DIR", tmp_path / "personas"):
+        assert load_persona("p").session_timeout_minutes is None
+
+
+@pytest.mark.parametrize("value, expected", [("30", 30), ("0", 0), ("22.5", 22.5)])
+def test_persona_timeout_is_loaded_from_yaml(tmp_path, value, expected):
+    _write_valid_persona_dir(
+        tmp_path / "personas" / "p", "p", extra_yaml=f"session_timeout_minutes: {value}\n"
+    )
+    with patch("tinysteno.personas._USER_DIR", tmp_path / "personas"):
+        assert load_persona("p").session_timeout_minutes == expected
+
+
+@pytest.mark.parametrize("value", ['"two hours"', "-5", "true", "[30]", ".inf", ".nan"])
+def test_persona_with_bad_timeout_is_invalid(tmp_path, value):
+    _write_valid_persona_dir(
+        tmp_path / "personas" / "p", "p", extra_yaml=f"session_timeout_minutes: {value}\n"
+    )
+    with patch("tinysteno.personas._USER_DIR", tmp_path / "personas"):
+        with pytest.raises(PersonaInvalidError, match="session_timeout_minutes"):
+            load_persona("p")
+
+
+def test_no_builtin_persona_overrides_the_timeout(seeded_user_dir):
+    with patch("tinysteno.personas._USER_DIR", seeded_user_dir):
+        assert all(load_persona(s).session_timeout_minutes is None for s in BUILTIN_ORDER)
+
+
 # --- helpers ---
 
-def _write_valid_persona_dir(d: Path, slug: str, name: str = None):
+def _write_valid_persona_dir(d: Path, slug: str, name: str = None, extra_yaml: str = ""):
+    d.mkdir(parents=True, exist_ok=True)
     (d / "persona.yaml").write_text(
         f"name: {name or slug.title()}\n"
         "description: Test description.\n"
         "schema:\n"
         "  summary: {type: string, description: A summary}\n"
+        + extra_yaml
     )
     (d / "system_prompt.md").write_text("You are a test assistant.")
     (d / "template.md").write_text("# {{ title }}\n{{ summary }}")

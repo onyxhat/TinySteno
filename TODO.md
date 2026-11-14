@@ -9,6 +9,10 @@
 - [ ] Investigate slow local transcription (periodically)
   - [ ] Handling for GPU-based transcription (when available)
 - [x] Remove need to truncate transcript content to fit context window
-- [ ] Improved TUI experience
+- [x] Improved TUI experience
   - [x] Unified task progress bar for all tasks
   - [x] Fix inaccurate transcription progress readout
+- [ ] TUI stretch: Inline mode (`App.run(inline=True)`): render under the shell prompt instead of fullscreen
+- [ ] TUI stretch: Splash and text effects (`textualeffects` / terminaltexteffects)
+- [ ] TUI stretch: Real waveform via the Textual Line API (`render_line` with half-block characters)
+- [ ] TUI stretch: SVG snapshot tests with `pytest-textual-snapshot`

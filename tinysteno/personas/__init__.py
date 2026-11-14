@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import keyword
 import logging
+import math
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,7 @@ class Persona:
     template: str
     template_path: Path  # absolute path to template.md, for error reporting
     tags: list  # static tags prepended before generated_tags; dedup handled by exporter
+    session_timeout_minutes: float | None = None  # overrides the global timeout; 0 disables
 
 
 class PersonaNotFoundError(Exception):
@@ -41,6 +43,14 @@ class PersonaNotFoundError(Exception):
 
 class PersonaInvalidError(Exception):
     """A persona directory exists but is malformed."""
+
+
+def _is_minutes(value) -> bool:
+    """True for a finite, non-negative int/float that is not a bool."""
+    return (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        and math.isfinite(value) and value >= 0
+    )
 
 
 def _validate_dir(path: Path, slug: str) -> dict:
@@ -94,6 +104,11 @@ def _validate_dir(path: Path, slug: str) -> dict:
                 f"(must be 'string' or 'list', got {field_def!r})"
             )
 
+    if "session_timeout_minutes" in data and not _is_minutes(data["session_timeout_minutes"]):
+        raise PersonaInvalidError(
+            f"Persona '{slug}': session_timeout_minutes must be a number >= 0 (0 disables)"
+        )
+
     return data
 
 
@@ -109,6 +124,7 @@ def _load_from_dir(slug: str, path: Path) -> Persona:
         template=(path / "template.md").read_text(),
         template_path=(path / "template.md").resolve(),
         tags=data.get("tags") or [],
+        session_timeout_minutes=data.get("session_timeout_minutes"),
     )
 
 

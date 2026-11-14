@@ -122,11 +122,12 @@ class ApiTranscriber:
             sf.write(tmp_path, audio_16k, 16000)
 
         try:
-            response = self._client.audio.transcriptions.create(
-                model=self.model,
-                file=open(tmp_path, "rb"),  # noqa: SIM115  # pylint: disable=consider-using-with  # cleanup in finally
-                response_format="verbose_json",
-            )
+            with open(tmp_path, "rb") as audio_file:
+                response = self._client.audio.transcriptions.create(
+                    model=self.model,
+                    file=audio_file,
+                    response_format="verbose_json",
+                )
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 

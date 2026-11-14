@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import math
 import os
 import shlex
 import subprocess
@@ -15,6 +16,12 @@ from tinysteno.api_transcriber import ApiTranscriber
 from tinysteno.transcriber import Transcriber, WhisperTranscriber
 from tinysteno.orchestrator import Orchestrator
 from tinysteno.obsidian import ObsidianExporter
+from tinysteno.session import (
+    DEFAULT_SESSION_TIMEOUT_MINUTES, SessionTimer, resolve_timeout_seconds, saved_message,
+)
+from tinysteno.pipeline import PipelineError, Stage, run_pipeline
+from tinysteno.log_file import log_to_file
+from tinysteno.signals import deferred_exit_signals
 from tinysteno.personas import (
     load_persona, list_personas, seed_builtin_personas,
     PersonaNotFoundError, PersonaInvalidError, Persona,
@@ -53,6 +60,7 @@ def load_config() -> dict:
             "sample_rate": 44100,
             "channels": 1,
             "persona": "default",
+            "session_timeout_minutes": DEFAULT_SESSION_TIMEOUT_MINUTES,
         }
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(yaml.dump(default_config, default_flow_style=False))
@@ -92,32 +100,30 @@ def _validate_config(config: dict) -> None:
             )
     if "channels" in config and config["channels"] not in (1, 2):
         raise ValueError("Config field 'channels' must be 1 or 2")
+    if "session_timeout_minutes" in config:
+        if not _is_timeout_minutes(config["session_timeout_minutes"]):
+            raise ValueError(
+                "Config field 'session_timeout_minutes' must be a number >= 0 (0 disables)"
+            )
 
 
-def _format_duration(duration_seconds: float) -> str:
-    """Format duration in seconds to HH:MM:SS, clamped at 99:59:59."""
-    total = int(duration_seconds)
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    if h > 99:
-        return "99:59:59"
-    return f"{h:02d}:{m:02d}:{s:02d}"
-
-
-def _extract_summary_text(persona: Persona, data: dict) -> Optional[str]:
-    """Extract the best text from summarized data for title/tag generation."""
-    first_string_value = next(
-        (data.get(field, "") for field, defn in persona.schema.items()
-         if defn["type"] == "string"),
-        None,
+def _is_timeout_minutes(value) -> bool:
+    """True for a finite int/float >= 0 that is not a bool."""
+    return (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        and math.isfinite(value) and value >= 0
     )
-    if not first_string_value:
-        all_items: list[str] = []
-        for field, defn in persona.schema.items():
-            if defn["type"] == "list":
-                all_items.extend(data.get(field, []))
-        return ". ".join(all_items) if all_items else None
-    return first_string_value
+
+
+def _non_negative_minutes(value: str) -> float:
+    """argparse type: minutes as a finite number >= 0."""
+    try:
+        minutes = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid minutes: {value!r}") from None
+    if not math.isfinite(minutes) or minutes < 0:
+        raise argparse.ArgumentTypeError(f"minutes must be >= 0, got {value!r}")
+    return minutes
 
 
 def create_transcriber(config: dict) -> Transcriber:
@@ -151,7 +157,39 @@ def _apply_cli_overrides(config: dict, args: argparse.Namespace) -> None:
             config[config_key] = val
 
 
-def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals  # pipeline requires all params; locals are distinct processing steps
+class _RichReporter:
+    """Drives a transient Rich progress display from pipeline stage events."""
+
+    _LABELS = {
+        Stage.TRANSCRIBE: "Transcribing...",
+        Stage.SUMMARIZE: "Summarizing...",
+        Stage.METADATA: "Generating title and tags...",
+        Stage.EXPORT: "Exporting...",
+    }
+
+    def __init__(self, progress):
+        self._progress = progress
+        self._tasks: dict = {}
+
+    def stage_started(self, stage: Stage) -> None:
+        """Add a task; transcription gets a real bar, other stages a spinner."""
+        total = 1.0 if stage is Stage.TRANSCRIBE else None
+        self._tasks[stage] = self._progress.add_task(self._LABELS[stage], total=total)
+
+    def stage_progress(self, stage: Stage, fraction: float) -> None:
+        """Advance the stage's bar."""
+        if stage in self._tasks:
+            self._progress.update(self._tasks[stage], completed=fraction)
+
+    def stage_finished(self, stage: Stage) -> None:
+        """Remove the stage's task."""
+        self._progress.remove_task(self._tasks.pop(stage))
+
+    def stage_skipped(self, stage: Stage) -> None:
+        """Nothing to show for a skipped stage."""
+
+
+def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     wav_path: str,
     name: Optional[str],
     config: dict,
@@ -159,90 +197,62 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
     persona: Persona,
     timestamp: datetime,
 ) -> None:
-    """Shared pipeline: transcribe → summarize → export."""
-    from rich.progress import Progress, SpinnerColumn, TextColumn
-    from concurrent.futures import ThreadPoolExecutor
+    """Shared pipeline: transcribe → summarize → export, with Rich progress."""
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 
-    transcriber = create_transcriber(config)
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
         transient=True,
     ) as progress:
-        t = progress.add_task("Transcribing...", total=None)
-        result = transcriber.transcribe(wav_path, diarize=config.get("diarization", False))
-        progress.remove_task(t)
-
-        logger.debug(f"Detected language: {result['detected_language']}")
-        logger.debug(f"Duration: {result['duration_seconds']:.0f}s")
-
-        transcript = result["diarised_text"] or result["text"]
-        if not transcript.strip():
-            print("No speech detected, skipping export.")
-            return
-
-        data: dict = {}
-        orchestrator = None
-        if config.get("api_key"):
-            t = progress.add_task("Summarizing...", total=None)
-            orchestrator = Orchestrator(
-                api_key=config["api_key"],
-                base_url=config["base_url"],
-                model=config["model"],
+        try:
+            result = run_pipeline(
+                wav_path, name, config, persona, timestamp,
+                transcriber=create_transcriber(config),
+                orchestrator_cls=Orchestrator,
+                exporter_cls=ObsidianExporter,
+                reporter=_RichReporter(progress),
             )
-            data = orchestrator.summarize(transcript, persona)
-            progress.remove_task(t)
+        except PipelineError as err:
+            cause = err.__cause__
+            if err.stage is Stage.EXPORT and isinstance(cause, RuntimeError):
+                print(f"Error rendering note: {cause}")
+                return
+            raise cause from None  # pylint: disable=raising-non-exception
 
-        # Get first string field for title/tag generation; fall back to joining
-        # all list values for list-only personas (e.g. 1on1).
-        first_string_value = _extract_summary_text(persona, data)
-
-        title_future = None
-        tags_future = None
-        wants_llm_metadata = config.get("auto_title") or config.get("auto_tags")
-        if wants_llm_metadata and orchestrator and first_string_value:
-            t = progress.add_task("Generating title and tags...", total=None)
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                if config.get("auto_title"):
-                    title_future = executor.submit(orchestrator.generate_title, first_string_value)
-                if config.get("auto_tags"):
-                    tags_future = executor.submit(orchestrator.generate_tags, first_string_value)
-            progress.remove_task(t)
-
-    title = name
-    if not title:
-        if title_future is not None:
-            generated = title_future.result()
-            title = generated if generated else Path(wav_path).stem
-        else:
-            title = Path(wav_path).stem
-
-    generated_tags: list = tags_future.result() if tags_future is not None else []
-
-    date_str = timestamp.strftime("%Y-%m-%d %H:%M")
-    duration_str = _format_duration(result.get("duration_seconds", 0.0))
-
-    metadata = {
-        "title": title,
-        "date": date_str,
-        "duration": duration_str,
-        "transcript": transcript,
-        "detected_language": result.get("detected_language", ""),
-        "generated_tags": generated_tags,
-    }
-
-    exporter = ObsidianExporter(
-        vault_path=config["obsidian_vault"],
-        output_folder=config.get("output_folder", "meetings"),
-    )
-
-    try:
-        meeting_path = exporter.export(data, persona, metadata)
-    except RuntimeError as e:
-        print(f"Error rendering note: {e}")
+    logger.debug(f"Duration: {result.duration_seconds:.0f}s")
+    if result.no_speech:
+        print("No speech detected, skipping export.")
         return
+    print(f"Meeting: {result.note_path}")
 
-    print(f"Meeting: {meeting_path}")
+
+def _capture(recorder, timer: SessionTimer, name: Optional[str], minutes: float):
+    """Record until the timer runs out, Ctrl+C, or a kill signal; then stop and save.
+
+    Returns (wav path, whether a WAV was written, whether a signal ended it). A closed
+    terminal or a kill saves like Ctrl+C but the caller must not start processing: the
+    signal is delivered again as soon as this returns.
+    """
+    import time
+
+    with deferred_exit_signals() as exit_signals:
+        wav_path = recorder.start(name)
+        timer.start()
+        logging.getLogger(__name__).debug("Recording to: %s", wav_path)
+        try:
+            while not timer.expired and not exit_signals:
+                time.sleep(0.1)
+            if not exit_signals:
+                print(f"Session timeout reached ({minutes:g} min).")
+        except KeyboardInterrupt:
+            pass
+        finally:
+            saved = recorder.stop()
+        if exit_signals and saved:
+            print(saved_message(wav_path), flush=True)
+        return wav_path, saved, bool(exit_signals)
 
 
 def cmd_record(args, config):
@@ -270,22 +280,76 @@ def cmd_record(args, config):
         recordings_dir=_recordings_dir(config),
     )
 
-    print("Recording started...\nPress Ctrl+C to stop.")
-    wav_path = recorder.start(name)
-    logger.debug("Recording to: %s", wav_path)
+    limit = resolve_timeout_seconds(
+        config, persona.session_timeout_minutes, getattr(args, "timeout", None)
+    )
+    timer = SessionTimer(limit)
+    minutes = limit / 60 if limit is not None else 0
 
-    import time
-
-    try:
-        while True:
-            time.sleep(0.1)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        recorder.stop()
-
+    if limit is None:
+        print("Recording started...\nPress Ctrl+C to stop.")
+    else:
+        print(
+            "Recording started...\n"
+            f"Press Ctrl+C to stop. Auto-stop after {minutes:g} min (--timeout 0 to disable)."
+        )
+    wav_path, saved, killed = _capture(recorder, timer, name, minutes)
+    if killed:
+        return
     print("Recording stopped.")
+    if not saved:
+        print("No audio was captured.")
+        return
     _process_audio(wav_path, name, config, logger, persona, timestamp)
+
+
+def _is_interactive() -> bool:
+    """True when both stdin and stdout are terminals."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def cmd_tui(args, config):
+    """Launch the Textual interface."""
+    from tinysteno.tui import run_tui
+    from tinysteno.tui.deps import TuiDeps
+
+    _apply_cli_overrides(config, args)
+
+    def make_recorder():
+        return AudioRecorder(
+            sample_rate=config.get("sample_rate", 44100),
+            channels=config.get("channels", 1),
+            recordings_dir=_recordings_dir(config),
+        )
+
+    deps = TuiDeps(
+        make_recorder=make_recorder,
+        run_pipeline=lambda wav_path, name, persona, timestamp, reporter: run_pipeline(
+            wav_path, name, config, persona, timestamp,
+            transcriber=create_transcriber(config),
+            orchestrator_cls=Orchestrator,
+            exporter_cls=ObsidianExporter,
+            reporter=reporter,
+        ),
+        list_personas=list_personas,
+        load_persona=load_persona,
+        recordings_dir=_recordings_dir(config),
+    )
+    log_path = Path.home() / ".tinysteno" / "tui.log"
+    with log_to_file(log_path, getattr(args, "verbose", False)) as log:
+        message, code = run_tui(
+            config, deps,
+            autostart=getattr(args, "now", False),
+            name=getattr(args, "name", None),
+            persona=getattr(args, "persona", None),
+            timeout_override=getattr(args, "timeout", None),
+        )
+    if log is not None and (code or log.warned):
+        message = f"{message}\nLog: {log_path}" if message else f"Log: {log_path}"
+    if message:
+        print(message, file=sys.stderr if code else sys.stdout)
+    if code:
+        sys.exit(code)
 
 
 def cmd_process(args, config):
@@ -600,6 +664,22 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
     except ValueError:
         sample_rate = 44100
 
+    timeout_default = get("session_timeout_minutes", DEFAULT_SESSION_TIMEOUT_MINUTES)
+    if not _is_timeout_minutes(timeout_default):
+        timeout_default = DEFAULT_SESSION_TIMEOUT_MINUTES
+    timeout_input = _prompt(
+        console,
+        "Session timeout (minutes)",
+        str(timeout_default),
+        "auto-stop a recording after this long; 0 disables",
+    )
+    try:
+        session_timeout_minutes = _non_negative_minutes(timeout_input)
+    except argparse.ArgumentTypeError:
+        session_timeout_minutes = timeout_default
+    if session_timeout_minutes == int(session_timeout_minutes):
+        session_timeout_minutes = int(session_timeout_minutes)
+
     # --- Persona ---
     console.print()
     console.print(Rule("[dim]Persona[/dim]"))
@@ -634,6 +714,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         "channels": channels,
         "sample_rate": sample_rate,
         "persona": persona_slug,
+        "session_timeout_minutes": session_timeout_minutes,
     }
 
     _write_config(config_path, config)
@@ -651,7 +732,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
     console.print()
 
 
-def main():
+def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(description="TinySteno - Meeting recorder")
 
@@ -660,6 +741,10 @@ def main():
     record_parser = subparsers.add_parser("record", help="Record a meeting")
     record_parser.add_argument("--name", help="Meeting name")
     record_parser.add_argument("--persona", help="Persona slug to use for this recording")
+    record_parser.add_argument(
+        "--timeout", type=_non_negative_minutes, metavar="MINUTES",
+        help="Auto-stop after MINUTES (0 disables; default from config)",
+    )
     record_parser.add_argument("--verbose", action="store_true", help="Verbose output")
     record_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
     record_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
@@ -669,6 +754,24 @@ def main():
     )
     record_parser.add_argument("--whisper-api-key", help="API key for API backend")
     record_parser.add_argument("--whisper-api-model", help="Model name for API backend")
+
+    tui_parser = subparsers.add_parser("tui", help="Interactive terminal interface")
+    tui_parser.add_argument("--now", action="store_true", help="Start recording immediately")
+    tui_parser.add_argument("--name", help="Meeting name")
+    tui_parser.add_argument("--persona", help="Persona slug to use for this recording")
+    tui_parser.add_argument(
+        "--timeout", type=_non_negative_minutes, metavar="MINUTES",
+        help="Auto-stop after MINUTES (0 disables; default from config)",
+    )
+    tui_parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    tui_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
+    tui_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
+    tui_parser.add_argument(
+        "--whisper-compute-type",
+        help="Whisper compute type (int8, float16, auto)",
+    )
+    tui_parser.add_argument("--whisper-api-key", help="API key for API backend")
+    tui_parser.add_argument("--whisper-api-model", help="Model name for API backend")
 
     process_parser = subparsers.add_parser("process", help="Process existing audio")
     process_parser.add_argument("audio", help="Audio file path")
@@ -720,13 +823,17 @@ def main():
         return
 
     if not args.command:
-        parser.print_help()
-        return
+        if not _is_interactive():
+            parser.print_help()
+            return
+        args = parser.parse_args(["tui"])
 
     setup_logging(getattr(args, "verbose", False))
     config = load_config()
 
-    if args.command == "record":
+    if args.command == "tui":
+        cmd_tui(args, config)
+    elif args.command == "record":
         cmd_record(args, config)
     elif args.command == "process":
         cmd_process(args, config)
