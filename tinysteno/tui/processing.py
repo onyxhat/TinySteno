@@ -1,6 +1,8 @@
 """Processing screen: per-stage progress for transcribe -> summarize -> title/tags -> export."""
 
+import asyncio
 import shlex
+import threading
 from datetime import datetime
 
 from textual import work
@@ -77,6 +79,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self.timestamp = timestamp
         self.running = False
         self._failed = False
+        self.pipeline_thread: threading.Thread | None = None
         self._frame = 0
         self._spinner = None
 
@@ -148,20 +151,47 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
     def _start(self) -> None:
         self.running = True
         self._failed = False
-        self._run_pipeline(self.app, self.app.deps)
+        loop = asyncio.get_running_loop()
+        outcome: asyncio.Future = loop.create_future()
+        # A daemon thread, not a Textual thread worker: the pipeline cannot be cancelled, and
+        # neither app shutdown nor interpreter exit may wait for it.
+        self.pipeline_thread = threading.Thread(
+            target=self._pipeline_main,
+            args=(self.app, self.app.deps, loop, outcome),
+            name="tinysteno-pipeline",
+            daemon=True,
+        )
+        self.pipeline_thread.start()
+        self._await_outcome(outcome)
 
-    @work(thread=True)
-    def _run_pipeline(self, app: App, deps) -> None:
+    def _pipeline_main(self, app: App, deps, loop, outcome: asyncio.Future) -> None:
         try:
             persona = deps.load_persona(self.persona_slug)
             result = deps.run_pipeline(
                 self.wav_path, self.meeting_name, persona, self.timestamp,
                 _UiReporter(app, self),
             )
+            report = (result, None)
         except Exception as err:
-            _call_ui(app, self._on_failed, err)
-            return
-        _call_ui(app, self._on_done, result)
+            report = (None, err)
+
+        def deliver() -> None:
+            if not outcome.done():
+                outcome.set_result(report)
+
+        try:
+            loop.call_soon_threadsafe(deliver)
+        except RuntimeError:  # the loop is closed: the app has already exited
+            pass
+
+    @work
+    async def _await_outcome(self, outcome: asyncio.Future) -> None:
+        """Wait (without blocking the loop) for the pipeline thread, then show its outcome."""
+        result, err = await outcome
+        if err is not None:
+            self._on_failed(err)
+        else:
+            self._on_done(result)
 
     def _on_done(self, result: PipelineResult) -> None:
         self.running = False

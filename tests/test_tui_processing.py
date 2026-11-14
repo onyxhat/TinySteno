@@ -1,5 +1,6 @@
 """Processing screen: stage checklist, no-speech, failure, retry and quit paths."""
 import threading
+import time
 
 import pytest
 
@@ -182,22 +183,31 @@ async def test_missing_wav_notifies_and_stays_home(tmp_path):
         assert notes and notes[0][1] == "error"
 
 
-async def test_quit_during_pipeline_saves_message_and_exits_cleanly(tmp_path):
+async def test_quit_during_pipeline_saves_message_and_exits_promptly(tmp_path):
     gate = threading.Event()
     wav = _wav(tmp_path)
 
     def fake(wav_path, name, persona, ts, reporter):  # pylint: disable=unused-argument
         reporter.stage_started(Stage.TRANSCRIBE)
-        gate.wait(5)
-        reporter.stage_finished(Stage.TRANSCRIBE)  # arrives after the app began exiting
+        gate.wait(10)
+        reporter.stage_finished(Stage.TRANSCRIBE)  # arrives after the app has exited
         return RESULT
 
     app = TinyStenoApp(CONFIG, make_deps(tmp_path, run_pipeline=fake))
-    async with app.run_test() as pilot:
-        app.process_file(str(wav), "default")
-        await pilot.pause()
-        await pilot.press("q")
-        await pilot.pause()
-    gate.set()
-    assert str(wav) in app.exit_message and "tinysteno process" in app.exit_message
-    assert app.return_code == 0
+    thread = None
+    started = time.monotonic()
+    try:
+        async with app.run_test() as pilot:
+            app.process_file(str(wav), "default")
+            await pilot.pause()
+            thread = app.screen.pipeline_thread
+            await pilot.press("q")
+            await pilot.pause()
+        assert time.monotonic() - started < 2
+        assert thread.is_alive()  # still running: exit did not wait for it
+        assert str(wav) in app.exit_message and "tinysteno process" in app.exit_message
+        assert app.return_code == 0
+    finally:
+        gate.set()
+        if thread is not None:
+            thread.join(5)
