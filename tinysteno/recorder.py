@@ -17,6 +17,15 @@ except Exception:  # pragma: no cover
     sd = None  # type: ignore  # pylint: disable=invalid-name
 
 
+def _rms_level(frame) -> float:
+    """RMS over all samples of a frame, clamped to 0.0..1.0 (0.0 for an empty frame)."""
+    samples = np.asarray(frame, dtype=np.float32)
+    if samples.size == 0:
+        return 0.0
+    rms = float(np.sqrt(np.mean(np.square(samples))))
+    return min(rms, 1.0) if np.isfinite(rms) else 0.0
+
+
 class AudioRecorder:
     """Record mic + system audio loopback to WAV files.
 
@@ -58,6 +67,25 @@ class AudioRecorder:
         self._has_loopback = False
         self.output_path: Optional[Path] = None
         self._fh_lock = threading.Lock()
+        self._mic_level = 0.0
+        self._system_level = 0.0
+
+    # ── live levels (written by audio threads, read by the UI thread) ─────────
+
+    @property
+    def mic_level(self) -> float:
+        """RMS of the most recent microphone frame, 0.0..1.0 (0.0 when not recording)."""
+        return self._mic_level
+
+    @property
+    def system_level(self) -> float:
+        """RMS of the most recent system-audio frame, 0.0..1.0 (0.0 when none)."""
+        return self._system_level
+
+    @property
+    def has_loopback(self) -> bool:
+        """Whether a system-audio source is being recorded."""
+        return self._has_loopback
 
     # ── audio callbacks ───────────────────────────────────────────────────────
 
@@ -67,22 +95,28 @@ class AudioRecorder:
         self._write_mic_frame(indata)
 
     def _write_mic_frame(self, indata: np.ndarray) -> None:
+        level = _rms_level(indata)
         with self._fh_lock:
             if self._mic_fh is not None:
+                self._mic_level = level
                 self._mic_fh.write(indata.astype(np.float32).tobytes())
                 self._mic_channels_written = indata.shape[1] if indata.ndim > 1 else 1
 
     def _loopback_callback(self, indata, _frames, _time, status):
         if status:
             print(f"Loopback callback status: {status}")
+        level = _rms_level(indata)
         with self._fh_lock:
             if self._loopback_fh is not None:
+                self._system_level = level
                 self._loopback_fh.write(indata.astype(np.float32).tobytes())
                 self._loopback_channels_written = indata.shape[1] if indata.ndim > 1 else 1
 
     def _write_loopback_frame(self, indata) -> None:
+        level = _rms_level(indata)
         with self._fh_lock:
             if self._loopback_fh is not None:
+                self._system_level = level
                 self._loopback_fh.write(np.array(indata, dtype=np.float32).tobytes())
 
     # ── device discovery ──────────────────────────────────────────────────────
@@ -264,6 +298,7 @@ class AudioRecorder:
 
         try:
             loopback_sr = self._stop_streams()
+            self._reset_levels()
 
             # close file handles
             with self._fh_lock:
@@ -315,9 +350,25 @@ class AudioRecorder:
             return True
         except Exception as e:
             self._is_recording = False
+            self._reset_levels()
             raise RuntimeError(f"Failed to save recording: {e}") from e
 
+    def discard(self) -> None:
+        """Stop recording and throw the audio away: no WAV is written, temp files are deleted."""
+        if not self._is_recording:
+            return
+        try:
+            self._stop_streams()
+        finally:
+            self._is_recording = False
+            self._cleanup_temp_files()
+            self._reset_levels()
+
     # ── helpers ───────────────────────────────────────────────────────────────
+
+    def _reset_levels(self) -> None:
+        self._mic_level = 0.0
+        self._system_level = 0.0
 
     def _cleanup_temp_files(self) -> None:
         """Close and delete temp raw audio files if they exist."""
