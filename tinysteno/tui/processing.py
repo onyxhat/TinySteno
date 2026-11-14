@@ -1,7 +1,6 @@
 """Processing screen: per-stage progress for transcribe -> summarize -> title/tags -> export."""
 
 import asyncio
-import shlex
 import threading
 from datetime import datetime
 
@@ -78,6 +77,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self.persona_slug = persona_slug
         self.timestamp = timestamp
         self.running = False
+        self.produced_note = False  # set once the pipeline has exported a note
         self._failed = False
         self.pipeline_thread: threading.Thread | None = None
         self._frame = 0
@@ -151,6 +151,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
     def _start(self) -> None:
         self.running = True
         self._failed = False
+        self.refresh_bindings()
         loop = asyncio.get_running_loop()
         outcome: asyncio.Future = loop.create_future()
         # A daemon thread, not a Textual thread worker: the pipeline cannot be cancelled, and
@@ -195,9 +196,11 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
 
     def _on_done(self, result: PipelineResult) -> None:
         self.running = False
+        self.refresh_bindings()
         if result.no_speech or not result.note_path:
             self._on_no_speech()
             return
+        self.produced_note = True
         self.app.show_result(result)
 
     def _on_no_speech(self) -> None:
@@ -210,6 +213,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
     def _on_failed(self, err: Exception) -> None:
         self.running = False
         self._failed = True
+        self.refresh_bindings()
         if isinstance(err, PipelineError):
             self.set_state(err.stage, "-failed")
             cause = err.__cause__ or err
@@ -228,6 +232,14 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
 
     # ── actions ──────────────────────────────────────────────────────────────
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Show (and allow) r only after a failure and n only once the pipeline has ended."""
+        if action == "retry":
+            return self._failed and not self.running
+        if action == "home":
+            return not self.running
+        return super().check_action(action, parameters)
+
     def action_retry(self) -> None:
         """Run the pipeline again from the top, after a failure."""
         if self.running or not self._failed:
@@ -239,10 +251,3 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         """Back to Home, once the pipeline is no longer running."""
         if not self.running:
             self.app.pop_screen()
-
-    def quit_message(self) -> str:
-        """The exit message for quitting while the pipeline is still running."""
-        return (
-            f"Saved recording: {self.wav_path}\n"
-            f"Process it with: tinysteno process {shlex.quote(self.wav_path)}"
-        )

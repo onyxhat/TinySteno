@@ -3,12 +3,14 @@ import threading
 import time
 
 import pytest
+from textual.command import CommandPalette
 
 from tinysteno.personas import PersonaInvalidError
 from tinysteno.pipeline import PipelineError, PipelineResult, Stage
 from tinysteno.tui.app import TinyStenoApp
 from tinysteno.tui.home import HomeScreen
 from tinysteno.tui.processing import ProcessingScreen
+from tinysteno.tui.result import ResultScreen
 from tests.tui_fakes import make_deps
 
 CONFIG = {"persona": "default", "session_timeout_minutes": 120}
@@ -220,3 +222,102 @@ async def test_quit_during_pipeline_saves_message_and_exits_promptly(tmp_path):
         gate.set()
         if thread is not None:
             thread.join(5)
+
+
+def _saved_message(wav) -> str:
+    return f"Saved recording: {wav}\nProcess it with: tinysteno process {wav}"
+
+
+async def test_quit_after_a_failure_says_where_the_recording_is(tmp_path):
+    wav = _wav(tmp_path)
+
+    def fake(wav_path, name, persona, ts, reporter):  # pylint: disable=unused-argument
+        raise PipelineError(Stage.SUMMARIZE) from ConnectionError("endpoint down")
+
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path, run_pipeline=fake))
+    async with app.run_test() as pilot:
+        app.process_file(str(wav), "default")
+        await _settle(app, pilot)
+        await pilot.press("q")
+        await pilot.pause()
+    assert app.exit_message == _saved_message(wav)
+    assert app.return_code == 0
+
+
+async def test_quit_after_no_speech_says_where_the_recording_is(tmp_path):
+    wav = _wav(tmp_path)
+
+    def fake(wav_path, name, persona, ts, reporter):  # pylint: disable=unused-argument
+        return PipelineResult(str(wav), None, None, 3.0, True)
+
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path, run_pipeline=fake))
+    async with app.run_test() as pilot:
+        app.process_file(str(wav), "default")
+        await _settle(app, pilot)
+        await pilot.press("q")
+        await pilot.pause()
+    assert app.exit_message == _saved_message(wav)
+
+
+async def test_quit_after_a_note_was_written_says_nothing(tmp_path):
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
+    async with app.run_test() as pilot:
+        app.process_file(str(_wav(tmp_path)), "default")
+        await _settle(app, pilot)
+        await pilot.press("q")
+        await pilot.pause()
+    assert app.exit_message is None
+
+
+async def test_modal_open_when_the_pipeline_finishes_leaves_no_stale_processing_screen(tmp_path):
+    gate = threading.Event()
+
+    def fake(wav, name, persona, ts, reporter):  # pylint: disable=unused-argument
+        gate.wait(5)
+        return RESULT
+
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path, run_pipeline=fake))
+    async with app.run_test() as pilot:
+        app.process_file(str(_wav(tmp_path)), "default")
+        await pilot.pause()
+        app.action_command_palette()          # the documented way to change theme
+        await pilot.pause()
+        assert isinstance(app.screen, CommandPalette)
+        gate.set()
+        await _settle(app, pilot)
+        assert [type(s) for s in app.screen_stack][-2:] == [HomeScreen, ResultScreen]
+        assert not any(isinstance(s, (ProcessingScreen, CommandPalette))
+                       for s in app.screen_stack)
+        await pilot.press("n")
+        await pilot.pause()
+        assert isinstance(app.screen, HomeScreen)
+
+
+def _footer_keys(app) -> set[str]:
+    """Keys of the bindings the footer currently shows for the active screen."""
+    return {key for key, active in app.screen.active_bindings.items() if active.enabled}
+
+
+async def test_retry_and_home_keys_show_only_when_they_can_act(tmp_path):
+    gate = threading.Event()
+    attempts = []
+
+    def fake(wav_path, name, persona, ts, reporter):  # pylint: disable=unused-argument
+        attempts.append(1)
+        if len(attempts) == 1:
+            gate.wait(5)
+            raise PipelineError(Stage.TRANSCRIBE) from RuntimeError("boom")
+        return PipelineResult(wav_path, None, None, 3.0, True)
+
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path, run_pipeline=fake))
+    async with app.run_test() as pilot:
+        app.process_file(str(_wav(tmp_path)), "default")
+        await pilot.pause()
+        assert not {"r", "n"} & _footer_keys(app)          # running: neither can act
+        gate.set()
+        await _settle(app, pilot)
+        assert {"r", "n"} <= _footer_keys(app)             # failed: both can
+        await pilot.press("r")
+        await _settle(app, pilot)
+        keys = _footer_keys(app)                           # no speech: home only
+        assert "n" in keys and "r" not in keys

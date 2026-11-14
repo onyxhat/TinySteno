@@ -4,17 +4,29 @@ HomeScreen {
 
 #panel {
     width: 100%;
-    max-width: 64;
-    height: auto;
-    padding: 1 2;
+    max-width: 72;
+    height: 1fr;
+    padding: 1 2 0 2;
 }
 
-#panel > Label {
-    margin-top: 1;
+.field {
+    height: 3;
+}
+
+.field-label {
+    width: 10;
+    height: 3;
+    content-align: left middle;
+    color: $text-muted;
+}
+
+#name, #persona {
+    width: 1fr;
 }
 
 #timeout-hint {
-    margin-top: 1;
+    height: 1;
+    margin: 0 0 1 10;
     color: $text-muted;
 }
 
@@ -23,13 +35,25 @@ HomeScreen {
 }
 
 #record {
-    margin-top: 1;
     width: 100%;
+    margin-bottom: 1;
+    text-style: bold;
+}
+
+/* Textual's default focus style reverses the label, which drew it as a dark box on the
+   green button; mark focus with an underline instead. */
+#record:focus {
+    text-style: bold underline;
+}
+
+#recent-label {
+    color: $text-muted;
 }
 
 #recent {
-    height: auto;
-    max-height: 10;
+    width: 100%;
+    height: 1fr;
+    min-height: 3;
 }
 
 /* ── Recording ─────────────────────────────────────────────────────────── */
@@ -46,7 +70,9 @@ RecordingScreen {
     border: round $error;
     border-title-color: $error;
     border-title-style: bold;
-    transition: background 400ms, border 400ms;
+    /* Only the border animates: Textual 8.2 does not repaint children while an ancestor's
+       background transitions, which left them as dark boxes on the tinted panel. */
+    transition: border 400ms;
 }
 
 RecordingScreen.-warning #rec-panel {
@@ -66,26 +92,19 @@ RecordingScreen.-warning #rec-panel {
 }
 
 .meter {
-    height: 1;
+    height: 2;
     margin-bottom: 1;
 }
 
 .meter-label {
     width: 8;
+    height: 2;
+    content-align: left bottom;
     color: $text-muted;
 }
 
 #mic-level, #system-level {
     width: 1fr;
-    height: 1;
-}
-
-#mic-level > .sparkline--min-color, #system-level > .sparkline--min-color {
-    color: $success;
-}
-
-#mic-level > .sparkline--max-color, #system-level > .sparkline--max-color {
-    color: $error;
 }
 
 #system-unavailable {

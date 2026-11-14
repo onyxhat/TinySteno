@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Label, OptionList, Select, Static
 from textual.widgets.option_list import Option
@@ -11,6 +11,7 @@ from textual.widgets.option_list import Option
 from tinysteno.personas import PersonaInvalidError, PersonaNotFoundError
 
 NO_RECORDINGS = "No recordings yet"
+NO_PERSONAS = "No personas found. Run tinysteno setup."
 
 
 def recent_recordings(directory: Path, limit: int = 8) -> list[Path]:
@@ -29,26 +30,31 @@ class HomeScreen(Screen):
     def __init__(self, persona: str | None = None) -> None:
         super().__init__()
         self._persona_arg = persona
+        self._personas: list[str] = []
         self._recent: list[Path] = []
 
     def compose(self) -> ComposeResult:
         app = self.app
-        personas = app.deps.list_personas()
-        wanted = self._persona_arg or app.config.get("persona")
-        initial = wanted if wanted in personas else (personas[0] if personas else Select.BLANK)
+        self._personas = personas = list(app.deps.list_personas())
+        # --persona first, then the configured default, then the first persona there is.
+        candidates = [self._persona_arg, app.config.get("persona"), *personas]
+        initial = next((slug for slug in candidates if slug in personas), Select.NULL)
         self._recent = recent_recordings(app.deps.recordings_dir)
         yield Header()
         with Vertical(id="panel"):
-            yield Label("Meeting name (optional)")
-            yield Input(placeholder="Untitled meeting", id="name")
-            yield Label("Persona")
-            yield Select(
-                [(slug, slug) for slug in personas], value=initial, allow_blank=False,
-                id="persona",
-            )
+            with Horizontal(classes="field"):
+                yield Label("Name", classes="field-label")
+                yield Input(placeholder="Untitled meeting (optional)", id="name")
+            with Horizontal(classes="field"):
+                yield Label("Persona", classes="field-label")
+                yield Select(
+                    [(slug, slug) for slug in personas], value=initial,
+                    allow_blank=not personas, prompt="No personas", id="persona",
+                )
             yield Static("", id="timeout-hint")
-            yield Button("Record", id="record", variant="success")
-            yield Label("Recent recordings")
+            yield Button("● Record", id="record", variant="success", compact=True,
+                         disabled=not personas)
+            yield Label("Recent recordings", id="recent-label")
             yield OptionList(*self._recent_options(), id="recent")
         yield Footer()
 
@@ -60,6 +66,13 @@ class HomeScreen(Screen):
     def on_mount(self) -> None:
         self.query_one("#record", Button).focus()
         self._update_hint()
+        wanted = self._persona_arg
+        # With --now the Recording screen reports the unknown persona itself.
+        if wanted and self._personas and wanted not in self._personas and not self.app.autostart:
+            self.app.notify(
+                f"Unknown persona '{wanted}'; using '{self._slug()}' instead.",
+                severity="error", markup=False,
+            )
 
     def on_screen_resume(self) -> None:
         """Back from another screen: show recordings made meanwhile, Record ready."""
@@ -77,6 +90,10 @@ class HomeScreen(Screen):
 
     def _update_hint(self) -> None:
         hint = self.query_one("#timeout-hint", Static)
+        if not self._personas:
+            hint.add_class("error")
+            hint.update(NO_PERSONAS)
+            return
         try:
             persona = self.app.deps.load_persona(self._slug())
         except (PersonaNotFoundError, PersonaInvalidError) as err:
@@ -88,6 +105,9 @@ class HomeScreen(Screen):
         hint.update("No time limit" if limit is None else f"Auto-stop after {limit / 60:g} min")
 
     def _start(self) -> None:
+        if not self._personas:  # Record is disabled: nothing to record with
+            self.app.notify(NO_PERSONAS, severity="error")
+            return
         name = self.query_one("#name", Input).value.strip()
         self.app.start_recording(name or None, self._slug())
 

@@ -40,7 +40,10 @@ RECENT = [
     ("Design-review-20261113-1502.wav", 1),
     ("Meeting-20261112-0930.wav", 2),
     ("1on1-Priya-20261110-1400.wav", 4),
+    ("Sprint-planning-20261109-1000.wav", 5),
+    ("Incident-review-20261106-1630.wav", 8),
 ]
+SMALL_SIZE = (80, 24)  # a standard terminal: Home must fit without scrolling
 NOTE = """---
 title: Weekly sync
 date: 2026-11-14 15:02
@@ -148,10 +151,11 @@ def _seed_recordings(recordings: Path) -> None:
 
 
 def _voice(tick: int, speaking: bool) -> float:
-    """A speech-like level for one tick: a syllable swell while speaking, else near silence."""
+    """A speech-like RMS level for one tick: syllables between about -36 and -8 dBFS while
+    speaking, else the input's noise floor (below the meter's -60 dBFS)."""
     if not speaking:
-        return 0.02
-    return 0.3 + 0.6 * abs(math.sin(tick * 0.9)) * (0.6 + 0.4 * math.sin(tick * 0.23))
+        return 0.0008
+    return 0.015 + 0.38 * abs(math.sin(tick * 0.9)) * (0.6 + 0.4 * math.sin(tick * 0.23))
 
 
 def _fill_meters(screen: RecordingScreen, recorder: DemoRecorder, clock: DemoClock) -> None:
@@ -236,7 +240,8 @@ async def _capture_journey(out: Path) -> None:
 async def _capture_warning(out: Path) -> None:
     """The Recording screen inside the last minute before auto-stop."""
     with _demo_app() as (app, clock, recorder, _gate):
-        async with app.run_test(size=SIZE) as pilot:
+        # run_test() disables toasts unless asked; this screenshot is about the warning one.
+        async with app.run_test(size=SIZE, notifications=True) as pilot:
             screen = await _start_recording(pilot, app)
             _fill_meters(screen, recorder, clock)
             clock.now = clock.started + 75 * 60 - 45
@@ -245,12 +250,21 @@ async def _capture_warning(out: Path) -> None:
             app.save_screenshot("tui-recording-warning.svg", path=str(out))
 
 
+async def _capture_small_home(out: Path) -> None:
+    """Home on a standard 80x24 terminal with five recent recordings."""
+    with _demo_app() as (app, _clock, _recorder, _gate):
+        async with app.run_test(size=SMALL_SIZE) as pilot:
+            await pilot.pause()
+            app.save_screenshot("tui-home-80x24.svg", path=str(out))
+
+
 def main() -> None:
     """Write the screenshots into the output directory."""
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "docs/images").resolve()
     out.mkdir(parents=True, exist_ok=True)
     asyncio.run(_capture_journey(out))
     asyncio.run(_capture_warning(out))
+    asyncio.run(_capture_small_home(out))
     for path in sorted(out.glob("tui-*.svg")):
         print(path)
 

@@ -23,7 +23,8 @@ class FakeRecorder:  # pylint: disable=too-many-instance-attributes
 
     ``start_gate`` / ``stop_gate`` (threading.Event) make start() / stop() block until set,
     to simulate slow hardware. ``stop_result=False`` simulates "no audio captured";
-    ``stop_error`` / ``discard_error`` are raised from stop() / discard().
+    ``stop_error`` / ``discard_error`` are raised from stop() / discard(). ``raw_paths`` are
+    the raw files a failed save keeps; ``loopback_error`` is why system audio is unavailable.
     """
 
     def __init__(self, tmp_path: Path, start_error: Exception | None = None):
@@ -38,6 +39,8 @@ class FakeRecorder:  # pylint: disable=too-many-instance-attributes
         self.mic_level = 0.3
         self.system_level = 0.6
         self.has_loopback = True
+        self.raw_paths: tuple[Path, ...] = ()
+        self.loopback_error: str | None = None
 
     def start(self, name=None) -> str:  # pylint: disable=unused-argument
         """Record the call and return the WAV path, or raise start_error."""

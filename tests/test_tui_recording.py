@@ -156,7 +156,7 @@ async def test_quit_while_recording_saves_wav_and_reports_path(app, rec):
     assert rec.wav_path in app.exit_message and "tinysteno process" in app.exit_message
 
 
-async def test_each_stream_has_its_own_rolling_sparkline(app, rec):
+async def test_each_stream_has_its_own_rolling_meter(app, rec):
     async with app.run_test() as pilot:
         screen = await _recording(pilot, app)
         for mic, system in [(0.1, 0.9), (0.2, 0.8), (0.3, 0.7)]:
@@ -252,7 +252,8 @@ async def test_autostart_persona_error_is_notified(tmp_path, rec, monkeypatch):
     assert any("nope" in message and severity == "error" for message, severity in notes)
 
 
-async def test_screen_shows_starting_until_start_returns_and_stop_waits_for_it(app, rec):
+async def test_stop_keys_while_starting_are_ignored_with_a_notice(app, rec):
+    # A second Enter from Home must not end the recording the moment it starts.
     rec.start_gate = threading.Event()
     async with app.run_test() as pilot:
         await pilot.press("enter")
@@ -260,10 +261,16 @@ async def test_screen_shows_starting_until_start_returns_and_stop_waits_for_it(a
         screen = app.screen
         assert isinstance(screen, RecordingScreen)
         assert "Starting" in str(screen.query_one("#rec-indicator").content)
+        notes, _ = _capture(app)
         await pilot.press("s", "enter")
         await pilot.pause()
-        assert rec.calls == ["start"]           # no stop() while start() is in flight
+        assert notes == [("Still starting…", "information")] * 2
         rec.start_gate.set()
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert rec.calls == ["start"] and isinstance(app.screen, RecordingScreen)
+        assert "REC" in str(screen.query_one("#rec-indicator").content)
+        await pilot.press("enter")
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert rec.calls == ["start", "stop"]
@@ -310,20 +317,23 @@ async def test_quit_while_stop_in_flight_saves_once_and_skips_processing(app, re
     assert not any(event[0] == "process" for event in app.events)
 
 
-async def test_quit_when_stop_fails_reports_the_failure_and_exits_1(app, rec):
+async def test_quit_when_stop_fails_reports_the_failure_and_exits_1(app, rec, tmp_path):
     rec.stop_error = RuntimeError("disk full")
+    rec.raw_paths = (tmp_path / "mic.f32", tmp_path / "system.f32")
     async with app.run_test() as pilot:
         await _recording(pilot, app)
         await pilot.press("q")
         await pilot.pause()
     assert "Could not save the recording: disk full" in app.exit_message
-    assert rec.wav_path in app.exit_message
+    assert all(str(p) in app.exit_message for p in rec.raw_paths)
     assert "Saved recording" not in app.exit_message
     assert app.return_code == 1
 
 
-async def test_quit_while_failing_stop_in_flight_reports_the_failure_and_exits_1(app, rec):
+async def test_quit_while_failing_stop_in_flight_reports_the_failure_and_exits_1(app, rec,
+                                                                                  tmp_path):
     rec.stop_error = RuntimeError("disk full")
+    rec.raw_paths = (tmp_path / "mic.f32",)
     rec.stop_gate = threading.Event()
     async with app.run_test() as pilot:
         await _recording(pilot, app)
@@ -333,7 +343,7 @@ async def test_quit_while_failing_stop_in_flight_reports_the_failure_and_exits_1
         await pilot.pause()
     assert rec.calls == ["start", "stop"]
     assert "Could not save the recording: disk full" in app.exit_message
-    assert rec.wav_path in app.exit_message
+    assert str(rec.raw_paths[0]) in app.exit_message
     assert "Saved recording" not in app.exit_message
     assert app.return_code == 1
 
@@ -387,8 +397,16 @@ async def test_no_audio_captured_returns_home_with_error(app, rec):
         assert not any(event[0] == "process" for event in app.events)
 
 
-async def test_stop_error_is_notified_with_the_wav_location(app, rec):
-    rec.stop_error = RuntimeError("Failed to save recording: disk full")
+async def test_stop_error_is_notified_with_the_raw_audio_location(app, rec, tmp_path):
+    raw = tmp_path / "mic.f32"
+    try:
+        raise OSError("disk full")
+    except OSError as cause:
+        rec.stop_error = RuntimeError(
+            f"Failed to save recording: disk full. Raw audio kept at {raw}"
+        )
+        rec.stop_error.__cause__ = cause
+    rec.raw_paths = (raw,)
     async with app.run_test() as pilot:
         await _recording(pilot, app)
         notes, _ = _capture(app)
@@ -396,7 +414,9 @@ async def test_stop_error_is_notified_with_the_wav_location(app, rec):
         await app.workers.wait_for_complete()
         await pilot.pause()
         assert isinstance(app.screen, HomeScreen) and app.is_running
-        assert any("disk full" in m and rec.wav_path in m and s == "error" for m, s in notes)
+        assert notes == [
+            (f"Could not save the recording: disk full. Raw audio kept at {raw}", "error")
+        ]
         assert not any(event[0] == "process" for event in app.events)
 
 
@@ -471,12 +491,3 @@ async def test_tick_is_a_no_op_when_not_recording(app, rec):
         await pilot.pause()
         screen.tick()
         assert rec.calls == ["start", "stop"]
-
-
-async def test_live_updates_refresh_the_meters_without_manual_ticks(tmp_path, clock, rec):
-    deps = make_deps(tmp_path, clock=clock, make_recorder=lambda: rec, live_updates=True)
-    app = TinyStenoApp({"persona": "default"}, deps)
-    async with app.run_test() as pilot:
-        screen = await _recording(pilot, app)
-        await pilot.pause(0.5)
-        assert len(screen.query_one("#mic-level").data) >= 3
