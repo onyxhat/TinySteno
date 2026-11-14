@@ -1,5 +1,6 @@
 """Recording session timeout: a pure countdown that never sleeps or spawns threads."""
 
+import math
 import time
 from collections.abc import Callable
 
@@ -76,7 +77,9 @@ def resolve_timeout_seconds(config: dict, persona_minutes: float | None = None,
 
 
 def format_clock(seconds: float) -> str:
-    """Format a duration as MM:SS, or H:MM:SS from one hour."""
+    """Format a duration as MM:SS, or H:MM:SS from one hour ("--:--" if not finite)."""
+    if not math.isfinite(seconds):
+        return "--:--"
     total = max(0, int(seconds))
     hours, rest = divmod(total, 3600)
     minutes, secs = divmod(rest, 60)

@@ -1,5 +1,6 @@
 """Tests for tinysteno.main module."""
 import argparse
+import logging
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -226,7 +227,7 @@ def test_title_and_tags_generated_in_parallel(tmp_path):
     assert overlap < 0.02, f"title and tags should start concurrently, gap={overlap:.3f}s"
 
 
-@pytest.mark.parametrize("bad", ["two hours", -5, True, None])
+@pytest.mark.parametrize("bad", ["two hours", -5, True, None, float("inf"), float("nan")])
 def test_validate_config_rejects_bad_session_timeout(bad):
     with pytest.raises(ValueError, match="session_timeout_minutes"):
         _validate_config({"session_timeout_minutes": bad})
@@ -285,10 +286,57 @@ def test_timeout_flag_overrides_persona_and_global(tmp_path):
     assert _timer_limit(tmp_path, persona_minutes=30, cli_minutes=5.0) == 300
 
 
-def test_record_rejects_negative_timeout():
-    with patch.object(sys, "argv", ["tinysteno", "record", "--timeout", "-1"]):
+@pytest.mark.parametrize("command", ["record", "tui"])
+@pytest.mark.parametrize("minutes", ["-1", "inf", "nan", "-inf", "Infinity"])
+def test_timeout_flag_rejects_negative_and_non_finite_minutes(command, minutes, capsys):
+    # The commands are stubbed: if parsing ever accepted the value, nothing real may start.
+    with patch.object(sys, "argv", ["tinysteno", command, f"--timeout={minutes}"]), \
+         patch("tinysteno.main.load_config", return_value={}), \
+         patch("tinysteno.main.cmd_record") as record, \
+         patch("tinysteno.main.cmd_tui") as tui:
         with pytest.raises(SystemExit):
             main()
+    assert not record.called and not tui.called
+    assert "minutes must be >= 0" in capsys.readouterr().err
+
+
+def _setup_timeout(tmp_path, monkeypatch, typed: str, existing: dict | None = None):
+    """Run the setup wizard answering ``typed`` to the timeout prompt; return the saved value."""
+    if existing is not None:
+        (tmp_path / ".tinysteno").mkdir()
+        (tmp_path / ".tinysteno" / "config.yaml").write_text(yaml.dump(existing))
+
+    def answer(_console, label, default, _hint=""):
+        return typed if label == "Session timeout (minutes)" else default
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    with patch.object(Path, "home", return_value=tmp_path), \
+         patch("tinysteno.main._prompt", side_effect=answer), \
+         patch("tinysteno.main.seed_builtin_personas",
+               return_value={"copied": [], "skipped": []}), \
+         patch("tinysteno.main.list_personas", return_value=["default"]), \
+         patch("tinysteno.main._write_config") as write:
+        cmd_setup(argparse.Namespace(reset_personas=False))
+    return write.call_args.args[1]["session_timeout_minutes"]
+
+
+@pytest.mark.parametrize("typed, saved", [
+    ("45", 45), ("22.5", 22.5), ("0", 0),
+    ("two hours", 75), ("-5", 75), ("inf", 75), ("nan", 75),
+])
+def test_setup_timeout_prompt_accepts_numbers_and_falls_back_on_garbage(
+    tmp_path, monkeypatch, typed, saved
+):
+    value = _setup_timeout(tmp_path, monkeypatch, typed)
+    assert value == saved and type(value) is type(saved)
+
+
+@pytest.mark.parametrize("existing", [float("nan"), float("inf"), "soon", 30])
+def test_setup_timeout_prompt_keeps_a_valid_existing_value_else_the_default(
+    tmp_path, monkeypatch, existing
+):
+    value = _setup_timeout(tmp_path, monkeypatch, "", {"session_timeout_minutes": existing})
+    assert value == (30 if existing == 30 else 75)
 
 
 def _run_process_audio(tmp_path, *, orchestrator_setup=None, exporter_setup=None):
@@ -370,17 +418,64 @@ def test_tui_subcommand_passes_now_flag(tmp_path):
 
 
 def test_cmd_tui_failed_save_goes_to_stderr_and_exits_1(tmp_path, capsys):
-    message = "Could not save the recording: disk full. Any audio that was written is at x"
-    with patch("tinysteno.tui.run_tui", return_value=(message, 1)):
+    message = "Could not save the recording: disk full. Raw audio kept at x.f32"
+    with patch("tinysteno.tui.run_tui", return_value=(message, 1)), \
+         patch.object(Path, "home", return_value=tmp_path):
         with pytest.raises(SystemExit) as exc:
             run_cmd_tui(argparse.Namespace(), {"obsidian_vault": str(tmp_path)})
     assert exc.value.code == 1
     out, err = capsys.readouterr()
     assert message in err and message not in out
+    assert err.endswith(f"Log: {tmp_path / '.tinysteno' / 'tui.log'}\n")
 
 
 def test_cmd_tui_saved_recording_goes_to_stdout(tmp_path, capsys):
-    with patch("tinysteno.tui.run_tui", return_value=("Saved recording: x", 0)):
+    with patch("tinysteno.tui.run_tui", return_value=("Saved recording: x", 0)), \
+         patch.object(Path, "home", return_value=tmp_path):
         run_cmd_tui(argparse.Namespace(), {"obsidian_vault": str(tmp_path)})
     out, err = capsys.readouterr()
     assert out == "Saved recording: x\n" and not err
+
+
+def _terminal_stream_handlers() -> list:
+    return [
+        h for h in logging.getLogger().handlers
+        if isinstance(h, logging.StreamHandler)
+        and getattr(h, "stream", None) in (sys.stderr, sys.stdout, sys.__stderr__, sys.__stdout__)
+    ]
+
+
+def test_cmd_tui_logs_to_a_file_not_the_terminal(tmp_path, capsys):
+    root = logging.getLogger()
+    root.addHandler(logging.StreamHandler(sys.stderr))  # as setup_logging() leaves it
+    before = root.handlers[:]
+    seen = {}
+
+    def fake_run_tui(*_args, **_kwargs):
+        seen["terminal_handlers"] = _terminal_stream_handlers()
+        seen["level"] = root.level
+        logging.getLogger("tinysteno.orchestrator").warning("LLM endpoint unreachable")
+        return None, 0
+
+    try:
+        with patch("tinysteno.tui.run_tui", side_effect=fake_run_tui), \
+             patch.object(Path, "home", return_value=tmp_path):
+            run_cmd_tui(argparse.Namespace(verbose=True), {"obsidian_vault": str(tmp_path)})
+        log_path = tmp_path / ".tinysteno" / "tui.log"
+        assert seen["terminal_handlers"] == [] and seen["level"] == logging.DEBUG
+        assert "WARNING: LLM endpoint unreachable" in log_path.read_text(encoding="utf-8")
+        out, err = capsys.readouterr()
+        assert out == f"Log: {log_path}\n" and not err
+        assert root.handlers == before          # restored for anything that runs after
+    finally:
+        for handler in root.handlers[:]:
+            if handler not in before:
+                root.removeHandler(handler)
+        root.removeHandler(before[-1])
+
+
+def test_cmd_tui_without_warnings_or_errors_does_not_mention_the_log(tmp_path, capsys):
+    with patch("tinysteno.tui.run_tui", return_value=(None, 0)), \
+         patch.object(Path, "home", return_value=tmp_path):
+        run_cmd_tui(argparse.Namespace(), {"obsidian_vault": str(tmp_path)})
+    assert capsys.readouterr() == ("", "")

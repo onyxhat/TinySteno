@@ -298,7 +298,7 @@ def test_persona_timeout_is_loaded_from_yaml(tmp_path, value, expected):
         assert load_persona("p").session_timeout_minutes == expected
 
 
-@pytest.mark.parametrize("value", ['"two hours"', "-5", "true", "[30]"])
+@pytest.mark.parametrize("value", ['"two hours"', "-5", "true", "[30]", ".inf", ".nan"])
 def test_persona_with_bad_timeout_is_invalid(tmp_path, value):
     _write_valid_persona_dir(
         tmp_path / "personas" / "p", "p", extra_yaml=f"session_timeout_minutes: {value}\n"

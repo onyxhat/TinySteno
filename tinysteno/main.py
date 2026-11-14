@@ -19,9 +19,8 @@ from tinysteno.obsidian import ObsidianExporter
 from tinysteno.session import (
     DEFAULT_SESSION_TIMEOUT_MINUTES, SessionTimer, resolve_timeout_seconds,
 )
-from tinysteno.pipeline import (  # pylint: disable=unused-import
-    PipelineError, Stage, run_pipeline, _format_duration, _extract_summary_text,
-)
+from tinysteno.pipeline import PipelineError, Stage, run_pipeline
+from tinysteno.log_file import log_to_file
 from tinysteno.personas import (
     load_persona, list_personas, seed_builtin_personas,
     PersonaNotFoundError, PersonaInvalidError, Persona,
@@ -101,20 +100,27 @@ def _validate_config(config: dict) -> None:
     if "channels" in config and config["channels"] not in (1, 2):
         raise ValueError("Config field 'channels' must be 1 or 2")
     if "session_timeout_minutes" in config:
-        value = config["session_timeout_minutes"]
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        if not _is_timeout_minutes(config["session_timeout_minutes"]):
             raise ValueError(
                 "Config field 'session_timeout_minutes' must be a number >= 0 (0 disables)"
             )
 
 
+def _is_timeout_minutes(value) -> bool:
+    """True for a finite int/float >= 0 that is not a bool."""
+    return (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        and math.isfinite(value) and value >= 0
+    )
+
+
 def _non_negative_minutes(value: str) -> float:
-    """argparse type: minutes as a number >= 0."""
+    """argparse type: minutes as a finite number >= 0."""
     try:
         minutes = float(value)
     except ValueError:
         raise argparse.ArgumentTypeError(f"invalid minutes: {value!r}") from None
-    if math.isnan(minutes) or minutes < 0:
+    if not math.isfinite(minutes) or minutes < 0:
         raise argparse.ArgumentTypeError(f"minutes must be >= 0, got {value!r}")
     return minutes
 
@@ -310,13 +316,17 @@ def cmd_tui(args, config):
         load_persona=load_persona,
         recordings_dir=_recordings_dir(config),
     )
-    message, code = run_tui(
-        config, deps,
-        autostart=getattr(args, "now", False),
-        name=getattr(args, "name", None),
-        persona=getattr(args, "persona", None),
-        timeout_override=getattr(args, "timeout", None),
-    )
+    log_path = Path.home() / ".tinysteno" / "tui.log"
+    with log_to_file(log_path, getattr(args, "verbose", False)) as log:
+        message, code = run_tui(
+            config, deps,
+            autostart=getattr(args, "now", False),
+            name=getattr(args, "name", None),
+            persona=getattr(args, "persona", None),
+            timeout_override=getattr(args, "timeout", None),
+        )
+    if log is not None and (code or log.warned):
+        message = f"{message}\nLog: {log_path}" if message else f"Log: {log_path}"
     if message:
         print(message, file=sys.stderr if code else sys.stdout)
     if code:
@@ -636,6 +646,8 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         sample_rate = 44100
 
     timeout_default = get("session_timeout_minutes", DEFAULT_SESSION_TIMEOUT_MINUTES)
+    if not _is_timeout_minutes(timeout_default):
+        timeout_default = DEFAULT_SESSION_TIMEOUT_MINUTES
     timeout_input = _prompt(
         console,
         "Session timeout (minutes)",

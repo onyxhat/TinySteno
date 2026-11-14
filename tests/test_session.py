@@ -96,3 +96,8 @@ def test_resolve_timeout_precedence(config, persona, cli, expected):
 ])
 def test_format_clock(seconds, text):
     assert format_clock(seconds) == text
+
+
+@pytest.mark.parametrize("seconds", [float("inf"), float("-inf"), float("nan")])
+def test_format_clock_never_raises_on_non_finite_input(seconds):
+    assert format_clock(seconds) == "--:--"

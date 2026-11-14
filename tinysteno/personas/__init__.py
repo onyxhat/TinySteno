@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import keyword
 import logging
+import math
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,8 +46,11 @@ class PersonaInvalidError(Exception):
 
 
 def _is_minutes(value) -> bool:
-    """True for a non-negative int/float that is not a bool."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+    """True for a finite, non-negative int/float that is not a bool."""
+    return (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        and math.isfinite(value) and value >= 0
+    )
 
 
 def _validate_dir(path: Path, slug: str) -> dict:
