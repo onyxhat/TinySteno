@@ -1,4 +1,5 @@
 """Tests for AudioRecorder streaming behavior."""
+import tempfile
 import wave
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -13,8 +14,14 @@ _REAL_START_MACOS_LOOPBACK = AudioRecorder._start_macos_loopback  # pylint: disa
 
 
 @pytest.fixture(autouse=True)
-def _no_real_system_capture():
-    """Never start real ScreenCaptureKit capture (macOS) from these tests."""
+def _no_real_system_capture(tmp_path, monkeypatch):
+    """Never start real ScreenCaptureKit capture (macOS) from these tests.
+
+    Raw audio temp files go to a per-test directory, so a failing test leaves none behind.
+    """
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(raw_dir))
     with patch.object(AudioRecorder, "_start_macos_loopback", return_value=False):
         yield
 

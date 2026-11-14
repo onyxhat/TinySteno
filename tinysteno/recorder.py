@@ -6,6 +6,7 @@ import tempfile
 import threading
 import wave
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +25,22 @@ def _rms_level(frame) -> float:
         return 0.0
     rms = float(np.sqrt(np.mean(np.square(samples))))
     return min(rms, 1.0) if np.isfinite(rms) else 0.0
+
+
+class RecorderState(Enum):
+    """Where a recorder is in its life. Every public method checks and moves this, nothing else.
+
+    idle ──start()──▶ recording ──stop()──▶ idle          (WAV written, or nothing captured)
+                          │    ──discard()─▶ idle          (audio thrown away)
+                          └────stop() fails─▶ save_failed  (raw audio kept, see ``raw_paths``)
+    save_failed ──discard()──▶ idle                        (the only way the kept audio goes)
+
+    A start() that fails part-way undoes itself and leaves the recorder idle.
+    """
+
+    IDLE = "idle"
+    RECORDING = "recording"
+    SAVE_FAILED = "save_failed"
 
 
 class AudioRecorder:
@@ -59,7 +76,7 @@ class AudioRecorder:
         self._loopback_fh = None
         self._mic_channels_written = 1
         self._loopback_channels_written = 1
-        self._is_recording = False
+        self._state = RecorderState.IDLE
         self._audio_interface = None
         self._loopback_interface = None
         self._macos_loopback = None
@@ -194,14 +211,44 @@ class AudioRecorder:
     # ── start / stop ──────────────────────────────────────────────────────────
 
     def start(self, name: Optional[str] = None) -> str:
-        """Start recording and return the output WAV path."""
+        """Start recording and return the output WAV path.
+
+        If anything fails, whatever was opened is closed again and the recorder is left idle.
+        """
+        if self._state is RecorderState.RECORDING:
+            raise RuntimeError("Recorder is already recording")
+        if self._state is RecorderState.SAVE_FAILED:
+            raise RuntimeError(
+                "The previous recording failed to save; discard() it before starting another"
+            )
         self.output_path = self._generate_output_path(name)
         self._buffer = []
-        self._is_recording = True
         self._has_loopback = False
         self.raw_paths = ()
         self.loopback_error = None
+        try:
+            self._open_streams()
+        except Exception as e:
+            self._abandon_start()
+            if isinstance(e, RuntimeError):
+                raise
+            raise RuntimeError(f"Failed to start audio recording: {e}") from e
+        self._state = RecorderState.RECORDING
+        return str(self.output_path)
 
+    def _abandon_start(self) -> None:
+        """Undo a start() that failed part-way: no stream left capturing, no raw file left."""
+        try:
+            self._stop_streams()
+        except Exception:
+            pass  # best effort: the start error is the one worth reporting
+        finally:
+            self._audio_interface = self._loopback_interface = self._macos_loopback = None
+            self._cleanup_temp_files()
+            self._reset_levels()
+
+    def _open_streams(self) -> None:
+        """Open the raw files, the microphone stream and, where available, system audio."""
         # ── microphone ────────────────────────────────────────────────────────
         result = self._get_default_input_device()
         if result is None:
@@ -235,7 +282,6 @@ class AudioRecorder:
             )
             self._audio_interface.start()
         except sd.PortAudioError as e:
-            self._cleanup_temp_files()
             raise RuntimeError(f"Failed to start audio recording: {e}") from e
 
         # ── system audio loopback ─────────────────────────────────────────────
@@ -257,8 +303,6 @@ class AudioRecorder:
                     self._has_loopback = True
                 except sd.PortAudioError:
                     self._loopback_interface = None
-
-        return str(self.output_path)
 
     def _start_macos_loopback(self) -> bool:
         """Start macOS system audio capture via ScreenCaptureKit."""
@@ -304,19 +348,22 @@ class AudioRecorder:
         The raw audio files are deleted only once the WAV has been written. If saving fails
         they are kept, listed in ``raw_paths``, and the RuntimeError names them.
         """
-        if not self._is_recording:
+        if self._state is RecorderState.SAVE_FAILED:
+            raise RuntimeError(f"Recording already failed to save. {self._kept_audio()}")
+        if self._state is not RecorderState.RECORDING:
             return False
-        self._is_recording = False
         try:
             loopback_sr = self._stop_streams()
             self._close_raw_files()
             raw = np.frombuffer(self._mic_raw_path.read_bytes(), dtype=np.float32)
-            if raw.size == 0:
-                self._cleanup_temp_files()
-                return False
             loopback_raw_bytes = b""
             if self._loopback_raw_path and self._loopback_raw_path.exists():
                 loopback_raw_bytes = self._loopback_raw_path.read_bytes()
+            # Nothing at all was captured. (System audio alone is still a recording.)
+            if raw.size == 0 and not (self._has_loopback and loopback_raw_bytes):
+                self._cleanup_temp_files()
+                self._state = RecorderState.IDLE
+                return False
 
             ch = self._mic_channels_written
             mic_data = raw.reshape(-1, ch) if ch > 1 else raw.reshape(-1, 1)
@@ -342,25 +389,31 @@ class AudioRecorder:
                 p for p in (self._mic_raw_path, self._loopback_raw_path)
                 if p is not None and p.exists()
             )
-            kept = (
-                f"Raw audio kept at {' and '.join(str(p) for p in self.raw_paths)}"
-                if self.raw_paths else "No raw audio was kept"
-            )
-            raise RuntimeError(f"Failed to save recording: {e}. {kept}") from e
+            self._state = RecorderState.SAVE_FAILED
+            raise RuntimeError(f"Failed to save recording: {e}. {self._kept_audio()}") from e
         finally:
             self._reset_levels()
 
         self._cleanup_temp_files()
+        self._state = RecorderState.IDLE
         return True
 
+    def _kept_audio(self) -> str:
+        if self.raw_paths:
+            return f"Raw audio kept at {' and '.join(str(p) for p in self.raw_paths)}"
+        return "No raw audio was kept"
+
     def discard(self) -> None:
-        """Stop recording and throw the audio away: no WAV is written, temp files are deleted."""
-        if not self._is_recording:
+        """Throw the audio away: no WAV is written and the raw files are deleted.
+
+        This covers a recording in progress and one whose save failed (its kept raw audio).
+        """
+        if self._state is RecorderState.IDLE:
             return
         try:
             self._stop_streams()
         finally:
-            self._is_recording = False
+            self._state = RecorderState.IDLE
             self._cleanup_temp_files()
             self._reset_levels()
 
@@ -418,9 +471,12 @@ class AudioRecorder:
         mic_mono = mic[:, 0] if mic.ndim > 1 else mic
         lb_mono = loopback.mean(axis=1) if loopback.ndim > 1 else loopback
 
-        # Align lengths
-        n = min(len(mic_mono), len(lb_mono))
-        return np.column_stack([mic_mono[:n], lb_mono[:n]])
+        # Pad the shorter stream with silence. Cutting to the shorter one would throw away
+        # the rest of the meeting whenever one capture ends early (or never delivers).
+        n = max(len(mic_mono), len(lb_mono))
+        mic_mono = np.pad(mic_mono, (0, n - len(mic_mono)))
+        lb_mono = np.pad(lb_mono, (0, n - len(lb_mono)))
+        return np.column_stack([mic_mono, lb_mono])
 
     def _generate_output_path(self, name: Optional[str] = None) -> Path:
         timestamp = datetime.now()
