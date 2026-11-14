@@ -216,7 +216,7 @@ async def test_quit_during_pipeline_saves_message_and_exits_promptly(tmp_path):
             await pilot.pause()
         assert time.monotonic() - started < 2
         assert thread.is_alive()  # still running: exit did not wait for it
-        assert str(wav) in app.exit_message and "tinysteno process" in app.exit_message
+        assert app.exit_message == _saved_message(wav)
         assert app.return_code == 0
     finally:
         gate.set()

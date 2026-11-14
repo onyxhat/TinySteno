@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime
+from enum import Enum
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -20,14 +21,22 @@ PULSE_SECONDS = 0.7
 WARNING_TEXT = "Auto-stopping in 60s. Press K to keep recording."
 STILL_STARTING = "Still starting…"
 
-# Lifecycle: loading -> starting -> recording -> stopping|discarding -> done.
-# Every transition happens on the UI thread; recorder calls run in thread workers.
-_LOADING = "loading"
-_STARTING = "starting"
-_RECORDING = "recording"
-_STOPPING = "stopping"
-_DISCARDING = "discarding"
-_DONE = "done"
+
+class Phase(Enum):
+    """Where the session is. Every transition happens on the UI thread; the recorder calls
+    themselves run in thread workers and report back.
+
+    loading ─▶ starting ─▶ recording ─▶ stopping ───▶ done
+       │          │            └──────▶ discarding ─▶ done
+       └──────────┴─ persona or recorder would not start ─▶ done
+    """
+
+    LOADING = "loading"
+    STARTING = "starting"
+    RECORDING = "recording"
+    STOPPING = "stopping"
+    DISCARDING = "discarding"
+    DONE = "done"
 
 
 def _call_ui(app: App, callback, *args) -> None:
@@ -81,8 +90,7 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self.started_at: datetime | None = None
         self.save_error: str | None = None  # set when recorder.stop() raised
         self._guard: RecorderGuard | None = None
-        self._phase = _LOADING
-        self._stop_pending = False
+        self._phase = Phase.LOADING
         self._quitting = False
         self._saved = False
         self._warned = False
@@ -106,7 +114,7 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         yield Footer()
 
     def on_mount(self) -> None:
-        if self._phase != _LOADING:  # quit arrived before the screen mounted
+        if self._phase is not Phase.LOADING:  # quit arrived before the screen mounted
             return
         self.query_one("#rec-panel").border_title = self.meeting_name or "Recording"
         deps = self.app.deps
@@ -121,14 +129,14 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
             # Not chained via on_complete: the short idle gap lets the animator settle,
             # which Pilot-driven key presses wait for.
             self.set_interval(PULSE_SECONDS + 0.1, self._pulse)
-        self._phase = _STARTING
+        self._phase = Phase.STARTING
         self._start_recorder(self.app, deps.make_recorder)
 
     # ── refresh ──────────────────────────────────────────────────────────────
 
     def tick(self) -> None:
         """One UI refresh from the timer and the recorder; a no-op unless recording."""
-        if self._phase != _RECORDING:
+        if self._phase is not Phase.RECORDING:
             return
         self.query_one("#elapsed", Digits).update(format_clock(self.timer.elapsed))
         self._sample_levels()
@@ -182,14 +190,14 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         Ignored while the recorder is still starting, so an impatient second Enter cannot
         end the recording the moment it begins.
         """
-        if self._phase == _STARTING:
+        if self._phase is Phase.STARTING:
             self.app.notify(STILL_STARTING)
-        elif self._phase == _RECORDING:
+        elif self._phase is Phase.RECORDING:
             self._begin_stop()
 
     def action_keep(self) -> None:
         """Cancel the timeout: record until the user stops."""
-        if self._phase not in (_STARTING, _RECORDING):
+        if self._phase not in (Phase.STARTING, Phase.RECORDING):
             return
         self.timer.cancel()
         self.app.notify("Timeout cancelled. Recording until you stop.")
@@ -197,7 +205,7 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
 
     def action_extend(self) -> None:
         """Push the timeout back by 15 minutes."""
-        if self._phase not in (_STARTING, _RECORDING):
+        if self._phase not in (Phase.STARTING, Phase.RECORDING):
             return
         if self.timer.limit_seconds is None:
             self.app.notify("No time limit is set.")
@@ -208,13 +216,13 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
 
     def action_discard(self) -> None:
         """Ask, then throw the recording away."""
-        if self._phase == _RECORDING:
+        if self._phase is Phase.RECORDING:
             self.app.push_screen(ConfirmDiscard(), self._on_discard_answer)
 
     def _on_discard_answer(self, confirmed: bool | None) -> None:
-        if not confirmed or self._phase != _RECORDING:
+        if not confirmed or self._phase is not Phase.RECORDING:
             return
-        self._phase = _DISCARDING
+        self._phase = Phase.DISCARDING
         self._stop_ticker()
         self._set_status("Discarding…")
         self._discard_recorder(self.app, self._guard)
@@ -225,13 +233,12 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         When ``stop()`` raised, this returns None and ``save_error`` says what happened.
         """
         self._quitting = True
-        if self._phase == _LOADING:
-            self._phase = _DONE
+        if self._phase is Phase.LOADING:
+            self._phase = Phase.DONE
             self._settled.set()
-        elif self._phase == _STARTING:
-            self._stop_pending = True  # stop as soon as start() returns
-            self._set_status("Stopping…")
-        elif self._phase == _RECORDING:
+        elif self._phase is Phase.STARTING:
+            self._set_status("Stopping…")  # _on_started stops it as soon as start() returns
+        elif self._phase is Phase.RECORDING:
             self._begin_stop()
         await self._settled.wait()
         return self.wav_path if self._saved else None
@@ -258,9 +265,9 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self.wav_path = guard.wav_path
         self.timer.start()
         self.started_at = datetime.now()
-        self._phase = _RECORDING
+        self._phase = Phase.RECORDING
         self._set_status("● REC")
-        if self._stop_pending:
+        if self._quitting:  # quit arrived while the recorder was starting: save and go
             self._begin_stop()
             return
         reason = getattr(self.recorder, "loopback_error", None)
@@ -275,7 +282,7 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self._give_up(message)
 
     def _begin_stop(self) -> None:
-        self._phase = _STOPPING
+        self._phase = Phase.STOPPING
         self._stop_ticker()
         self._set_status("Saving…")
         self._stop_recorder(self.app, self._guard)
@@ -290,6 +297,8 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         _call_ui(app, self._on_stopped, saved)
 
     def _on_stopped(self, saved: bool) -> None:
+        if saved:
+            self.app.ledger.saved(self.wav_path)
         self._finish(saved=saved)
         if self._quitting:
             return
@@ -305,6 +314,7 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
     def _on_stop_failed(self, err: Exception) -> None:
         raw_paths = tuple(getattr(self.recorder, "raw_paths", ()) or ())
         self.save_error = save_failed_message(err, raw_paths)
+        self.app.ledger.save_failed(self.save_error)
         self._finish(saved=False)
         self.app.notify(self.save_error, severity="error", markup=False, timeout=30)
         self._leave()
@@ -339,7 +349,7 @@ class RecordingScreen(Screen):  # pylint: disable=too-many-instance-attributes
 
     def _finish(self, *, saved: bool) -> None:
         """The recorder can no longer change state, and the UI now owns telling the user."""
-        self._phase = _DONE
+        self._phase = Phase.DONE
         self._saved = saved
         self._stop_ticker()
         if self._guard is not None:

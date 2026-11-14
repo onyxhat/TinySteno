@@ -68,7 +68,8 @@ async def test_crash_in_tick_while_recording_still_saves_the_wav(tmp_path):
         f"Saved recording: {rec.wav_path}\nProcess it with: tinysteno process {rec.wav_path}"
     )
     assert code == 1                           # the app did crash
-    assert app.final_result() == (None, 1)     # the safety net runs once
+    assert app.final_result() == (message, 1)  # asking again gives the same answer
+    assert rec.calls == ["start", "stop"]      # and the safety net stopped it only once
 
 
 async def test_crash_with_a_failing_save_reports_the_raw_audio(tmp_path):

@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from enum import Enum
 from datetime import datetime
 
 from textual import work
@@ -59,6 +60,21 @@ class _UiReporter:
         _call_ui(self._app, self._screen.set_state, stage, "-skipped")
 
 
+class Run(Enum):
+    """How the pipeline run on this screen stands.
+
+    pending ─▶ running ─▶ done        (a note was exported; the Result screen takes over)
+                  ├─────▶ no_speech   (nothing to export; the WAV is kept)
+                  └─────▶ failed ──r──▶ running
+    """
+
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    NO_SPEECH = "no_speech"
+    FAILED = "failed"
+
+
 class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
     """Runs the pipeline on a WAV in a background thread and shows where it is."""
 
@@ -76,9 +92,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self.meeting_name = name
         self.persona_slug = persona_slug
         self.timestamp = timestamp
-        self.running = False
-        self.produced_note = False  # set once the pipeline has exported a note
-        self._failed = False
+        self.state = Run.PENDING
         self.pipeline_thread: threading.Thread | None = None
         self._frame = 0
         self._spinner = None
@@ -148,9 +162,13 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
 
     # ── pipeline run ─────────────────────────────────────────────────────────
 
+    @property
+    def running(self) -> bool:
+        """True while the pipeline thread is at work."""
+        return self.state is Run.RUNNING
+
     def _start(self) -> None:
-        self.running = True
-        self._failed = False
+        self.state = Run.RUNNING
         self.refresh_bindings()
         loop = asyncio.get_running_loop()
         outcome: asyncio.Future = loop.create_future()
@@ -195,12 +213,14 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
             self._on_done(result)
 
     def _on_done(self, result: PipelineResult) -> None:
-        self.running = False
-        self.refresh_bindings()
         if result.no_speech or not result.note_path:
+            self.state = Run.NO_SPEECH
+            self.refresh_bindings()
             self._on_no_speech()
             return
-        self.produced_note = True
+        self.state = Run.DONE
+        self.refresh_bindings()
+        self.app.ledger.processed(self.wav_path)
         self.app.show_result(result)
 
     def _on_no_speech(self) -> None:
@@ -211,8 +231,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self._show_error(f"No speech detected. Audio kept at {self.wav_path}")
 
     def _on_failed(self, err: Exception) -> None:
-        self.running = False
-        self._failed = True
+        self.state = Run.FAILED
         self.refresh_bindings()
         if isinstance(err, PipelineError):
             self.set_state(err.stage, "-failed")
@@ -235,19 +254,19 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         """Show (and allow) r only after a failure and n only once the pipeline has ended."""
         if action == "retry":
-            return self._failed and not self.running
+            return self.state is Run.FAILED
         if action == "home":
-            return not self.running
+            return self.state in (Run.FAILED, Run.NO_SPEECH)
         return super().check_action(action, parameters)
 
     def action_retry(self) -> None:
         """Run the pipeline again from the top, after a failure."""
-        if self.running or not self._failed:
+        if self.state is not Run.FAILED:
             return
         self._reset()
         self._start()
 
     def action_home(self) -> None:
         """Back to Home, once the pipeline is no longer running."""
-        if not self.running:
+        if self.state in (Run.FAILED, Run.NO_SPEECH):
             self.app.pop_screen()

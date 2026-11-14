@@ -11,9 +11,10 @@ from textual.app import App
 from tinysteno.personas import Persona
 from tinysteno.session import resolve_timeout_seconds
 from tinysteno.tui.deps import TuiDeps
-from tinysteno.tui.guard import RecorderGuard, saved_message
+from tinysteno.tui.guard import RecorderGuard
 from tinysteno.pipeline import PipelineResult
 from tinysteno.tui.home import HomeScreen
+from tinysteno.tui.ledger import SessionLedger
 from tinysteno.tui.processing import ProcessingScreen
 from tinysteno.tui.recording import RecordingScreen
 from tinysteno.tui.result import ResultScreen
@@ -45,6 +46,8 @@ class TinyStenoApp(App):
         self.timeout_override = timeout_override
         self.exit_message: str | None = None
         self.events: list[tuple] = []
+        # What became of each recording; every exit message is read from here.
+        self.ledger = SessionLedger()
         # The started recorder until the UI has reported what became of it; run_tui's safety
         # net stops it if the app ends any other way (crash, closed terminal).
         self.recorder_guard: RecorderGuard | None = None
@@ -107,15 +110,15 @@ class TinyStenoApp(App):
 
     def final_result(self) -> tuple[str | None, int]:
         """Exit message and code once the app has stopped, saving a recorder nothing stopped."""
-        message, code = self.exit_message, self.return_code or 0
         guard, self.recorder_guard = self.recorder_guard, None
         if guard is not None:
             note, failed = guard.final_message()
-            if note:
-                message = f"{message}\n{note}" if message else note
             if failed:
-                code = 1
-        return message, code
+                self.ledger.save_failed(note)
+            elif note:
+                self.ledger.saved(guard.wav_path)
+        message, failed = self.ledger.summary()
+        return message, 1 if failed else (self.return_code or 0)
 
     # ── navigation ───────────────────────────────────────────────────────────
 
@@ -129,6 +132,7 @@ class TinyStenoApp(App):
     ) -> None:
         """Hand a successfully stopped recording to processing."""
         self.events.append(("process", wav_path, persona_slug))
+        self.ledger.saved(wav_path)
         self._replace_topmost(
             RecordingScreen, ProcessingScreen(wav_path, name, persona_slug, started_at)
         )
@@ -142,6 +146,7 @@ class TinyStenoApp(App):
             self.notify(f"Recording not found: {Path(wav_path).name}", severity="error",
                         markup=False)
             return
+        self.ledger.saved(wav_path)
         self.push_screen(ProcessingScreen(wav_path, None, persona_slug, started_at))
 
     def show_result(self, result: PipelineResult) -> None:
@@ -160,24 +165,15 @@ class TinyStenoApp(App):
     async def action_quit(self) -> None:
         """Quit; a recording in progress is stopped and saved first, never lost.
 
-        If saving fails, the app exits with code 1 and the error as its exit message. Quitting
-        while processing, or after processing ended without a note, says where the WAV is.
+        The exit message comes from the ledger: every WAV that has no note yet (a running
+        pipeline cannot be cancelled, so that one included) and every save that failed, in
+        which case the app exits with code 1.
         """
         recording = next(
             (s for s in reversed(self.screen_stack) if isinstance(s, RecordingScreen)), None
         )
         if recording is not None:
-            wav = await recording.stop_for_quit()
-            if recording.save_error:
-                self.exit_message = recording.save_error
-                self.exit(return_code=1)
-                return
-            if wav:
-                self.exit_message = saved_message(wav)
-        processing = next(
-            (s for s in reversed(self.screen_stack) if isinstance(s, ProcessingScreen)), None
-        )
-        if processing is not None and not processing.produced_note:
-            # A running pipeline thread cannot be cancelled; the WAV stays on disk.
-            self.exit_message = saved_message(processing.wav_path)
-        self.exit()
+            await recording.stop_for_quit()
+        message, failed = self.ledger.summary()
+        self.exit_message = message
+        self.exit(return_code=1 if failed else 0)

@@ -128,5 +128,9 @@ class HomeScreen(Screen):
             self._update_hint()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        if event.option_list.id == "recent" and self._recent:
-            self.app.process_file(str(self._recent[event.option_index]), self._slug())
+        if event.option_list.id != "recent" or not self._recent:
+            return
+        if not self._personas:  # nothing to process it with
+            self.app.notify(NO_PERSONAS, severity="error")
+            return
+        self.app.process_file(str(self._recent[event.option_index]), self._slug())
