@@ -19,6 +19,9 @@ from tinysteno.obsidian import ObsidianExporter
 from tinysteno.session import (
     DEFAULT_SESSION_TIMEOUT_MINUTES, SessionTimer, resolve_timeout_seconds,
 )
+from tinysteno.pipeline import (  # pylint: disable=unused-import
+    PipelineError, Stage, run_pipeline, _format_duration, _extract_summary_text,
+)
 from tinysteno.personas import (
     load_persona, list_personas, seed_builtin_personas,
     PersonaNotFoundError, PersonaInvalidError, Persona,
@@ -116,32 +119,6 @@ def _non_negative_minutes(value: str) -> float:
     return minutes
 
 
-def _format_duration(duration_seconds: float) -> str:
-    """Format duration in seconds to HH:MM:SS, clamped at 99:59:59."""
-    total = int(duration_seconds)
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    if h > 99:
-        return "99:59:59"
-    return f"{h:02d}:{m:02d}:{s:02d}"
-
-
-def _extract_summary_text(persona: Persona, data: dict) -> Optional[str]:
-    """Extract the best text from summarized data for title/tag generation."""
-    first_string_value = next(
-        (data.get(field, "") for field, defn in persona.schema.items()
-         if defn["type"] == "string"),
-        None,
-    )
-    if not first_string_value:
-        all_items: list[str] = []
-        for field, defn in persona.schema.items():
-            if defn["type"] == "list":
-                all_items.extend(data.get(field, []))
-        return ". ".join(all_items) if all_items else None
-    return first_string_value
-
-
 def create_transcriber(config: dict) -> Transcriber:
     """Factory: build the appropriate transcriber backend from config."""
     backend = config.get("transcription_backend", "local")
@@ -173,7 +150,39 @@ def _apply_cli_overrides(config: dict, args: argparse.Namespace) -> None:
             config[config_key] = val
 
 
-def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals  # pipeline requires all params; locals are distinct processing steps
+class _RichReporter:
+    """Drives a transient Rich progress display from pipeline stage events."""
+
+    _LABELS = {
+        Stage.TRANSCRIBE: "Transcribing...",
+        Stage.SUMMARIZE: "Summarizing...",
+        Stage.METADATA: "Generating title and tags...",
+        Stage.EXPORT: "Exporting...",
+    }
+
+    def __init__(self, progress):
+        self._progress = progress
+        self._tasks: dict = {}
+
+    def stage_started(self, stage: Stage) -> None:
+        """Add a task; transcription gets a real bar, other stages a spinner."""
+        total = 1.0 if stage is Stage.TRANSCRIBE else None
+        self._tasks[stage] = self._progress.add_task(self._LABELS[stage], total=total)
+
+    def stage_progress(self, stage: Stage, fraction: float) -> None:
+        """Advance the stage's bar."""
+        if stage in self._tasks:
+            self._progress.update(self._tasks[stage], completed=fraction)
+
+    def stage_finished(self, stage: Stage) -> None:
+        """Remove the stage's task."""
+        self._progress.remove_task(self._tasks.pop(stage))
+
+    def stage_skipped(self, stage: Stage) -> None:
+        """Nothing to show for a skipped stage."""
+
+
+def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     wav_path: str,
     name: Optional[str],
     config: dict,
@@ -181,90 +190,37 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
     persona: Persona,
     timestamp: datetime,
 ) -> None:
-    """Shared pipeline: transcribe → summarize → export."""
-    from rich.progress import Progress, SpinnerColumn, TextColumn
-    from concurrent.futures import ThreadPoolExecutor
+    """Shared pipeline: transcribe → summarize → export, with Rich progress."""
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 
-    transcriber = create_transcriber(config)
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
         transient=True,
     ) as progress:
-        t = progress.add_task("Transcribing...", total=None)
-        result = transcriber.transcribe(wav_path, diarize=config.get("diarization", False))
-        progress.remove_task(t)
-
-        logger.debug(f"Detected language: {result['detected_language']}")
-        logger.debug(f"Duration: {result['duration_seconds']:.0f}s")
-
-        transcript = result["diarised_text"] or result["text"]
-        if not transcript.strip():
-            print("No speech detected, skipping export.")
-            return
-
-        data: dict = {}
-        orchestrator = None
-        if config.get("api_key"):
-            t = progress.add_task("Summarizing...", total=None)
-            orchestrator = Orchestrator(
-                api_key=config["api_key"],
-                base_url=config["base_url"],
-                model=config["model"],
+        try:
+            result = run_pipeline(
+                wav_path, name, config, persona, timestamp,
+                transcriber=create_transcriber(config),
+                orchestrator_cls=Orchestrator,
+                exporter_cls=ObsidianExporter,
+                reporter=_RichReporter(progress),
             )
-            data = orchestrator.summarize(transcript, persona)
-            progress.remove_task(t)
+        except PipelineError as err:
+            if err.stage is Stage.EXPORT:
+                print(f"Error rendering note: {err.__cause__}")
+                return
+            cause = err.__cause__
+            if isinstance(cause, BaseException):
+                raise cause from None  # pylint: disable=raising-non-exception
+            raise
 
-        # Get first string field for title/tag generation; fall back to joining
-        # all list values for list-only personas (e.g. 1on1).
-        first_string_value = _extract_summary_text(persona, data)
-
-        title_future = None
-        tags_future = None
-        wants_llm_metadata = config.get("auto_title") or config.get("auto_tags")
-        if wants_llm_metadata and orchestrator and first_string_value:
-            t = progress.add_task("Generating title and tags...", total=None)
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                if config.get("auto_title"):
-                    title_future = executor.submit(orchestrator.generate_title, first_string_value)
-                if config.get("auto_tags"):
-                    tags_future = executor.submit(orchestrator.generate_tags, first_string_value)
-            progress.remove_task(t)
-
-    title = name
-    if not title:
-        if title_future is not None:
-            generated = title_future.result()
-            title = generated if generated else Path(wav_path).stem
-        else:
-            title = Path(wav_path).stem
-
-    generated_tags: list = tags_future.result() if tags_future is not None else []
-
-    date_str = timestamp.strftime("%Y-%m-%d %H:%M")
-    duration_str = _format_duration(result.get("duration_seconds", 0.0))
-
-    metadata = {
-        "title": title,
-        "date": date_str,
-        "duration": duration_str,
-        "transcript": transcript,
-        "detected_language": result.get("detected_language", ""),
-        "generated_tags": generated_tags,
-    }
-
-    exporter = ObsidianExporter(
-        vault_path=config["obsidian_vault"],
-        output_folder=config.get("output_folder", "meetings"),
-    )
-
-    try:
-        meeting_path = exporter.export(data, persona, metadata)
-    except RuntimeError as e:
-        print(f"Error rendering note: {e}")
+    logger.debug(f"Duration: {result.duration_seconds:.0f}s")
+    if result.no_speech:
+        print("No speech detected, skipping export.")
         return
-
-    print(f"Meeting: {meeting_path}")
+    print(f"Meeting: {result.note_path}")
 
 
 def cmd_record(args, config):
