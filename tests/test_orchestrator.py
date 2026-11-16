@@ -653,7 +653,8 @@ def test_numbered_speakers_line_is_absent_by_default_and_without_labels():
 
 
 def test_labels_without_you_never_name_a_label_as_the_recorder():
-    ctx = PromptContext(has_speaker_labels=True, has_numbered_speakers=True)
+    ctx = PromptContext(has_speaker_labels=True, has_numbered_speakers=True,
+                        has_speaker_one=True)
     msg = _orch()._build_user_message("[Speaker 1] hi\n[Speaker 2] yo", PERSONA, ctx)
     assert "[You] is the person" not in msg and _NUMBERED not in msg
     assert "No speaker label marks the person who recorded this meeting" in msg

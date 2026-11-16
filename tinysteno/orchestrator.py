@@ -71,7 +71,7 @@ _CTX_NUMBERED = (
     "The separation is approximate: do not assign an action to a numbered speaker "
     "unless the transcript names them."
 )
-_CTX_NUMBERED_NO_YOU = (
+_CTX_NUMBERED_FROM_ONE = (
     "Speaker 1, Speaker 2 and so on are voices separated automatically, numbered from the "
     "most heard. The separation is approximate: do not assign an action to a numbered "
     "speaker unless the transcript names them."
@@ -94,6 +94,7 @@ class PromptContext:
     meeting_date: datetime | None = None
     has_speaker_labels: bool = False
     has_you_label: bool = False
+    has_speaker_one: bool = False
     has_numbered_speakers: bool = False
     has_timestamps: bool = False
     notes: str = ""
@@ -365,13 +366,14 @@ class Orchestrator:
     @staticmethod
     def _context_block(context: PromptContext, part: tuple[int, int] | None) -> str:
         """The `Context:` lines that apply, in a fixed order."""
-        you = context.has_you_label
         if not context.has_speaker_labels:
             lines = [_CTX_NO_LABELS]
         else:
-            lines = [_CTX_LABELS if you else _CTX_LABELS_NO_YOU]
+            lines = [_CTX_LABELS if context.has_you_label else _CTX_LABELS_NO_YOU]
             if context.has_numbered_speakers:
-                lines.append(_CTX_NUMBERED if you else _CTX_NUMBERED_NO_YOU)
+                # Numbered from Speaker 1 only when a split channel had no plain label to keep.
+                lines.append(
+                    _CTX_NUMBERED_FROM_ONE if context.has_speaker_one else _CTX_NUMBERED)
         if context.has_timestamps:
             lines.append(_CTX_TIMESTAMPS)
         if context.meeting_date is not None:

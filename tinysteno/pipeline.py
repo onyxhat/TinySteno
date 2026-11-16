@@ -254,13 +254,14 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
         has_timestamps = bool(timestamps)
         has_you = has_labels and any(seg.speaker == YOU for seg in segments)
         has_numbered = has_labels and any(seg.speaker.startswith("Speaker ") for seg in segments)
+        has_speaker_one = has_labels and any(seg.speaker == "Speaker 1" for seg in segments)
     else:
         transcript = result["diarised_text"] or result["text"]
         has_labels = bool(result["diarised_text"])
         has_you = has_labels and any(
             line.startswith(f"[{YOU}]") for line in result["diarised_text"].splitlines())
         has_timestamps = False
-        has_numbered = False
+        has_numbered = has_speaker_one = False
     if not transcript.strip():
         for stage in (Stage.SUMMARIZE, Stage.METADATA, Stage.EXPORT):
             reporter.stage_skipped(stage)
@@ -289,6 +290,7 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
                     has_speaker_labels=has_labels,
                     has_you_label=has_you,
                     has_numbered_speakers=has_numbered,
+                    has_speaker_one=has_speaker_one,
                     has_timestamps=has_timestamps,
                     notes=notes,
                 ),

@@ -591,3 +591,35 @@ def test_pipeline_error_carries_the_warnings_gathered_so_far(tmp_path):
     assert info.value.stage is Stage.EXPORT and info.value.warnings == (TRANSCRIBER_WARNING,)
     default = PipelineError(Stage.TRANSCRIBE).warnings
     assert isinstance(default, tuple) and not default
+
+
+_FROM_ONE = "Speaker 1, Speaker 2 and so on are voices separated automatically"
+_FURTHER = "Speaker 2, Speaker 3 and so on are further voices separated automatically."
+_RECORDER = "[You] is the person who recorded this meeting"
+_OTHER_SIDE = "[Others], where it appears, is the other side of the call"
+
+
+def _block_for(tmp_path, speakers):
+    from tinysteno.orchestrator import Orchestrator
+    segs = [Segment(float(i), i + 0.5, f"line {i}", spk) for i, spk in enumerate(speakers)]
+    ctx = _context_for(tmp_path, segs, {"diarization": True})
+    return ctx, Orchestrator._context_block(ctx, None)  # pylint: disable=protected-access
+
+
+def test_prompt_for_a_split_remote_side_without_you_says_further_voices(tmp_path):
+    ctx, block = _block_for(tmp_path, ["Others", "Speaker 2"])
+    assert not ctx.has_you_label and not ctx.has_speaker_one and ctx.has_numbered_speakers
+    assert "Speaker 1" not in block and _FURTHER in block
+    assert _RECORDER not in block and _OTHER_SIDE in block
+
+
+def test_prompt_for_a_split_room_numbers_from_speaker_one(tmp_path):
+    ctx, block = _block_for(tmp_path, ["Speaker 1", "Speaker 2"])
+    assert ctx.has_speaker_one and not ctx.has_you_label
+    assert _FROM_ONE in block and _FURTHER not in block and _RECORDER not in block
+
+
+def test_prompt_for_a_split_call_with_you_names_the_recorder(tmp_path):
+    ctx, block = _block_for(tmp_path, ["You", "Others", "Speaker 2"])
+    assert ctx.has_you_label and not ctx.has_speaker_one
+    assert _RECORDER in block and _FURTHER in block and "Speaker 1" not in block
