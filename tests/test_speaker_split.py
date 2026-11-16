@@ -71,3 +71,21 @@ def test_label_segments_can_number_the_dominant_voice_too():
     turns = [Turn(0, 2, 0), Turn(4, 7, 1)]
     out = label_segments(segs, turns, "You", first_label="Speaker 1")
     assert [s.speaker for s in out] == ["Speaker 1", "Speaker 2", "Others"]
+
+
+def test_dominance_at_exactly_the_threshold_collapses_and_just_below_splits():
+    assert apply_policy([Turn(0, 93, 0), Turn(93, 100, 1)]) is None  # 93% exactly
+    kept = apply_policy([Turn(0, 92.9, 0), Turn(92.9, 100, 1)])  # 92.9%
+    assert [t.speaker for t in kept] == [0, 1]
+
+
+def test_a_cap_equal_to_the_voice_count_folds_nothing():
+    turns = [Turn(0, 60, 0), Turn(60, 100, 1), Turn(100, 130, 2)]
+    assert apply_policy(turns, max_speakers=3) == apply_policy(turns) == turns
+
+
+def test_a_cap_one_below_the_voice_count_folds_the_least_heard_voice():
+    turns = [Turn(0, 60, 0), Turn(60, 100, 1), Turn(100, 130, 2)]
+    out = apply_policy(turns, max_speakers=2)
+    # Voice 2 joins its neighbour, voice 1, which then has the most speech and is renumbered 0.
+    assert [t.speaker for t in out] == [1, 0, 0]
