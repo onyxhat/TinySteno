@@ -1,4 +1,5 @@
 """Tests for the sherpa-onnx diarizer adapter. Nothing is downloaded and no real model runs."""
+import hashlib
 import io
 import sys
 import tarfile
@@ -20,14 +21,31 @@ download = sherpa_diarizer_module._download  # pylint: disable=protected-access
 MODEL_PATH = "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"
 
 
-def _write_archive(dest: Path, members: dict[str, bytes], extra=None) -> None:
-    with tarfile.open(dest, "w:bz2") as tar:
+def _archive_bytes(members: dict[str, bytes], extra=None) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:bz2") as tar:
         for name, data in members.items():
             info = tarfile.TarInfo(name)
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
         if extra is not None:
             extra(tar)
+    return buffer.getvalue()
+
+
+def _write_archive(dest: Path, members: dict[str, bytes], extra=None) -> None:
+    data = _archive_bytes(members, extra)
+    dest.write_bytes(data)
+    sherpa_diarizer_module.SEGMENTATION_SHA256 = hashlib.sha256(data).hexdigest()
+
+
+@pytest.fixture(autouse=True)
+def _pins(monkeypatch):
+    """Pin the digests of the fake files; `_write_archive` re-pins for custom archives."""
+    monkeypatch.setattr(sherpa_diarizer_module, "EMBEDDING_SHA256",
+                        hashlib.sha256(b"emb").hexdigest())
+    monkeypatch.setattr(sherpa_diarizer_module, "SEGMENTATION_SHA256",
+                        hashlib.sha256(_archive_bytes({MODEL_PATH: b"seg"})).hexdigest())
 
 
 def _fake_fetch(fetched, members=None):
@@ -235,6 +253,7 @@ def _fake_response(body: bytes, length: str):
     response.__enter__.return_value = response
     response.read.side_effect = [body, b""]
     response.headers = {"Content-Length": length}
+    response.url = "https://objects.githubusercontent.com/model"
     return response
 
 
@@ -246,3 +265,116 @@ def test_download_writes_the_body_and_rejects_a_truncated_one(tmp_path):
     with patch("urllib.request.urlopen", return_value=_fake_response(b"abcd", "9")):
         with pytest.raises(OSError, match="cut short"):
             download(SEGMENTATION_URL, dest)
+
+
+@pytest.mark.parametrize("break_it", ["process", "config", "numpy"])
+def test_any_library_exception_becomes_diarizer_unavailable(tmp_path, break_it):
+    fake = _fake_sherpa()
+    if break_it == "process":
+        fake.OfflineSpeakerDiarization.return_value.process.side_effect = ValueError("bad shape")
+    elif break_it == "config":
+        fake.FastClusteringConfig.side_effect = TypeError("bad arg")
+    else:
+        fake.OfflineSpeakerDiarization.return_value.process.return_value \
+            .sort_by_start_time.return_value = [SimpleNamespace(start="x", end=1, speaker=0)]
+    with pytest.raises(DiarizerUnavailable, match="could not run") as caught:
+        _run(fake, _silence(40), tmp_path)
+    assert caught.value.__cause__ is not None
+
+
+def test_a_non_import_error_while_importing_is_contained():
+    with patch("builtins.__import__", side_effect=OSError("dlopen failed")):
+        with pytest.raises(DiarizerUnavailable, match="could not run: dlopen failed"):
+            diarize(_silence(40))
+
+
+def test_exception_without_a_message_names_its_class(tmp_path):
+    fake = _fake_sherpa(process_error=KeyError())
+    with pytest.raises(DiarizerUnavailable, match="could not run: KeyError"):
+        _run(fake, _silence(40), tmp_path)
+
+
+def test_keyboard_interrupt_is_not_swallowed(tmp_path):
+    fake = _fake_sherpa(process_error=KeyboardInterrupt())
+    with pytest.raises(KeyboardInterrupt):
+        _run(fake, _silence(40), tmp_path)
+
+
+def test_unresolvable_home_is_reported():
+    with patch.object(Path, "home", side_effect=RuntimeError("no home")):
+        with pytest.raises(DiarizerUnavailable, match="Could not download.*no home"):
+            ensure_models(fetch=_fake_fetch([]))
+
+
+def test_unreadable_model_dir_is_reported(tmp_path):
+    with patch.object(Path, "is_file", side_effect=PermissionError("denied")):
+        with pytest.raises(DiarizerUnavailable, match="denied"):
+            ensure_models(tmp_path, fetch=_fake_fetch([]))
+
+
+def test_checksum_mismatch_on_the_embedding_leaves_nothing(tmp_path):
+    def wrong(url, dest):
+        dest.write_bytes(b"emb-tampered" if url == EMBEDDING_URL else b"")
+        if url == SEGMENTATION_URL:
+            _write_archive(dest, {MODEL_PATH: b"seg"})
+    with pytest.raises(DiarizerUnavailable, match="checksum mismatch for 3dspeaker"):
+        ensure_models(tmp_path, fetch=wrong)
+    assert [p.name for p in tmp_path.rglob("*") if p.is_file()] == ["model.onnx"]
+
+
+def test_checksum_mismatch_on_the_archive_leaves_nothing(tmp_path):
+    def wrong(_url, dest):
+        _write_archive(dest, {MODEL_PATH: b"seg"})
+        sherpa_diarizer_module.SEGMENTATION_SHA256 = "0" * 64
+    with pytest.raises(DiarizerUnavailable, match="checksum mismatch for sherpa-onnx-pyannote"):
+        ensure_models(tmp_path, fetch=wrong)
+    assert not [p for p in tmp_path.rglob("*") if p.is_file()]
+
+
+def test_symlinked_model_in_the_archive_is_refused(tmp_path):
+    def link(tar):
+        info = tarfile.TarInfo("seg/model.onnx")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "readme.txt"
+        tar.addfile(info)
+
+    def fetch(url, dest):
+        if url == SEGMENTATION_URL:
+            _write_archive(dest, {"seg/readme.txt": b"x"}, extra=link)
+        else:
+            dest.write_bytes(b"emb")
+    with pytest.raises(DiarizerUnavailable, match="unexpected archive layout"):
+        ensure_models(tmp_path, fetch=fetch)
+    assert not [p for p in tmp_path.rglob("*") if p.is_file() or p.is_symlink()]
+
+
+def test_oversized_archive_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(sherpa_diarizer_module, "MAX_DOWNLOAD_BYTES", 2)
+    with pytest.raises(DiarizerUnavailable, match="larger than expected"):
+        ensure_models(tmp_path, fetch=_fake_fetch([]))
+    assert not [p for p in tmp_path.rglob("*") if p.is_file()]
+
+
+def test_stale_scratch_directories_are_removed(tmp_path):
+    stale = tmp_path / ".download-old"
+    stale.mkdir()
+    (stale / "half.bin").write_bytes(b"x")
+    ensure_models(tmp_path, fetch=_fake_fetch([]))
+    assert not stale.exists()
+
+
+def test_download_stops_past_the_size_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(sherpa_diarizer_module, "MAX_DOWNLOAD_BYTES", 10)
+    response = _fake_response(b"x" * 20, "20")
+    response.read.side_effect = [b"x" * 8, b"x" * 8, b""]
+    with patch("urllib.request.urlopen", return_value=response):
+        with pytest.raises(OSError, match="larger than expected"):
+            download(SEGMENTATION_URL, tmp_path / "x")
+
+
+def test_download_refuses_a_redirect_off_https(tmp_path):
+    response = _fake_response(b"abcd", "4")
+    response.url = "http://example.com/model"
+    with patch("urllib.request.urlopen", return_value=response):
+        with pytest.raises(ValueError, match="redirect"):
+            download(SEGMENTATION_URL, tmp_path / "x")
