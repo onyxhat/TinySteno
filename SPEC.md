@@ -7,7 +7,7 @@ TinySteno is a minimal meeting recorder that captures audio (microphone + system
 - **Language:** Python 3.12+
 - **Package manager:** uv
 - **Lines of code:** ~1,100 core + ~1,200 tests
-- **Modules:** 10 core modules (including the `tui/` package), 7 built-in personas
+- **Modules:** 12 core modules (including the `tui/` package), 7 built-in personas
 - **CLI entry:** `tinysteno` command (installed via `pip install`)
 
 ---
@@ -48,9 +48,9 @@ Each stage is independent and communicates through well-defined data contracts (
 - `obsidian_vault`, `output_folder` -- Obsync output destination
 - `api_key`, `base_url`, `model` -- LLM provider (default: ollama/llama3.2:3b)
 - `whisper_model` -- model size for transcription (default: small)
-- `diarization` -- stereo-based speaker diarization toggle
+- `diarization` -- adds `[You]` / `[Others]` labels to a stereo recording's transcript; both channels are transcribed whether or not it is on
 - `auto_title`, `auto_tags` -- LLM-generated title and tags
-- `sample_rate`, `channels` -- audio capture settings
+- `sample_rate`, `channels` -- audio capture settings (`channels` is the microphone's input channels, 1 or 2; it does not control whether the WAV is stereo)
 - `persona` -- active persona slug
 - `session_timeout_minutes` -- maximum recording length in minutes, a finite number `>= 0` (default 75; `0` disables). `inf` and `nan` are rejected here, by `--timeout` and in `persona.yaml`
 - `tui_theme` -- optional starting theme for the TUI (a Textual theme name)
@@ -62,8 +62,9 @@ Each stage is independent and communicates through well-defined data contracts (
 Captures microphone audio via `sounddevice` (PortAudio) and, on macOS, system audio loopback via ScreenCaptureKit. Output is a 16-bit PCM WAV file.
 
 **Key behaviors:**
-- Stereo output when loopback available: left = mic, right = system audio (enables diarization)
-- Mono output when loopback unavailable
+- Stereo output only when system audio was actually captured: left = mic, right = system audio. Otherwise the microphone is written mono (a 2-channel microphone is averaged to one), because a 2-channel file is read by the transcribers as mic + system
+- Each channel is normalised to its own peak when the WAV is written (`_to_int16`); a channel whose peak is below `NORMALISE_FLOOR` (0.003) is converted at unit gain instead of being boosted into noise
+- Old recordings made with a 2-channel microphone and no system audio are still read as mic/system
 - Generates timestamped filenames: `meeting_20250801_093000.wav`
 - Fallback handling: macOS uses ScreenCaptureKit via `_macos_loopback.py`; Windows uses WASAPI loopback; Linux uses PulseAudio/PipeWire monitor
 - Records into `recordings/` subdirectory (configurable)
@@ -78,14 +79,24 @@ Captures microphone audio via `sounddevice` (PortAudio) and, on macOS, system au
 
 **Class:** `WhisperTranscriber`
 
-Transcribes audio files using `faster-whisper` (CTranslate2-optimized Whisper). Runs on CPU with int8 quantization.
+Transcribes audio files using `faster-whisper` (CTranslate2-optimized Whisper). With `device=auto`, `_detect_device()` picks CUDA (float16) when CTranslate2 reports it, otherwise CPU with int8; on Apple Silicon it passes `auto` + `auto` to CTranslate2, which has no MPS support and so runs on the CPU.
 
 **Key behaviors:**
-- Converts input audio to 16kHz mono float32 for Whisper
-- Checks stereo before conversion to support diarization
+- `split_channels()` turns the file into 16kHz mono float32 channels keyed by speaker: one-channel audio gives a single unlabelled channel, two or more give `You` (left) and `Others` (right)
+- One Whisper decode per channel, so both channels of a stereo file are always transcribed. A channel whose RMS is below `SILENCE_RMS` (`is_silent`) is skipped
+- The `diarization` setting only controls the `[You]` / `[Others]` labels (`diarised_text`); it never decides whether a channel is transcribed. A mono file with diarization on gives a plain transcript
 - Module-level model cache `_MODEL_CACHE` -- one shared model instance per (size, device, compute_type)
-- `transcribe()` returns: `text`, `diarised_text`, `duration_seconds`, `detected_language`
-- `_diarize()` -- splits stereo channels, transcribes left as "You" and right as "Others", interleaves results by timestamp
+- `transcribe()` returns: `text`, `diarised_text`, `duration_seconds`, `detected_language`, plus `segments` (time-ordered `Segment`s with a speaker) and `warnings` (for example a channel that had audio but no recognised speech). The result is built by `transcript.assemble`
+
+### 3a. `tinysteno/api_transcriber.py` -- API Transcription
+
+**Class:** `ApiTranscriber`
+
+The same `transcribe()` contract against an OpenAI Whisper-compatible endpoint. Each non-silent channel is uploaded once as a 16kHz WAV with `response_format="verbose_json"`; segment times are read from the response and the channels are interleaved by `transcript.assemble`. When the server returns no usable segments, or any segment has a missing or non-finite start time, that channel falls back to a single block (`text`, or the joined segment texts) spanning the whole channel, so a stereo file still yields both speakers, one block each.
+
+### 3b. `tinysteno/transcript.py` -- Segments and Assembly
+
+The one place both backends build their result. `Segment(start, end, text, speaker)`; `YOU` / `OTHERS` labels; `is_silent(samples)`; `interleave()` sorts by start time with ties going You, then Others, so the order is stable between runs; `plain_text()`; `labelled_text()` (one `[You] text` line per segment, `None` when no segment has a speaker); and `assemble()`, which stamps the channel label on each segment, interleaves, adds a warning per non-silent channel that produced no speech, and returns the transcriber result dict.
 
 ### 4. `tinysteno/orchestrator.py` -- LLM Orchestration
 
@@ -96,16 +107,19 @@ Handles all LLM communication via the OpenAI-compatible API. Transforms raw tran
 **Key behaviors:**
 - Chunking strategy: splits transcripts over 12,000 characters into overlapping chunks (500-char overlap)
 - Summarizes each chunk independently, then merges partial results
-- Merge deduplicates: for `list` fields, checks if summary already exists before appending
-- Graceful degradation: if LLM returns invalid JSON, attempts recovery. If all chunks fail, returns defaults (empty string / empty list)
+- The merge call asks the LLM to combine the partial results and drop duplicates; the code itself does no semantic de-duplication
+- Each LLM call is tried twice (`_extract`): a call that raises, or returns no usable fields, is retried once
+- Graceful degradation: if LLM returns invalid JSON, attempts recovery. Chunks that fail twice are left out and counted. If every chunk fails, the result is the defaults (empty string / empty list)
+- If the merge call fails, the partial results are combined locally (`_merge_locally`: string fields joined with a blank line, list fields concatenated with exact duplicates removed) instead of being thrown away
+- `Orchestrator.warnings` is a public list, reset by each `summarize()`, that says what was lost (the summary could not be generated, N of M sections failed, the merge fell back to local combination)
 - Also generates: titles (`generate_title`) and tags (`generate_tags`) via separate LLM calls with shorter context windows
 
 **Constants:**
 - Chunk size: 12,000 chars
 - Chunk overlap: 500 chars
 - LLM timeout: 120 seconds
-- Title context: first 500 chars of overview
-- Tag context: first 500 chars of overview
+- Title context: first 500 chars of the text passed in (the pipeline passes the longest string field)
+- Tag context: first 500 chars of the text passed in
 
 ### 5. `tinysteno/obsidian.py` -- Obsidian Export
 
@@ -117,9 +131,11 @@ Renders meeting notes using Jinja2 templates and writes Markdown files to the Ob
 - Renders the persona's `template.md` with merged context (metadata + schema fields)
 - Uses Jinja2 `StrictUndefined` -- template references to missing fields raise errors
 - Generates YAML frontmatter with title, date, duration, tags, detected_language
-- Tag deduplication: persona static tags first, LLM-generated tags appended (duplicates removed)
-- Sanitizes filenames (replaces non-alphanumeric with `_`, limits to 100 chars)
-- Timestamps to avoid overwrites: appends `_001`, `_002` suffix when file exists
+- Frontmatter comes from the persona's template, not from the exporter
+- Tag deduplication: persona static tags first, LLM-generated tags appended (`dict.fromkeys`, so duplicates are removed)
+- Names the file `<title> (<date>).md`, sanitising filenames (`: \ / * ? " | < >` become `-`, runs of `-` collapse, leading and trailing `-` are stripped; there is no length limit)
+- Never overwrites: if the name exists the note is written as `<title> (<date>) 2.md`, then ` 3`, and so on, taking the first free name
+- When processing warnings exist, a `## Processing warnings` section is appended (a fenced code block left open by the template is closed first)
 
 ### 6. `tinysteno/personas/__init__.py` -- Persona System
 
@@ -136,7 +152,7 @@ Encapsulates all persona configuration: schema definition, system prompt, and Ji
 - Required files: `persona.yaml`, `system_prompt.md`, `template.md`
 - `persona.yaml` must declare `name`, `description`, `schema`
 - Schema fields validated: only `string` and `list` types allowed
-- Reserved field names cannot be overridden: `title`, `date`, `duration`, `transcript`, `detected_language`, `generated_tags`
+- Reserved field names cannot be overridden: `title`, `date`, `duration`, `transcript`, `detected_language`, `generated_tags`, `tags`, `processing_warnings`
 - Optional `session_timeout_minutes` (number `>= 0`, `0` = no limit) becomes `Persona.session_timeout_minutes` (`None` when absent) and overrides the global recording timeout for that persona
 
 **Built-in personas (7), in `BUILTIN_ORDER`:**
@@ -172,7 +188,7 @@ A pure countdown with no threads or sleeping. `SessionTimer(limit_seconds, clock
 
 ### 9. `tinysteno/pipeline.py` -- UI-free Pipeline
 
-`run_pipeline(wav_path, name, config, persona, timestamp, *, transcriber, orchestrator_cls, exporter_cls, reporter=None) -> PipelineResult` runs transcribe, summarize, title and tags, and export, reporting each `Stage` (`TRANSCRIBE`, `SUMMARIZE`, `METADATA`, `EXPORT`) to a `PipelineReporter` (`stage_started`, `stage_progress`, `stage_finished`, `stage_skipped`; `NullReporter` ignores them). A failure in any stage is re-raised as `PipelineError(stage)` with the original exception as `__cause__`. `PipelineResult` carries `wav_path`, `note_path`, `title`, `duration_seconds` and `no_speech`. Nothing here prints or imports a UI library, so the CLI (Rich) and the TUI (Textual) share it.
+`run_pipeline(wav_path, name, config, persona, timestamp, *, transcriber, orchestrator_cls, exporter_cls, reporter=None) -> PipelineResult` runs transcribe, summarize, title and tags, and export, reporting each `Stage` (`TRANSCRIBE`, `SUMMARIZE`, `METADATA`, `EXPORT`) to a `PipelineReporter` (`stage_started`, `stage_progress`, `stage_finished`, `stage_skipped`; `NullReporter` ignores them). A failure in any stage is re-raised as `PipelineError(stage)` with the original exception as `__cause__`. `PipelineResult` carries `wav_path`, `note_path`, `title`, `duration_seconds`, `no_speech` and `warnings` (transcriber and orchestrator warnings merged, without duplicates). The warnings are also passed to the exporter as `processing_warnings`; the CLI prints them as `Warning:` lines and the TUI shows them as notifications on the Result screen and as lines on the no-speech screen. Nothing here prints or imports a UI library, so the CLI (Rich) and the TUI (Textual) share it.
 
 ### 10. `tinysteno/tui/` -- Textual Interface
 
@@ -205,22 +221,23 @@ User runs: tinysteno record --persona rca
 2. Recorder (recorder.py:AudioRecorder)
    ├── Detect audio devices
    ├── Start mic + loopback capture
-   ├── Write stereo WAV to recordings/
+   ├── Write WAV to recordings/ (stereo only if system audio was captured, else mono)
    └── Return WAV path
 
 3. Transcriber (transcriber.py:WhisperTranscriber)
    ├── Read WAV file via soundfile
-   ├── Convert to 16kHz mono
-   ├── Run faster-whisper (CPU, int8)
-   ├── Diarize if stereo + enabled
-   └── Return {text, diarised_text, duration, language}
+   ├── Split into 16kHz mono channels (You / Others for stereo)
+   ├── Run faster-whisper once per non-silent channel
+   ├── Interleave segments by start time (transcript.assemble)
+   ├── Label speakers if diarization is enabled
+   └── Return {text, diarised_text, duration, language, segments, warnings}
 
 4. Orchestrator (orchestrator.py:Orchestrator)
-   ├── Chunk transcript if > 12k chars
+   ├── Chunk transcript if > 12k chars (each LLM call retried once)
    ├── Build user message (persona system prompt + transcript)
    ├── Call LLM (OpenAI-compatible API)
    ├── Parse JSON response, validate against schema
-   ├── Merge partial results if chunked
+   ├── Merge partial results if chunked (local merge if the call fails)
    ├── Generate title (separate LLM call)
    ├── Generate tags (separate LLM call)
    └── Return {schema_fields, title, generated_tags}
@@ -229,7 +246,8 @@ User runs: tinysteno record --persona rca
    ├── Merge metadata + schema data into context
    ├── Render persona's Jinja2 template
    ├── Generate YAML frontmatter
-   ├── Write .md file to Obsidian vault
+   ├── Append processing warnings, if any
+   ├── Write .md file to Obsidian vault (never overwriting an existing note)
    └── Print file path to console
 ```
 
@@ -247,7 +265,12 @@ tinysteno.main
   │     ├── faster-whisper       (Whisper transcription)
   │     ├── soundfile            (WAV I/O)
   │     ├── numpy
-  │     └── scipy                (audio resampling)
+  │     ├── scipy                (audio resampling)
+  │     └── tinysteno.transcript (segments, interleaving, result assembly)
+  ├── tinysteno.api_transcriber
+  │     ├── openai               (Whisper API client)
+  │     ├── tinysteno.transcriber (split_channels)
+  │     └── tinysteno.transcript
   ├── tinysteno.orchestrator
   │     ├── openai               (LLM API client)
   │     └── tinysteno.personas
@@ -272,7 +295,7 @@ api_key: ollama
 base_url: http://localhost:11434/v1
 model: llama3.2:3b
 whisper_model: small
-diarization: false
+diarization: false        # only adds [You]/[Others] labels
 auto_title: true
 auto_tags: true
 sample_rate: 44100
@@ -294,7 +317,9 @@ Tests live in `tests/` and use `pytest` with `pylint` linting (CI via GitHub Act
 |-----------|------------------|--------------|
 | `test_main.py` | CLI commands, config loading, pipeline orchestration | Argument parsing, config seeding, process_audio integration |
 | `test_recorder.py` | AudioRecorder | Device detection, recording lifecycle, path generation |
-| `test_transcriber.py` | WhisperTranscriber | Transcription, diarization, resampling |
+| `test_transcriber.py` | WhisperTranscriber | Per-channel decoding, silent channels, labels, resampling |
+| `test_api_transcriber.py` | ApiTranscriber | One upload per channel, segment interleaving, single-block fallback |
+| `test_transcript.py` | `tinysteno/transcript.py` | Interleave order, labelled text, assembly, warnings |
 | `test_orchestrator.py` | Orchestrator | Chunking, LLM calls, merge logic, error handling |
 | `test_obsidian.py` | ObsidianExporter | Template rendering, file writing, frontmatter |
 | `test_personas.py` | Persona loading/validation | Directory validation, schema checking, error cases |
@@ -323,7 +348,9 @@ tinysteno/
 │   ├── __init__.py             # Package version (0.2.0)
 │   ├── main.py                 # CLI entry point, config, pipeline orchestration
 │   ├── recorder.py             # Audio capture (mic + loopback)
-│   ├── transcriber.py          # Whisper transcription
+│   ├── transcriber.py          # Local Whisper transcription (one decode per channel)
+│   ├── api_transcriber.py      # Whisper API transcription (one upload per channel)
+│   ├── transcript.py           # Segment type, interleaving and result assembly
 │   ├── orchestrator.py         # LLM orchestration and summarization
 │   ├── obsidian.py             # Obsidian Markdown export
 │   ├── _macos_loopback.py      # macOS ScreenCaptureKit audio capture
@@ -354,6 +381,8 @@ tinysteno/
     ├── test_recorder.py        # Recorder tests
     ├── test_session.py         # Session timeout tests
     ├── test_transcriber.py     # Transcriber tests
+    ├── test_api_transcriber.py # API transcriber tests
+    ├── test_transcript.py      # Segment and assembly tests
     └── test_tui_*.py           # TUI screen tests (pilot-driven)
 ```
 
@@ -374,7 +403,7 @@ Whisper transcripts of long meetings (1+ hours) can exceed 50,000 characters, be
 CTranslate2-optimized Whisper is 4x faster on CPU with int8 quantization, making real-time or near-real-time transcription viable on consumer hardware without a GPU.
 
 **Why stereo loopback for diarization?**
-True speaker diarization requires an ML model. By placing mic on the left channel and system audio on the right, the transcriber can separate "You" from "Others" without a diarization model. This is a pragmatic trade-off: it works well when the user speaks through their mic and others speak through the call (Zoom/Teams).
+True speaker diarization requires an ML model. By placing mic on the left channel and system audio on the right, the transcriber can separate "You" from "Others" without a diarization model. Both channels are always transcribed; the `diarization` setting only decides whether the labels are shown. This is a pragmatic trade-off: it works well when the user speaks through their mic and others speak through the call (Zoom/Teams).
 
 ---
 

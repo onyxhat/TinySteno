@@ -101,7 +101,8 @@ _MODEL_CACHE: dict[tuple[str, str, str], WhisperModel] = {}
 def _detect_device() -> tuple[str, str]:
     """Detect optimal device and compute type for faster-whisper.
 
-    Checks CUDA (via CTranslate2), Apple Silicon Metal, then falls back to CPU.
+    Checks CUDA (via CTranslate2); Apple Silicon gets "auto" (CTranslate2 resolves it to
+    the CPU); anything else uses the CPU.
 
     Returns (device, compute_type) tuple.
     """
@@ -115,7 +116,7 @@ def _detect_device() -> tuple[str, str]:
     except ImportError:
         pass
 
-    # Apple Silicon — CTranslate2 4+ supports MPS via device="auto"
+    # Apple Silicon — CTranslate2 has no MPS backend; "auto" resolves to the CPU
     if platform.system() == "Darwin" and platform.machine() == "arm64":
         return ("auto", "auto")
 

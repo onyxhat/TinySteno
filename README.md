@@ -11,8 +11,8 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 - Interactive terminal UI (`tinysteno`) with live level meters, per-stage progress and an in-terminal note preview
 - Captures mic + system audio simultaneously — no virtual audio device required
 - Transcribe with faster-whisper (local CPU/GPU) or OpenAI Whisper API
-- GPU auto-detection — CUDA, Apple Silicon (MPS), and CPU fallback
-- Stereo diarization — speaker labels when system audio is captured
+- GPU auto-detection — CUDA, with a CPU fallback (Apple Silicon runs on the CPU)
+- Stereo diarization — `[You]` / `[Others]` labels when system audio is captured
 - Summarize via OpenAI-compatible API (Ollama, OpenAI, OpenRouter, etc.)
 - Handles long transcripts automatically — splits into chunks, summarizes each, then merges
 - Persona system — choose how recordings are summarized and formatted
@@ -229,7 +229,7 @@ session_timeout_minutes: 120   # this persona may record for up to 2 hours
 
 The timeout that applies to a recording is, in order: the `--timeout` flag, the persona's `session_timeout_minutes`, the `session_timeout_minutes` value in `config.yaml`, then 75 minutes. `0` disables the limit at any of those levels.
 
-Schema field types are `string` or `list` (list of strings). Field names must be valid Python identifiers and cannot collide with reserved metadata variables: `title`, `date`, `duration`, `transcript`, `detected_language`, `generated_tags`.
+Schema field types are `string` or `list` (list of strings). Field names must be valid Python identifiers and cannot collide with reserved metadata variables: `title`, `date`, `duration`, `transcript`, `detected_language`, `generated_tags`, `tags`, `processing_warnings`.
 
 **`template.md`** receives all schema fields plus the metadata variables above as Jinja2 context.
 
@@ -272,7 +272,7 @@ transcription_backend: "local"
 # Device override for local backend: "auto" (default, auto-detect), "cpu", "cuda"
 # Architecture is auto-detected when set to "auto":
 #   - CUDA available → cuda + float16
-#   - Apple Silicon → auto + auto (CTranslate2 MPS)
+#   - Apple Silicon → auto + auto (CTranslate2 has no MPS support, so this runs on the CPU)
 #   - Fallback → cpu + int8
 whisper_device: "auto"
 whisper_compute_type: "auto"
@@ -284,9 +284,9 @@ whisper_compute_type: "auto"
 # whisper_api_model: "whisper-1"
 
 # Feature flags
-diarization: false          # enable [You]/[Others] speaker labels
-                            # when system audio is captured, output is automatically
-                            # stereo (L=mic, R=system audio) and diarization will work
+diarization: false          # add [You]/[Others] speaker labels; both channels are
+                            # transcribed either way. System audio is captured as the
+                            # right channel of a stereo file (L=mic, R=system audio)
 
 # Recording session limit in minutes: recording stops and is processed when it
 # elapses. 0 disables. Asked for by `tinysteno setup`. A persona's session_timeout_minutes or --timeout overrides it.
@@ -297,8 +297,8 @@ session_timeout_minutes: 75
 
 # Audio recording
 sample_rate: 44100
-channels: 1                 # mic input channels; output is automatically stereo
-                            # when system audio loopback is available
+channels: 1                 # mic input channels; the file is stereo only when
+                            # system audio was captured, otherwise mono
 ```
 
 ## Output Format
@@ -336,7 +336,7 @@ Full transcript text here...
 \```
 ```
 
-System audio is always transcribed when it is captured. When diarization is enabled, the transcript is interleaved chronologically with `[You]` / `[Others]` speaker labels:
+System audio is always transcribed when it is captured. Each channel is transcribed separately and a silent channel is skipped. If a channel has audio but no speech is recognised, or part of a summary could not be generated, the CLI prints `Warning:` lines, the TUI shows them, and the note gets a `## Processing warnings` section listing them. A note never overwrites an earlier one: a second note with the same title and date is saved as `<title> (<date>) 2.md`, then ` 3`, and so on. A recording made before this version with a 2-channel microphone and no system audio is still read as mic and system. When diarization is enabled, the transcript is interleaved chronologically with `[You]` / `[Others]` speaker labels:
 
 ```
 [You] I think we should go with option A.
@@ -369,7 +369,7 @@ Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2) t
 **GPU auto-detection:** The first time a local transcriber is created with `device=auto`, TinySteno probes the hardware:
 
 - **CUDA** — detected via CTranslate2's `get_supported_devices()`; uses `cuda` + `float16`
-- **Apple Silicon (M1+)** — detected via `platform.machine() == "arm64"`; uses `auto` + `auto` (delegates to CTranslate2 MPS backend)
+- **Apple Silicon (M1+)** — detected via `platform.machine() == "arm64"`; uses `auto` + `auto`; CTranslate2 has no MPS backend, so faster-whisper runs on the CPU
 - **CPU fallback** — no GPU found; uses `cpu` + `int8`
 
 Override detection explicitly in config:

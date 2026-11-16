@@ -100,11 +100,15 @@ def _merge_warnings(*groups: list[str]) -> tuple[str, ...]:
 
 def _extract_summary_text(persona: Persona, data: dict) -> Optional[str]:
     """Extract the best text from summarized data for title/tag generation."""
-    first_string_value = next(
-        (data.get(field, "") for field, defn in persona.schema.items()
-         if defn["type"] == "string"),
-        None,
-    )
+    candidates = [
+        value.strip()
+        for field, defn in persona.schema.items()
+        if defn["type"] == "string"
+        for value in [data.get(field, "")]
+        if isinstance(value, str)
+    ]
+    # Longest wins (a one-word field is a poor title source); max keeps the earliest on ties.
+    first_string_value = max(candidates, key=len, default=None)
     if not first_string_value:
         all_items: list[str] = []
         for field, defn in persona.schema.items():
@@ -173,7 +177,7 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
     else:
         reporter.stage_skipped(Stage.SUMMARIZE)
 
-    # First string field for title/tag generation; list-only personas (e.g. 1on1)
+    # Longest string field for title/tag generation; list-only personas (e.g. 1on1)
     # fall back to joining all list values.
     summary_text = _extract_summary_text(persona, data)
     generated_title = None

@@ -41,7 +41,7 @@ Built-in personas live in `tinysteno/personas/<slug>/`, each with `persona.yaml`
 - Persona schema field types are `string` or `list` (list of strings) only.
 - Field names must be valid Python identifiers and must not collide with the reserved
   metadata vars: `title`, `date`, `duration`, `transcript`, `detected_language`,
-  `generated_tags`.
+  `generated_tags`, `tags`, `processing_warnings`.
 - `persona.yaml` may set `session_timeout_minutes` (a number `>= 0`; `0` disables) to override the
   global recording timeout for that persona. Precedence: `--timeout`, persona, global config
   (`session_timeout_minutes`, default 75).

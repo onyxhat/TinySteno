@@ -7,7 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from tinysteno.personas import Persona
-from tinysteno.pipeline import PipelineError, PipelineResult, Stage, run_pipeline
+from tinysteno.pipeline import (
+    PipelineError, PipelineResult, Stage, _extract_summary_text, run_pipeline)
 
 
 def _persona() -> Persona:
@@ -183,3 +184,18 @@ def test_no_warnings_gives_empty_tuple_and_empty_metadata_list(tmp_path):
 def test_no_speech_result_carries_transcriber_warnings(tmp_path):
     result = _run(tmp_path, text="  ", warnings=[TRANSCRIBER_WARNING])
     assert result.no_speech and result.warnings == (TRANSCRIBER_WARNING,)
+
+
+def test_summary_text_is_the_longest_string_field():
+    persona = _persona()
+    persona.schema = {"ceremony_type": {"type": "string", "description": "x"},
+                      "overview": {"type": "string", "description": "x"}}
+    data = {"ceremony_type": "Review", "overview": "We reviewed the sprint."}
+    assert _extract_summary_text(persona, data) == "We reviewed the sprint."
+
+
+def test_summary_text_ties_go_to_the_earlier_field():
+    persona = _persona()
+    persona.schema = {"a": {"type": "string", "description": "x"},
+                      "b": {"type": "string", "description": "x"}}
+    assert _extract_summary_text(persona, {"a": " one ", "b": "two"}) == "one"
