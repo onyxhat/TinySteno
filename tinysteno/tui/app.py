@@ -3,11 +3,13 @@
 import asyncio
 import os
 import signal
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 
-from textual.app import App
+from textual.app import App, SystemCommand
 from textual.binding import Binding
+from textual.screen import Screen
 
 from tinysteno.personas import Persona
 from tinysteno.session import resolve_timeout_seconds
@@ -165,6 +167,16 @@ class TinyStenoApp(App):
         while target is not None and self.screen is not target:
             self.pop_screen()
         self.switch_screen(new_screen)
+
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        """Command palette entries: Textual's defaults minus Screenshot, plus the app's own."""
+        for command in super().get_system_commands(screen):
+            if command.title != "Screenshot":
+                yield command
+
+    def action_screenshot(self, filename: str | None = None, path: str | None = None) -> None:
+        """Do nothing: screenshots are made by scripts/tui_screenshots.py, which calls
+        save_screenshot directly."""
 
     def action_dismiss_notices(self) -> None:
         """Clear every notice on screen (a failed-save notice stays until this or a click)."""
