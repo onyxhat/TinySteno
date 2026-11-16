@@ -27,7 +27,7 @@ from tinysteno.log_file import log_to_file
 from tinysteno.signals import deferred_exit_signals
 from tinysteno.config import (
     config_dir as _config_dir, config_path as _config_path,
-    read_stored, invalid_settings, load_config, recordings_dir as _recordings_dir,
+    DEFAULT_CONFIG, read_stored, invalid_settings, load_config, recordings_dir as _recordings_dir,
     validate_config as _validate_config, update_config, write_config as _write_config,
     is_timeout_minutes as _is_timeout_minutes, is_positive_number as _is_positive_number,
     is_speaker_count as _is_speaker_count,
@@ -420,16 +420,18 @@ def cmd_test(_args):
     console = Console()
     console.print("\n[TinySteno Setup Test]")
 
-    config = None
+    config = None  # nothing is created or seeded here; the Config file check reports why
     if _config_path().exists():
         try:
-            config = load_config()
-        except Exception:  # the Config file check reports why
+            stored = read_stored()
+            _validate_config(stored)
+            config = {**DEFAULT_CONFIG, **stored}
+        except (ValueError, OSError):
             config = None
 
     issues = 0
     for check in run_checks(config):
-        console.print(_check_line(check))
+        console.print(_check_line(check), markup=False, highlight=False, soft_wrap=True)
         if not check.ok and check.required:
             issues += 1
 

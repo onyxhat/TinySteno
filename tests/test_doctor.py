@@ -2,8 +2,9 @@
 import argparse
 import subprocess
 import sys
+from pathlib import Path
+from unittest.mock import MagicMock
 
-import pytest
 import yaml
 
 from tinysteno import main
@@ -94,13 +95,12 @@ def test_a_check_never_raises(tmp_path, monkeypatch):
     assert check == Check("Default persona", False, "multi line")
 
 
-@pytest.mark.usefixtures("isolated_home")
 def test_cmd_test_exit_code_and_output(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr("tinysteno.doctor.importlib.import_module", lambda name: object())
+    monkeypatch.setattr("tinysteno.doctor._import", lambda name: MagicMock())
     assert main.cmd_test(argparse.Namespace()) == 1
     out = capsys.readouterr().out
     assert "✓ Recorder module" in out
-    assert "✗ Config: " in out and "not found" in out
+    assert f"✗ Config: {config_path()} not found\n" in out
     assert "✗ Found 1 issue(s)" in out
 
     seed_builtin_personas()
@@ -109,7 +109,7 @@ def test_cmd_test_exit_code_and_output(tmp_path, capsys, monkeypatch):
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(yaml.dump({**DEFAULT_CONFIG, "obsidian_vault": str(vault),
                                         "speaker_split": True}))
-    monkeypatch.setattr("tinysteno.doctor.importlib.util.find_spec", lambda name: None)
+    monkeypatch.setattr("tinysteno.doctor._find_spec", lambda name: None)
     assert main.cmd_test(argparse.Namespace()) == 0
     out = capsys.readouterr().out
     assert "✓ Config file exists" in out
@@ -117,13 +117,12 @@ def test_cmd_test_exit_code_and_output(tmp_path, capsys, monkeypatch):
     assert "✓ All checks passed!" in out
 
 
-@pytest.mark.usefixtures("isolated_home")
 def test_cmd_test_prints_legacy_failure_wording(capsys, monkeypatch):
     def fake_import(name):
         if name == "sounddevice":
             raise ImportError("no")
-        return object()
-    monkeypatch.setattr("tinysteno.doctor.importlib.import_module", fake_import)
+        return MagicMock()
+    monkeypatch.setattr("tinysteno.doctor._import", fake_import)
     assert main.cmd_test(argparse.Namespace()) == 1
     assert "✗ sounddevice (pip install sounddevice)" in capsys.readouterr().out
 
@@ -136,3 +135,83 @@ def test_importing_doctor_and_recordings_stays_light():
         "sys.exit(1 if bad else 0)"
     )
     assert subprocess.run([sys.executable, "-c", code], check=False).returncode == 0
+
+
+def test_cmd_test_prints_the_legacy_recorder_failure_line(capsys, monkeypatch):
+    def fake_import(name):
+        if name == "tinysteno.recorder":
+            raise ImportError("boom")
+        return MagicMock()
+    monkeypatch.setattr("tinysteno.doctor._import", fake_import)
+    main.cmd_test(argparse.Namespace())
+    assert "✗ Recorder: boom\n" in capsys.readouterr().out
+
+
+def test_recorder_and_transcriber_checks_need_their_classes(monkeypatch):
+    monkeypatch.setattr("tinysteno.doctor._import", lambda name: object())
+    checks = by_name(run_checks(None))
+    assert not checks["Recorder module"].ok
+    assert not checks["Transcriber module"].ok
+
+
+def test_cmd_test_prints_brackets_literally(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("tinysteno.doctor._find_spec", lambda name: None)
+    config_path().parent.mkdir(parents=True)
+    config_path().write_text(yaml.dump({**DEFAULT_CONFIG, "speaker_split": True,
+                                        "obsidian_vault": str(tmp_path / "Notes [work]")}))
+    main.cmd_test(argparse.Namespace())
+    out = capsys.readouterr().out
+    assert "! Speaker separation: pip install 'tinysteno[diarize]'\n" in out
+    assert f"{tmp_path / 'Notes [work]'} is not an existing directory\n" in out
+
+
+def tree(root):
+    return sorted((str(p.relative_to(root)), p.stat().st_size if p.is_file() else -1)
+                  for p in root.rglob("*"))
+
+
+def test_cmd_test_writes_nothing_and_reports_missing_personas(tmp_path, capsys):
+    home = Path.home()
+    config_path().parent.mkdir(parents=True)
+    config_path().write_text(yaml.dump({"obsidian_vault": str(tmp_path)}))
+    before = tree(home)
+    assert main.cmd_test(argparse.Namespace()) == 1
+    out = capsys.readouterr().out
+    assert tree(home) == before
+    assert "✗ Default persona:" in out
+
+
+def test_cmd_test_with_an_invalid_config_cannot_pass(capsys):
+    config_path().parent.mkdir(parents=True)
+    config_path().write_text("channels: 7\n")
+    assert main.cmd_test(argparse.Namespace()) == 1
+    assert "✗ Config:" in capsys.readouterr().out
+
+
+def test_empty_and_non_string_vault_fail_with_a_clear_detail(tmp_path):
+    for value in ("", "   ", None, 5):
+        check = by_name(run_checks(make_config(tmp_path, obsidian_vault=value)))["Vault folder"]
+        assert not check.ok
+        assert check.detail == "No vault folder is set"
+
+
+def test_vault_tilde_is_expanded_by_the_check():
+    (Path.home() / "vault").mkdir()
+    config = {**DEFAULT_CONFIG, "obsidian_vault": "~/vault"}
+    assert by_name(run_checks(config))["Vault folder"].ok
+
+
+def test_broken_symlink_in_the_recordings_path_fails(tmp_path):
+    (tmp_path / "link").symlink_to(tmp_path / "gone")
+    for path in (tmp_path / "link", tmp_path / "link" / "sub"):
+        config = make_config(tmp_path, recordings_path=str(path))
+        check = by_name(run_checks(config))["Recordings folder"]
+        assert not check.ok
+        assert str(tmp_path / "link") in check.detail
+
+
+def test_recordings_tilde_path_is_expanded():
+    config = {**DEFAULT_CONFIG, "recordings_path": "~/rec"}
+    check = by_name(run_checks(config))["Recordings folder"]
+    assert check.ok
+    assert str(Path.home() / "rec") in check.detail
