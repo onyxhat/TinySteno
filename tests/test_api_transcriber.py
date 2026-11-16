@@ -523,3 +523,28 @@ def test_timeout_comes_from_config(mock_openai, config):
     mock_class, _ = mock_openai
     create_transcriber({"transcription_backend": "api", "api_key": "k", **config})
     assert mock_class.call_args.kwargs["timeout"] == float(config.get("whisper_api_timeout", 600))
+
+
+def _mono(tmp_path, seconds=110):
+    path = tmp_path / "mono_long.wav"
+    sf.write(str(path), np.full(16000 * seconds, 0.5, dtype=np.float32), 16000)
+    return str(path)
+
+
+def test_mono_recording_uses_server_speaker_labels(mock_openai, tmp_path):
+    _, client = mock_openai
+    reply = _response("x", [_spk(1.0, 31.0, "a", "SPEAKER_00"),
+                            _spk(40.0, 100.0, "b", "SPEAKER_01")])
+    result = _server_run(client, tmp_path, [reply], path=_mono(tmp_path))
+    assert client.audio.transcriptions.create.call_args.kwargs["extra_body"] == {"diarize": True}
+    assert [s.speaker for s in result["segments"]] == ["Speaker 2", "You"]
+
+
+def test_mono_recording_without_server_labels_stays_unlabelled(mock_openai, tmp_path):
+    _, client = mock_openai
+    reply = _response("x", [_spk(1.0, 31.0, "a"), _spk(40.0, 100.0, "b")])
+    with patch("tinysteno.sherpa_diarizer.diarize",
+               side_effect=AssertionError("local diarizer ran")):
+        result = _server_run(client, tmp_path, [reply], path=_mono(tmp_path))
+    assert {s.speaker for s in result["segments"]} == {""}
+    assert not result["warnings"]

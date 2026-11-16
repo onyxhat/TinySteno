@@ -199,7 +199,8 @@ def _server_turns_for(server_label: str, turns: list[Turn]) -> Callable:
     """A `turns_for` hook for assemble: the server's turns for the channel uploaded with the
     extra fields, nothing to split for any other channel."""
     def turns_for(label: str, _audio: np.ndarray) -> list[Turn]:
-        return list(turns) if label == server_label else []
+        # assemble names a single-channel recording's channel YOU, though it is keyed "".
+        return list(turns) if (label or YOU) == (server_label or YOU) else []
     return turns_for
 
 
