@@ -115,6 +115,7 @@ class Orchestrator:
             api_key=api_key,
             base_url=base_url,
             timeout=_LLM_TIMEOUT_SECONDS,
+            max_retries=0,  # _extract retries once itself; SDK retries would multiply the wait
         )
 
     def summarize(

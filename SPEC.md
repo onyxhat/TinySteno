@@ -150,7 +150,7 @@ Handles all LLM communication via the OpenAI-compatible API. Transforms raw tran
 **Constants:**
 - Chunk size: `context_tokens * 2 * 0.6` chars (`_CHARS_PER_TOKEN`, `_CHUNK_CONTEXT_SHARE`, floor `_MIN_CONTEXT_TOKENS` = 500); no overlap
 - Merge rounds: 2 (`_REDUCE_ROUNDS`)
-- LLM timeout: 120 seconds
+- LLM timeout: 120 seconds; the OpenAI client is built with `max_retries=0`, since `_extract` does its own single retry (the API transcriber keeps the SDK's default retries)
 - Title context: first 4,000 chars of the text passed in (the pipeline passes `summary_digest`)
 - Tag context: first 4,000 chars of the text passed in
 

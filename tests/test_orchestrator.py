@@ -664,3 +664,9 @@ def test_labels_without_you_never_name_a_label_as_the_recorder():
 def test_you_line_needs_labels_and_you():
     msg = _orch()._build_user_message("t", PERSONA, PromptContext(has_you_label=True))
     assert "Speaker labels:" not in msg and "has no speaker labels" in msg
+
+
+def test_the_llm_client_does_not_retry_on_its_own():
+    with patch("tinysteno.orchestrator.OpenAI") as client_class:
+        Orchestrator(api_key="k", base_url="http://llm/v1", model="m")
+    assert client_class.call_args.kwargs["max_retries"] == 0
