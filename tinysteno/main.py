@@ -377,82 +377,44 @@ def cmd_list(args):
         print(meeting.name)
 
 
-def cmd_test(_args):  # pylint: disable=too-many-statements  # large interactive CLI setup function
+def _check_line(check) -> str:
+    """One printed line for a check; the checks `test` always had keep their original wording."""
+    if check.ok:
+        return "✓ Config file exists" if check.name == "Config file" else f"✓ {check.name}"
+    legacy = {"Recorder module": "Recorder", "Transcriber module": "Transcriber",
+              "Config file": "Config"}
+    if check.name in legacy:
+        return f"✗ {legacy[check.name]}: {check.detail}"
+    if check.name in ("sounddevice", "faster-whisper", "openai", "pyyaml", "rich"):
+        return f"✗ {check.name} ({check.detail})"
+    return f"{'✗' if check.required else '!'} {check.name}: {check.detail}"
+
+
+def cmd_test(_args):
     """Verify setup before first use."""
     from rich.console import Console
+    from tinysteno.doctor import run_checks
 
     console = Console()
-    issues = []
-
     console.print("\n[TinySteno Setup Test]")
 
-    try:
-        from tinysteno.recorder import AudioRecorder as _  # noqa: F401  # pylint: disable=unused-import,reimported,redefined-outer-name  # import-existence check
+    config = None
+    if _config_path().exists():
+        try:
+            config = load_config()
+        except Exception:  # the Config file check reports why
+            config = None
 
-        console.print("✓ Recorder module")
-    except ImportError as e:
-        issues.append(f"Recorder: {e}")
-        console.print(f"✗ Recorder: {e}")
-
-    try:
-        from tinysteno.transcriber import WhisperTranscriber as _  # noqa: F401  # pylint: disable=unused-import,reimported,redefined-outer-name  # import-existence check
-
-        console.print("✓ Transcriber module")
-    except ImportError as e:
-        issues.append(f"Transcriber: {e}")
-        console.print(f"✗ Transcriber: {e}")
-
-    try:
-        import sounddevice as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
-
-        console.print("✓ sounddevice")
-    except ImportError:
-        issues.append("sounddevice")
-        console.print("✗ sounddevice (pip install sounddevice)")
-
-    try:
-        import faster_whisper as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
-
-        console.print("✓ faster-whisper")
-    except ImportError:
-        issues.append("faster-whisper")
-        console.print("✗ faster-whisper (pip install faster-whisper)")
-
-    try:
-        import openai as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
-
-        console.print("✓ openai")
-    except ImportError:
-        issues.append("openai")
-        console.print("✗ openai (pip install openai)")
-
-    try:
-        import yaml as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
-
-        console.print("✓ pyyaml")
-    except ImportError:
-        issues.append("pyyaml")
-        console.print("✗ pyyaml (pip install pyyaml)")
-
-    try:
-        import rich as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
-
-        console.print("✓ rich")
-    except ImportError:
-        issues.append("rich")
-        console.print("✗ rich (pip install rich)")
-
-    config_path = _config_path()
-    if config_path.exists():
-        console.print("✓ Config file exists")
-    else:
-        issues.append("config missing")
-        console.print(f"✗ Config: {config_path} not found")
+    issues = 0
+    for check in run_checks(config):
+        console.print(_check_line(check))
+        if not check.ok and check.required:
+            issues += 1
 
     if not issues:
         console.print("\n✓ All checks passed!")
         return 0
-    console.print(f"\n✗ Found {len(issues)} issue(s)")
+    console.print(f"\n✗ Found {issues} issue(s)")
     return 1
 
 
