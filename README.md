@@ -399,7 +399,7 @@ In the summary request the model is also told the meeting date (so "tomorrow" ca
 
 After transcribing, TinySteno writes the transcript as JSON beside the recording, named after the full recording filename: `Meeting-1.wav.transcript.json` next to `Meeting-1.wav`. It holds the full text of the meeting with times and speakers, so treat it like the recording. With the default layout the recordings folder is inside your Obsidian vault (`<vault>/<output_folder>/audio`), so the file is inside the vault, and synced or shared with it; set `recordings_path` to keep recordings and transcripts elsewhere.
 
-It exists so that retrying after a failed summary, export or LLM outage does not transcribe again. `tinysteno process`, `tinysteno record` and the TUI reuse it only when all of these hold:
+It exists so that retrying after a failed summary, export or LLM outage does not transcribe again. `tinysteno process` and the TUI (including its retry after a failed stage) reuse it only when all of these hold:
 
 - it is no older than the recording, and the recording is the same size as when it was transcribed;
 - the settings that shape a transcript are unchanged: `transcription_backend`, the model (`whisper_model` for the local backend, `whisper_api_model` for the API), `whisper_prompt`, `whisper_vad`, `hallucination_filter` and `bleed_filter`;
