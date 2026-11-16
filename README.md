@@ -387,7 +387,7 @@ What it can get wrong: a quiet, isolated "Thank you." that someone really said, 
 
 What it can get wrong: two people genuinely saying the same long sentence at the same moment lose one copy. Speech that bleeds in at a level close to the real signal may keep the wrong copy.
 
-Set `hallucination_filter: false` and/or `bleed_filter: false` in `config.yaml` to switch either off. The filters run when a recording is transcribed; a transcript already saved (see below) is not filtered again, so use `--retranscribe` after changing them.
+Set `hallucination_filter: false` and/or `bleed_filter: false` in `config.yaml` to switch either off. The filters run when a recording is transcribed. A transcript saved earlier (see below) was made with the filter settings of that time, so changing either filter makes TinySteno transcribe the recording again rather than reuse it.
 
 ### Notes for the summary
 
@@ -397,9 +397,17 @@ In the summary request the model is also told the meeting date (so "tomorrow" ca
 
 ### Saved transcripts
 
-After transcribing, TinySteno writes the transcript as JSON beside the recording, as `Meeting.transcript.json` next to `Meeting.wav`. It holds the full text of the meeting with times and speakers, so treat it like the recording. With the default layout the recordings folder is inside your Obsidian vault (`<vault>/<output_folder>/audio`), so the file is inside the vault, and synced or shared with it; set `recordings_path` to keep recordings and transcripts elsewhere.
+After transcribing, TinySteno writes the transcript as JSON beside the recording, named after the full recording filename: `Meeting-1.wav.transcript.json` next to `Meeting-1.wav`. It holds the full text of the meeting with times and speakers, so treat it like the recording. With the default layout the recordings folder is inside your Obsidian vault (`<vault>/<output_folder>/audio`), so the file is inside the vault, and synced or shared with it; set `recordings_path` to keep recordings and transcripts elsewhere.
 
-It exists so that retrying after a failed summary, export or LLM outage does not transcribe again. `tinysteno process` and the TUI reuse it when it is newer than the WAV, readable and of the current format; if it is missing, older than the WAV (the recording was replaced), unreadable or from another version, the recording is transcribed afresh. Pass `--retranscribe` to `tinysteno process` to force a fresh transcription, or delete the file. Transcript options such as `transcript_timestamps` and `diarization` are applied when the note is rendered, so changing them does not need a new transcription; the filters and `whisper_*` settings do. If the file cannot be written TinySteno logs a warning and carries on.
+It exists so that retrying after a failed summary, export or LLM outage does not transcribe again. `tinysteno process`, `tinysteno record` and the TUI reuse it only when all of these hold:
+
+- it is no older than the recording, and the recording is the same size as when it was transcribed;
+- the settings that shape a transcript are unchanged: `transcription_backend`, the model (`whisper_model` for the local backend, `whisper_api_model` for the API), `whisper_prompt`, `whisper_vad`, `hallucination_filter` and `bleed_filter`;
+- it is of the current file format and passes validation.
+
+A missing file, one from an earlier format version, or one that fails validation is ignored and the recording is transcribed afresh (and the file rewritten). Pass `--retranscribe` to `tinysteno process` to force a fresh transcription, or delete the file. `transcript_timestamps` and `diarization` are applied when the note is rendered, so changing them does not need a new transcription.
+
+When a saved transcript is used, the CLI prints `Using the saved transcript for this recording (--retranscribe to transcribe again).` and the TUI shows the notice `Used the saved transcript for this recording.` Nothing about it is written into the note. Nothing is saved when the recording file does not exist, and a failure to save is logged as a warning and never fails the run.
 
 ### Long transcripts
 
