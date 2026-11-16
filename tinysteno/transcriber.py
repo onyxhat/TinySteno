@@ -12,7 +12,8 @@ import soundfile as sf
 from faster_whisper import WhisperModel
 from scipy.signal import resample as scipy_resample
 
-from tinysteno.transcript import OTHERS, SAMPLE_RATE, YOU, Segment, assemble, is_silent
+from tinysteno.transcript import (
+    OTHERS, SAMPLE_RATE, YOU, Segment, TranscriptOptions, assemble, is_silent)
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,7 @@ def _detect_device() -> tuple[str, str]:
 class WhisperTranscriber:
     """Transcribe audio files using local faster-whisper."""
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments
         self,
         model_size: str = "small",
         device: str = "auto",
@@ -142,10 +143,12 @@ class WhisperTranscriber:
         *,
         vad: bool = True,
         prompt: str = "",
+        options: TranscriptOptions | None = None,
     ):
         self.model_size = model_size
         self.vad = vad
         self.prompt = prompt
+        self.options = options
 
         # Resolve "auto" to detected hardware once.
         if device == "auto" or compute_type == "auto":
@@ -198,7 +201,8 @@ class WhisperTranscriber:
             (languages[label] for label in (YOU, "", OTHERS) if channels.get(label)),
             "en",
         )
-        return assemble(channels, audio, diarize=diarize, language=language)
+        return assemble(channels, audio, diarize=diarize, language=language,
+                        options=self.options)
 
     def _decode(
         self,

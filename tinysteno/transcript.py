@@ -22,6 +22,14 @@ class Segment:
     speaker: str = ""
 
 
+@dataclass(frozen=True)
+class TranscriptOptions:
+    """Switches for the filters applied while assembling a transcript."""
+
+    drop_hallucinations: bool = True
+    suppress_bleed: bool = True
+
+
 def is_silent(samples: np.ndarray) -> bool:
     """True when the RMS of the samples is below SILENCE_RMS (empty is silent)."""
     if samples.size == 0:
@@ -56,20 +64,30 @@ def labelled_text(segments: Iterable[Segment]) -> str | None:
     return "\n".join(f"[{seg.speaker}] {seg.text}" for seg in segs)
 
 
+def _level_over(audio: dict[str, np.ndarray], label: str, start: float, end: float) -> float:
+    """RMS of one channel between two times in seconds (0.0 for an empty range)."""
+    samples = audio[label][max(0, int(start * SAMPLE_RATE)):max(0, int(end * SAMPLE_RATE))]
+    if samples.size == 0:
+        return 0.0
+    return float(np.sqrt(np.mean(np.square(samples.astype(np.float64)))))
+
+
 def assemble(
     channels: dict[str, list[Segment]],
     audio: dict[str, np.ndarray],
     *,
     diarize: bool,
     language: str,
+    options: TranscriptOptions | None = None,
 ) -> dict:
     """Build the transcriber result from per-channel segments and 16 kHz mono audio."""
-    stamped = [
-        seg if seg.speaker else replace(seg, speaker=label)
+    from tinysteno.hygiene import drop_hallucinations, suppress_bleed
+
+    options = options or TranscriptOptions()
+    stamped = {
+        label: [seg if seg.speaker else replace(seg, speaker=label) for seg in segs]
         for label, segs in channels.items()
-        for seg in segs
-    ]
-    segments = interleave(stamped)
+    }
 
     warnings = [
         f"{_CHANNEL_NAMES[label]} audio was present but no speech was recognised."
@@ -77,6 +95,21 @@ def assemble(
         if label in _CHANNEL_NAMES and not segs and not is_silent(audio[label])
     ]
 
+    def level(label: str, start: float, end: float) -> float:
+        return _level_over(audio, label, start, end)
+
+    if options.drop_hallucinations:
+        stamped = {
+            label: drop_hallucinations(
+                sorted(segs, key=lambda s: s.start),
+                rms=(lambda start, end, label=label: level(label, start, end))
+                if label in audio else None)
+            for label, segs in stamped.items()
+        }
+    if options.suppress_bleed and YOU in stamped and OTHERS in stamped:
+        stamped[YOU], stamped[OTHERS] = suppress_bleed(stamped[YOU], stamped[OTHERS], level)
+
+    segments = interleave(seg for segs in stamped.values() for seg in segs)
     longest = max((len(arr) for arr in audio.values()), default=0)
     return {
         "text": plain_text(segments),

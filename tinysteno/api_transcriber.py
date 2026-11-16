@@ -19,21 +19,25 @@ import soundfile as sf
 from openai import OpenAI
 
 from tinysteno.transcriber import split_channels
-from tinysteno.transcript import OTHERS, SAMPLE_RATE, YOU, Segment, assemble, is_silent
+from tinysteno.transcript import (
+    OTHERS, SAMPLE_RATE, YOU, Segment, TranscriptOptions, assemble, is_silent)
 
 
 class ApiTranscriber:
     """Transcribe audio using OpenAI Whisper API (or compatible)."""
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments
         self,
         api_key: str = "",
         base_url: str = "",
         model: str = "whisper-1",
+        *,
         prompt: str = "",
+        options: TranscriptOptions | None = None,
     ) -> None:
         self.model = model
         self.prompt = prompt
+        self.options = options
         kwargs: dict = {"api_key": api_key, "timeout": 180.0}
         if base_url:
             kwargs["base_url"] = base_url
@@ -73,9 +77,11 @@ class ApiTranscriber:
             (languages[label] for label in (YOU, "", OTHERS) if channels.get(label)),
             "en",
         )
-        return assemble(channels, audio, diarize=diarize, language=language)
+        return assemble(channels, audio, diarize=diarize, language=language,
+                        options=self.options)
 
-    def _decode(self, audio: np.ndarray) -> tuple[list[Segment], str]:
+    def _decode(  # pylint: disable=too-many-locals
+            self, audio: np.ndarray) -> tuple[list[Segment], str]:
         """Upload 16 kHz mono audio once; return its segments and language."""
         duration = len(audio) / SAMPLE_RATE
 

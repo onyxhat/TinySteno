@@ -1,7 +1,7 @@
 """Tests for removing lines Whisper invents in silence or noise."""
 import logging
 
-from tinysteno.hygiene import drop_hallucinations
+from tinysteno.hygiene import drop_hallucinations, suppress_bleed
 from tinysteno.transcript import Segment
 
 
@@ -142,3 +142,66 @@ def test_removals_are_logged_with_reason(caplog):
     assert "caption credit" in caplog.text
     assert "Others" in caplog.text
     assert "Please subscribe" in caplog.text
+
+
+def bseg(start, text, speaker):
+    return Segment(start, start + 2.0, text, speaker)
+
+
+def by_speaker(you_level, others_level):
+    return lambda who, _start, _end: you_level if who == "You" else others_level
+
+
+def test_bleed_drops_the_quieter_copy(caplog):
+    mic = [bseg(10.2, "so the release slips to the twenty first", "You")]
+    system = [bseg(10.0, "So the release slips to the twenty-first.", "Others")]
+    with caplog.at_level(logging.INFO, logger="tinysteno.hygiene"):
+        kept_mic, kept_system = suppress_bleed(mic, system, rms=by_speaker(0.02, 0.3))
+    assert kept_mic == [] and kept_system == system
+    assert "speaker bleed" in caplog.text and "speaker=You" in caplog.text
+
+
+def test_bleed_keeps_the_louder_microphone_when_it_is_the_source():
+    mic = [bseg(10.2, "so the release slips to the twenty first", "You")]
+    system = [bseg(10.0, "So the release slips to the twenty-first.", "Others")]
+    kept_mic, kept_system = suppress_bleed(mic, system, rms=by_speaker(0.3, 0.02))
+    assert kept_mic == mic and kept_system == []
+
+
+def test_bleed_tie_drops_the_microphone_copy():
+    mic = [bseg(10.0, "so the release slips to the twenty first", "You")]
+    system = [bseg(10.0, "So the release slips to the twenty-first.", "Others")]
+    kept_mic, kept_system = suppress_bleed(mic, system, rms=by_speaker(0.1, 0.1))
+    assert kept_mic == [] and kept_system == system
+
+
+def test_different_sentences_close_in_time_are_both_kept():
+    mic = [bseg(10.0, "I will send the budget spreadsheet tomorrow", "You")]
+    system = [bseg(10.5, "The customer asked about the renewal date", "Others")]
+    assert suppress_bleed(mic, system, rms=by_speaker(0.02, 0.3)) == (mic, system)
+
+
+def test_same_words_more_than_three_seconds_apart_are_both_kept():
+    mic = [bseg(10.0, "so the release slips to the twenty first", "You")]
+    system = [bseg(13.5, "So the release slips to the twenty-first.", "Others")]
+    assert suppress_bleed(mic, system, rms=by_speaker(0.02, 0.3)) == (mic, system)
+
+
+def test_short_echoed_agreement_is_never_bleed():
+    mic, system = [bseg(5.0, "Sounds good.", "You")], [bseg(5.4, "Sounds good.", "Others")]
+    assert suppress_bleed(mic, system, rms=lambda *_: 0.1) == (mic, system)
+
+
+def test_each_segment_pairs_at_most_once():
+    text = "so the release slips to the twenty first"
+    mic = [bseg(10.0, text, "You")]
+    system = [bseg(10.1, text, "Others"), bseg(10.2, text, "Others")]
+    kept_mic, kept_system = suppress_bleed(mic, system, rms=by_speaker(0.02, 0.3))
+    assert kept_mic == [] and kept_system == system
+
+
+def test_bleed_does_not_mutate_inputs():
+    mic = [bseg(10.2, "so the release slips to the twenty first", "You")]
+    system = [bseg(10.0, "So the release slips to the twenty-first.", "Others")]
+    suppress_bleed(mic, system, rms=by_speaker(0.02, 0.3))
+    assert len(mic) == 1 and len(system) == 1

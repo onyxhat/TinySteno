@@ -6,6 +6,7 @@ from tinysteno.transcript import (
     OTHERS,
     YOU,
     Segment,
+    TranscriptOptions,
     assemble,
     interleave,
     is_silent,
@@ -93,3 +94,25 @@ def test_is_silent(level, silent):
 
 def test_is_silent_empty_array():
     assert is_silent(np.array([], dtype=np.float32)) is True
+
+
+def test_assemble_applies_filters_by_default_and_not_when_disabled():
+    def seg(start, text):
+        return Segment(start, start + 2.0, text)
+
+    channels = {YOU: [seg(1.1, "we should move the launch to friday")],
+                OTHERS: [seg(1.0, "We should move the launch to Friday.")]}
+    audio = {YOU: np.full(64000, 0.01, dtype=np.float32),
+             OTHERS: np.full(64000, 0.2, dtype=np.float32)}
+    assert assemble(channels, audio, diarize=True, language="en")["diarised_text"] \
+        == "[Others] We should move the launch to Friday."
+    off = TranscriptOptions(drop_hallucinations=False, suppress_bleed=False)
+    assert len(assemble(channels, audio, diarize=True, language="en", options=off)["segments"]) == 2
+
+
+def test_assemble_drops_credits_per_channel_but_still_warns_for_loud_empty_channel():
+    channels = {YOU: [Segment(0.0, 1.0, "Thanks for watching!")], OTHERS: []}
+    audio = {YOU: LOUD, OTHERS: LOUD}
+    result = assemble(channels, audio, diarize=True, language="en")
+    assert result["segments"] == []
+    assert result["warnings"] == ["System audio was present but no speech was recognised."]

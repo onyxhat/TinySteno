@@ -1,11 +1,14 @@
-"""Remove lines Whisper invents when given silence or noise."""
+"""Remove lines Whisper invents in silence, and speaker audio heard on both channels."""
+from __future__ import annotations
+
 import logging
 import re
 import statistics
 from collections import Counter
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
-from tinysteno.transcript import Segment
+if TYPE_CHECKING:  # transcript.assemble imports this module, so avoid a runtime cycle
+    from tinysteno.transcript import Segment
 
 logger = logging.getLogger(__name__)
 
@@ -107,3 +110,63 @@ def drop_hallucinations(
     repeats are never removed because they cannot be told from real short replies.
     """
     return _drop_stranded_repeats(_drop_stuck_runs(_drop_credits(segments)), rms)
+
+
+_BLEED_WINDOW = 3.0
+_BLEED_SIMILARITY = 0.5
+_BLEED_MIN_CHARS = 15
+
+
+def _token_similarity(a: str, b: str) -> float:
+    first, second = set(_normalise(a).split()), set(_normalise(b).split())
+    union = first | second
+    return len(first & second) / len(union) if union else 0.0
+
+
+def _bleed_partner(seg: Segment, mic: list[Segment], paired: set[int]) -> int | None:
+    best = None
+    for i, other in enumerate(mic):
+        if i in paired or abs(other.start - seg.start) > _BLEED_WINDOW:
+            continue
+        if best is None or abs(other.start - seg.start) < abs(mic[best].start - seg.start):
+            best = i
+    return best
+
+
+def suppress_bleed(
+        mic: list[Segment],
+        system: list[Segment],
+        rms: Callable[[str, float, float], float]) -> tuple[list[Segment], list[Segment]]:
+    """Drop the quieter copy of a sentence transcribed on both channels.
+
+    Speaker audio leaking into the microphone is heard twice. For each system segment the
+    nearest unpaired microphone segment starting within 3 s is its candidate; if both texts
+    are at least 15 characters and their token sets overlap (Jaccard >= 0.5) the copy with the
+    lower `rms(speaker, start, end)` is removed (the microphone copy on a tie). Returns new
+    `(mic, system)` lists; the inputs are untouched.
+    """
+    paired: set[int] = set()
+    drop_mic: set[int] = set()
+    drop_system: set[int] = set()
+    order = sorted(range(len(system)), key=lambda k: system[k].start)
+    for j in order:
+        sys_seg = system[j]
+        i = _bleed_partner(sys_seg, mic, paired)
+        if i is None:
+            continue
+        mic_seg = mic[i]
+        if (len(mic_seg.text.strip()) < _BLEED_MIN_CHARS
+                or len(sys_seg.text.strip()) < _BLEED_MIN_CHARS
+                or _token_similarity(mic_seg.text, sys_seg.text) < _BLEED_SIMILARITY):
+            continue
+        paired.add(i)
+        mic_level = rms(mic_seg.speaker, mic_seg.start, mic_seg.end)
+        sys_level = rms(sys_seg.speaker, sys_seg.start, sys_seg.end)
+        if sys_level < mic_level:
+            drop_system.add(j)
+            _log_removed("speaker bleed", sys_seg)
+        else:
+            drop_mic.add(i)
+            _log_removed("speaker bleed", mic_seg)
+    return ([s for i, s in enumerate(mic) if i not in drop_mic],
+            [s for j, s in enumerate(system) if j not in drop_system])

@@ -14,6 +14,7 @@ from typing import Optional
 from tinysteno.recorder import AudioRecorder
 from tinysteno.api_transcriber import ApiTranscriber
 from tinysteno.transcriber import Transcriber, WhisperTranscriber
+from tinysteno.transcript import TranscriptOptions
 from tinysteno.orchestrator import Orchestrator
 from tinysteno.obsidian import ObsidianExporter
 from tinysteno.session import (
@@ -55,6 +56,8 @@ def load_config() -> dict:
             "whisper_api_model": "whisper-1",
             "whisper_vad": True,
             "whisper_prompt": "",
+            "hallucination_filter": True,
+            "bleed_filter": True,
             "diarization": False,
             "auto_title": True,
             "auto_tags": True,
@@ -134,12 +137,17 @@ def create_transcriber(config: dict) -> Transcriber:
     prompt = config.get("whisper_prompt", "")
     if not isinstance(prompt, str):
         prompt = ""
+    options = TranscriptOptions(
+        drop_hallucinations=bool(config.get("hallucination_filter", True)),
+        suppress_bleed=bool(config.get("bleed_filter", True)),
+    )
     if backend == "api":
         return ApiTranscriber(
             api_key=config.get("whisper_api_key") or config["api_key"],
             base_url=config.get("whisper_base_url") or config.get("base_url"),
             model=config.get("whisper_api_model", "whisper-1"),
             prompt=prompt,
+            options=options,
         )
     return WhisperTranscriber(
         model_size=config.get("whisper_model", "small"),
@@ -147,6 +155,7 @@ def create_transcriber(config: dict) -> Transcriber:
         compute_type=config.get("whisper_compute_type", "auto"),
         vad=config.get("whisper_vad", True),
         prompt=prompt,
+        options=options,
     )
 
 

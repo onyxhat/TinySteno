@@ -17,6 +17,7 @@ from tinysteno.main import (
 )
 from tinysteno.main import cmd_tui as run_cmd_tui
 from tinysteno.personas import Persona
+from tinysteno.transcript import TranscriptOptions
 
 
 def _write_config(path: Path) -> None:
@@ -59,6 +60,25 @@ def test_create_transcriber_passes_prompt_to_api_backend():
         create_transcriber({"transcription_backend": "api", "api_key": "k",
                             "whisper_prompt": "Acme"})
     assert cls.call_args.kwargs["prompt"] == "Acme"
+
+
+def test_create_transcriber_maps_filter_switches_for_both_backends():
+    with patch("tinysteno.main.WhisperTranscriber") as cls:
+        create_transcriber({})
+        assert cls.call_args.kwargs["options"] == TranscriptOptions(True, True)
+        create_transcriber({"hallucination_filter": False, "bleed_filter": False})
+        assert cls.call_args.kwargs["options"] == TranscriptOptions(False, False)
+    with patch("tinysteno.main.ApiTranscriber") as cls:
+        create_transcriber({"transcription_backend": "api", "api_key": "k",
+                            "bleed_filter": False})
+    assert cls.call_args.kwargs["options"] == TranscriptOptions(True, False)
+
+
+def test_default_config_includes_filter_switches(tmp_path):
+    with patch.object(Path, "home", return_value=tmp_path):
+        with patch("tinysteno.main.seed_builtin_personas"):
+            config = load_config()
+    assert config["hallucination_filter"] is True and config["bleed_filter"] is True
 
 
 def test_default_config_includes_vad_and_prompt(tmp_path):
