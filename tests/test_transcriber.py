@@ -67,13 +67,36 @@ def _transcribe(
     return (result, model) if return_model else result
 
 
-def _make_transcriber(model_size="tiny"):
+def _make_transcriber(model_size="tiny", **options):
     with patch("tinysteno.transcriber.WhisperModel") as mock_wm:
         mock_wm.return_value = MagicMock()
         from tinysteno.transcriber import WhisperTranscriber
 
-        t = WhisperTranscriber(model_size=model_size)
+        t = WhisperTranscriber(model_size=model_size, **options)
     return t
+
+
+def _decode_kwargs(**options):
+    """Run one decode on a fake model; return the keyword arguments it was given."""
+    t = _make_transcriber(**options)
+    t._model.transcribe.return_value = (iter([]), MagicMock(language="en"))
+    t._decode(np.zeros(16000, dtype=np.float32), None)
+    return t._model.transcribe.call_args.kwargs
+
+
+def test_decode_uses_vad_and_prompt_by_default_settings():
+    kwargs = _decode_kwargs(vad=True, prompt="Kubernetes, Priya")
+    assert kwargs["vad_filter"] is True and kwargs["initial_prompt"] == "Kubernetes, Priya"
+
+
+def test_decode_without_prompt_passes_none():
+    kwargs = _decode_kwargs(vad=False, prompt="")
+    assert kwargs["initial_prompt"] is None and kwargs["vad_filter"] is False
+
+
+def test_decode_defaults_enable_vad_and_no_prompt():
+    kwargs = _decode_kwargs()
+    assert kwargs["vad_filter"] is True and kwargs["initial_prompt"] is None
 
 
 def test_resample_uses_scipy_not_np_interp():

@@ -139,8 +139,13 @@ class WhisperTranscriber:
         model_size: str = "small",
         device: str = "auto",
         compute_type: str = "auto",
+        *,
+        vad: bool = True,
+        prompt: str = "",
     ):
         self.model_size = model_size
+        self.vad = vad
+        self.prompt = prompt
 
         # Resolve "auto" to detected hardware once.
         if device == "auto" or compute_type == "auto":
@@ -202,7 +207,12 @@ class WhisperTranscriber:
     ) -> tuple[list[Segment], str]:
         """Run one Whisper pass over 16 kHz mono audio; return segments and language."""
         duration = len(audio) / SAMPLE_RATE
-        raw_segments, info = self._model.transcribe(audio, beam_size=5)
+        raw_segments, info = self._model.transcribe(
+            audio,
+            beam_size=5,
+            vad_filter=self.vad,
+            initial_prompt=self.prompt or None,
+        )
         segments = []
         for seg in raw_segments:
             text = seg.text.strip()

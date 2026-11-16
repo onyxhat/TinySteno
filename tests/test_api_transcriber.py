@@ -299,6 +299,21 @@ def test_request_has_only_model_file_and_format(mock_openai, tmp_path):
     assert kwargs["response_format"] == "verbose_json"
 
 
+def test_api_request_carries_prompt_only_when_set(mock_openai, tmp_path):
+    """A vocabulary prompt is sent as the standard prompt field; none, no field."""
+    _, client = mock_openai
+    client.audio.transcriptions.create.return_value = _response("a", [_seg(0.0, "a")])
+    ApiTranscriber(api_key="k", prompt="Kubernetes, Priya").transcribe(
+        _write(tmp_path, stereo=False)
+    )
+    kwargs = client.audio.transcriptions.create.call_args.kwargs
+    assert kwargs["prompt"] == "Kubernetes, Priya"
+
+    client.audio.transcriptions.create.reset_mock()
+    ApiTranscriber(api_key="k", prompt="").transcribe(_write(tmp_path, stereo=False))
+    assert "prompt" not in client.audio.transcriptions.create.call_args.kwargs
+
+
 def test_malformed_start_falls_back_to_one_segment(mock_openai, tmp_path):
     """A non-numeric start makes the channel untimed; its text is still kept."""
     _, client = mock_openai

@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 from tinysteno.main import (
-    cmd_record, cmd_setup, load_config, main, _process_audio, _validate_config,
+    cmd_record, cmd_setup, create_transcriber, load_config, main, _process_audio, _validate_config,
 )
 from tinysteno.main import cmd_tui as run_cmd_tui
 from tinysteno.personas import Persona
@@ -36,6 +36,36 @@ def _write_config(path: Path) -> None:
         "persona": "default",
     }
     path.write_text(yaml.dump(config))
+
+
+def test_create_transcriber_reads_vad_and_prompt_from_config():
+    with patch("tinysteno.main.WhisperTranscriber") as cls:
+        create_transcriber({"whisper_vad": False, "whisper_prompt": "Acme"})
+    assert cls.call_args.kwargs["vad"] is False and cls.call_args.kwargs["prompt"] == "Acme"
+
+
+def test_create_transcriber_defaults_and_ignores_non_string_prompt():
+    with patch("tinysteno.main.WhisperTranscriber") as cls:
+        create_transcriber({})
+        assert cls.call_args.kwargs["vad"] is True and cls.call_args.kwargs["prompt"] == ""
+        create_transcriber({"whisper_prompt": None})
+        assert cls.call_args.kwargs["prompt"] == ""
+        create_transcriber({"whisper_prompt": 42})
+        assert cls.call_args.kwargs["prompt"] == ""
+
+
+def test_create_transcriber_passes_prompt_to_api_backend():
+    with patch("tinysteno.main.ApiTranscriber") as cls:
+        create_transcriber({"transcription_backend": "api", "api_key": "k",
+                            "whisper_prompt": "Acme"})
+    assert cls.call_args.kwargs["prompt"] == "Acme"
+
+
+def test_default_config_includes_vad_and_prompt(tmp_path):
+    with patch.object(Path, "home", return_value=tmp_path):
+        with patch("tinysteno.main.seed_builtin_personas"):
+            config = load_config()
+    assert config["whisper_vad"] is True and config["whisper_prompt"] == ""
 
 
 def test_load_config_seeds_personas_when_dir_absent(tmp_path):

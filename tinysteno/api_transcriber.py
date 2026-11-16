@@ -30,8 +30,10 @@ class ApiTranscriber:
         api_key: str = "",
         base_url: str = "",
         model: str = "whisper-1",
+        prompt: str = "",
     ) -> None:
         self.model = model
+        self.prompt = prompt
         kwargs: dict = {"api_key": api_key, "timeout": 180.0}
         if base_url:
             kwargs["base_url"] = base_url
@@ -82,12 +84,14 @@ class ApiTranscriber:
             tmp_path = tmp.name
             sf.write(tmp_path, audio, SAMPLE_RATE)
 
+        extra = {"prompt": self.prompt} if self.prompt else {}
         try:
             with open(tmp_path, "rb") as audio_file:
                 response = self._client.audio.transcriptions.create(
                     model=self.model,
                     file=audio_file,
                     response_format="verbose_json",
+                    **extra,
                 )
         finally:
             Path(tmp_path).unlink(missing_ok=True)

@@ -53,6 +53,8 @@ def load_config() -> dict:
             "whisper_api_key": "",
             "whisper_base_url": "",
             "whisper_api_model": "whisper-1",
+            "whisper_vad": True,
+            "whisper_prompt": "",
             "diarization": False,
             "auto_title": True,
             "auto_tags": True,
@@ -129,16 +131,22 @@ def _non_negative_minutes(value: str) -> float:
 def create_transcriber(config: dict) -> Transcriber:
     """Factory: build the appropriate transcriber backend from config."""
     backend = config.get("transcription_backend", "local")
+    prompt = config.get("whisper_prompt", "")
+    if not isinstance(prompt, str):
+        prompt = ""
     if backend == "api":
         return ApiTranscriber(
             api_key=config.get("whisper_api_key") or config["api_key"],
             base_url=config.get("whisper_base_url") or config.get("base_url"),
             model=config.get("whisper_api_model", "whisper-1"),
+            prompt=prompt,
         )
     return WhisperTranscriber(
         model_size=config.get("whisper_model", "small"),
         device=config.get("whisper_device", "auto"),
         compute_type=config.get("whisper_compute_type", "auto"),
+        vad=config.get("whisper_vad", True),
+        prompt=prompt,
     )
 
 
