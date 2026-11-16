@@ -59,3 +59,8 @@ Built-in personas live in `tinysteno/personas/<slug>/`, each with `persona.yaml`
 - Transcript clean-up (hallucinated lines, speaker bleed) lives in `tinysteno/hygiene.py` and runs
   inside `transcript.assemble()` for both backends. Its thresholds are deliberate (see the
   constants and `tests/test_hygiene.py`); do not tune them without audio evidence.
+- The optional speaker split (`speaker_split`, off by default) relabels the remote channel via
+  `tinysteno/sherpa_diarizer.py`. `sherpa_onnx` is an optional extra (`diarize`) and is imported
+  lazily, inside functions; `tinysteno.main`, `transcriber` and `transcript` must import without
+  it. The policy constants in `tinysteno/speaker_split.py` are deliberate (see `tests/`); do not
+  tune them without audio evidence.

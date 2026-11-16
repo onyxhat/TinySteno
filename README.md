@@ -13,6 +13,7 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 - Transcribe with faster-whisper (local CPU/GPU) or OpenAI Whisper API
 - GPU auto-detection — CUDA, with a CPU fallback (Apple Silicon runs on the CPU)
 - Stereo diarization — `[You]` / `[Others]` labels when system audio is captured
+- Optional, best-effort speaker split of the remote side (`Speaker 2`, `Speaker 3`, ...), off by default; see "Speaker split (optional)"
 - Summarize via OpenAI-compatible API (Ollama, OpenAI, OpenRouter, etc.)
 - Handles long transcripts automatically — splits into chunks sized to the model's context window, summarizes each, then merges
 - Timestamped transcript lines, and clean-up of lines Whisper invents in silence and of speaker audio picked up by the microphone
@@ -93,6 +94,9 @@ tinysteno process recordings/Meeting.wav --notes agenda.txt
 
 # Transcribe again instead of reusing the saved transcript
 tinysteno process recordings/Meeting.wav --retranscribe
+
+# Expect at most 3 voices on the remote side (also on `record` and `tui`; needs speaker_split)
+tinysteno process recordings/Meeting.wav --speakers 3
 
 # Verify setup
 tinysteno test
@@ -300,11 +304,19 @@ whisper_prompt: ""
 hallucination_filter: true  # drop caption credits and repeats Whisper invents in silence
 bleed_filter: true          # drop the quieter copy of a sentence heard on both channels
 
+# Speaker split, see "Speaker split (optional)" below
+speaker_split: false        # best-effort split of the remote side into Speaker 2, 3, ...;
+                            # only does anything when diarization is also true
+# max_speakers: 4           # optional cap on the voices kept (a whole number >= 1);
+                            # the same as --speakers N
+
 # API endpoint for remote transcription
 # Uses the same base_url/api_key as the summarizer if not set
 # whisper_base_url: "https://api.openai.com/v1"
 # whisper_api_key: "sk-..."
 # whisper_api_model: "whisper-1"
+whisper_api_timeout: 600    # seconds each transcription request may take (a positive number)
+whisper_api_diarize: false  # ask a WhisperX-style server for speaker labels; see below
 
 # Feature flags
 diarization: false          # add [You]/[Others] speaker labels; both channels are
@@ -389,11 +401,56 @@ What it can get wrong: two people genuinely saying the same long sentence at the
 
 Set `hallucination_filter: false` and/or `bleed_filter: false` in `config.yaml` to switch either off. The filters run when a recording is transcribed. A transcript saved earlier (see below) was made with the filter settings of that time, so changing either filter makes TinySteno transcribe the recording again rather than reuse it.
 
+### Speaker split (optional)
+
+By default the transcript has two voices: `You` (the microphone) and `Others` (everything that came through system audio). With `speaker_split: true` TinySteno also tries to tell the people on the remote side apart and labels them `Others`, `Speaker 2`, `Speaker 3` and so on, so a summary can keep what different people said apart. It is off by default and it is a best-effort split: it works from the sound of the voices alone, it never knows names, and it can be wrong.
+
+```
+[00:00:03] [You] I think we should go with option A.
+[00:00:07] [Others] That makes sense, let's proceed.
+[00:00:09] [Speaker 2] I agree, and the budget supports it.
+```
+
+**Setup.** The separation uses the optional `diarize` extra, which is not installed by default:
+
+```bash
+pip install "tinysteno[diarize]"      # or, from a checkout: uv sync --extra diarize
+```
+
+Then set `speaker_split: true` in `config.yaml`. It does something only when `diarization` (the speaker labels) is also `true`. With `speaker_split: true` and `diarization: false` nothing is split, no models are downloaded and no warning is shown, because there are no labels to change.
+
+**First use.** The first time a recording is split, TinySteno downloads two model files from GitHub (sherpa-onnx releases) into `~/.tinysteno/models/diarize/`, roughly 40 MB in all: the pyannote segmentation model (`sherpa-onnx-pyannote-segmentation-3-0.tar.bz2`, unpacked to `model.onnx`) and the speaker-embedding model (`3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx`). Downloads are HTTPS only, refuse a file over 100 MB and are checked against pinned SHA-256 checksums before they are used; a download that fails or does not match leaves nothing behind. Later runs reuse the files and need no network. If the extra is not installed, the download fails or a checksum does not match, the transcript keeps its plain `You` / `Others` labels and the note gets a `## Processing warnings` entry with the reason (for the missing extra, the `pip install` line above). Any other failure of the separation does the same, with the entry "Speaker separation failed; channel labels were used."
+
+**Which voices are split.**
+
+- On a call, only the remote side (the system audio channel) is split. The microphone is never split on a recording that has system audio: it stays `You`.
+- The microphone is split only when there is no remote speech to split: no system audio was captured, or nothing was recognised on it.
+- A single-channel recording (for example a file you pass to `tinysteno process`) is split as one channel, and its most-heard voice is labelled `You`. That may not be the person who made the recording, for instance if you are processing someone else's file.
+- On the split channel the voice heard most keeps the plain label (`Others`, or `You` on a single channel); the others are `Speaker 2`, `Speaker 3`, ... numbered by how much they spoke.
+
+**What it can get wrong.** It is a split by voice, not a recognition of people.
+
+- A one-to-one call stays `You` / `Others`. When one voice has 93% or more of the speech on the channel, TinySteno assumes the split is wrong and keeps the plain labels.
+- A participant who speaks little and in short turns can be folded into the main voice: a voice with under 1 second of speech in total is discarded, and so is one with under 10% of the speech whose turns average under 3 seconds.
+- One person can be split into two labels (a different microphone or tone, a laugh, a cough), and two people with similar voices can be merged. Labels are always `Speaker 2`, `Speaker 3`, ..., never names, and they are not stable between recordings.
+- Overlapping speech goes to whichever voice is heard most in that line, and a line is never split between two speakers. Someone who speaks over a speaker on the remote side is not separated.
+- Recordings under 30 seconds of audio on the channel are not split, and no warning is given. The same goes for a channel with no recognised speech.
+
+When the summary is generated, the model is told that numbered speakers are separated automatically and approximately, and not to assign an action to one unless the transcript names them.
+
+**Time.** Local separation runs after the transcription, on one channel, and adds processing time after the meeting; the more audio, the longer it takes. The progress bar spends its last 30% on it.
+
+**`--speakers N`.** `record`, `process` and `tui` take `--speakers N` (and `max_speakers` sets the same thing in `config.yaml`), meaning "at most N voices on the split channel". It is a cap applied after the voices are found, not a count to look for: if more than N voices are found, the ones who spoke least are folded into the nearest remaining voice in time. `--speakers 1` turns the split off for that run. It does nothing when `speaker_split` is off, and it must be a whole number of at least 1.
+
+**A WhisperX-style server.** With `transcription_backend: api`, `whisper_api_diarize: true` asks the server to label speakers itself instead of using the local separation (so the extra and the models are not needed). TinySteno then uploads the remote channel with two extra form fields, `diarize: true` and, when `--speakers`/`max_speakers` is above 1, `max_speakers`. These fields are not part of the OpenAI API: an ordinary OpenAI-compatible server may reject them. If the server answers 400 or 422, TinySteno sends the same audio again without them, uses the plain channel labels (the local separation is not tried) and adds the warning "The transcription server rejected speaker separation; channel labels were used." A server that accepts the fields but returns no speaker labels leaves the plain labels without a warning. The server's labels go through the same checks as the local ones (including the 93% and short-turn rules above), and with this option on the whole call still needs `speaker_split: true` and `diarization: true`. `whisper_api_timeout` (default 600) is how many seconds each transcription request may take, for every API request and not only this one; raise it for a long recording on a slow server.
+
+Any failure leaves the transcript with its `You` / `Others` labels exactly as they would be with the split off. With `speaker_split: false` nothing changes from before.
+
 ### Notes for the summary
 
 `--notes PATH` on `record`, `process` or `tui` reads a UTF-8 text file (an agenda, names, what you care about) and passes its contents to the LLM as information about the meeting, between `<notes>` tags, with an instruction to treat it as information and never as instructions. It is not copied into the note. A missing or unreadable file is an error before anything is recorded or processed.
 
-In the summary request the model is also told the meeting date (so "tomorrow" can be resolved), what `[You]` and `[Others]` mean when diarization is on (or, when it is off, not to guess who said what), that lines start with `[hh:mm:ss]` when timestamps are on, and to keep proposals, open points and decisions distinct. The generated title and tags are based on the summary, not the transcript.
+In the summary request the model is also told the meeting date (so "tomorrow" can be resolved), what `[You]` and `[Others]` mean when diarization is on (or, when it is off, not to guess who said what), that `Speaker 2` and further voices, when the speaker split produced them, are approximate, that lines start with `[hh:mm:ss]` when timestamps are on, and to keep proposals, open points and decisions distinct. The generated title and tags are based on the summary, not the transcript.
 
 ### Saved transcripts
 
@@ -402,7 +459,7 @@ After transcribing, TinySteno writes the transcript as JSON beside the recording
 It exists so that retrying after a failed summary, export or LLM outage does not transcribe again. `tinysteno process` and the TUI (including its retry after a failed stage) reuse it only when all of these hold:
 
 - it is no older than the recording, and the recording is the same size as when it was transcribed;
-- the settings that shape a transcript are unchanged: `transcription_backend`, the model (`whisper_model` for the local backend, `whisper_api_model` for the API), `whisper_prompt`, `whisper_vad`, `hallucination_filter` and `bleed_filter`;
+- the settings that shape a transcript are unchanged: `transcription_backend`, the model (`whisper_model` for the local backend, `whisper_api_model` for the API), `whisper_prompt`, `whisper_vad`, `hallucination_filter` and `bleed_filter`, and whether the speaker split is in effect (`speaker_split` with `diarization`), with `max_speakers` and, on the API backend, `whisper_api_diarize` when it is. Changing those transcribes again instead of reusing old labels; while the split is off (or `diarization` is off), `speaker_split` and `max_speakers` do not matter;
 - it is of the current file format and passes validation.
 
 A missing file, one from an earlier format version, or one that fails validation is ignored and the recording is transcribed afresh (and the file rewritten). Pass `--retranscribe` to `tinysteno process` to force a fresh transcription, or delete the file. `transcript_timestamps` and `diarization` are applied when the note is rendered, so changing them does not need a new transcription.
@@ -469,6 +526,7 @@ The API backend supports the same features as the local backend:
 - Mono transcription
 - Stereo transcription: each channel is uploaded once, whether or not diarization is on (diarization only adds the `[You]` / `[Others]` labels)
 - Interleaved speakers from the server's returned segments; if the server returns no segments, one block per speaker
+- Optional speaker split, by the local separation or by a WhisperX-style server (`whisper_api_diarize`); see "Speaker split (optional)"
 - Language detection fallback
 - Progress callbacks
 
