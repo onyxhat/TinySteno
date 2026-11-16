@@ -237,6 +237,7 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
     persona: Persona,
     timestamp: datetime,
     notes: str = "",
+    retranscribe: bool = False,
 ) -> None:
     """Shared pipeline: transcribe → summarize → export, with Rich progress."""
     from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
@@ -255,6 +256,7 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
                 exporter_cls=ObsidianExporter,
                 reporter=_RichReporter(progress),
                 notes=notes,
+                retranscribe=retranscribe,
             )
         except PipelineError as err:
             cause = err.__cause__
@@ -422,7 +424,8 @@ def cmd_process(args, config):
 
     logger = logging.getLogger(__name__)
     _process_audio(
-        str(audio_file), args.name or None, config, logger, persona, timestamp, notes=notes)
+        str(audio_file), args.name or None, config, logger, persona, timestamp, notes=notes,
+        retranscribe=getattr(args, "retranscribe", False))
 
 
 def cmd_list(args):
@@ -831,6 +834,9 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     process_parser.add_argument("--persona", help="Persona slug to use for this audio file")
     process_parser.add_argument(
         "--notes", metavar="PATH", help="Text file of your own notes for the summary (UTF-8)")
+    process_parser.add_argument(
+        "--retranscribe", action="store_true",
+        help="Transcribe again even if a saved transcript sits beside the recording")
     process_parser.add_argument("--verbose", action="store_true", help="Verbose output")
     process_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
     process_parser.add_argument("--whisper-device", help="Whisper device (cpu, cuda, auto)")

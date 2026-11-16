@@ -1,4 +1,7 @@
 """Tests for transcript segments and the shared assembly path."""
+import json
+import os
+
 import numpy as np
 import pytest
 
@@ -10,9 +13,12 @@ from tinysteno.transcript import (
     assemble,
     interleave,
     is_silent,
+    load_transcript,
     labelled_text,
     plain_text,
     render_transcript,
+    save_transcript,
+    sidecar_path,
 )
 
 LOUD = np.full(32000, 0.1, dtype=np.float32)
@@ -170,3 +176,89 @@ def test_render_mono_segment_has_no_speaker_prefix():
 def test_render_hours_are_not_truncated():
     assert render_transcript([Segment(360000.0, 360001.0, "x")], labels=False, timestamps=True) \
         == "[100:00:00] x"
+
+
+RESULT = {
+    "text": "hello there",
+    "diarised_text": "[You] hello\n[Others] there",
+    "duration_seconds": 12.5,
+    "detected_language": "en",
+    "segments": [Segment(0.0, 1.0, "hello", YOU), Segment(1.0, 2.0, "there", OTHERS)],
+    "warnings": ["System audio was present but no speech was recognised."],
+}
+
+
+def _wav(tmp_path):
+    wav = tmp_path / "Meeting-1.wav"
+    wav.write_bytes(b"RIFF")
+    return wav
+
+
+def test_sidecar_sits_beside_the_wav(tmp_path):
+    assert sidecar_path(str(tmp_path / "Meeting-1.wav")) == tmp_path / "Meeting-1.transcript.json"
+
+
+def test_save_then_load_round_trips(tmp_path):
+    wav = _wav(tmp_path)
+    save_transcript(str(wav), RESULT)
+    loaded = load_transcript(str(wav))
+    assert loaded["segments"] == RESULT["segments"]
+    assert loaded["warnings"] == RESULT["warnings"]
+    assert loaded["duration_seconds"] == 12.5 and loaded["detected_language"] == "en"
+    assert loaded["text"] == "hello there"
+    assert loaded["diarised_text"] == "[You] hello\n[Others] there"
+    assert json.loads(sidecar_path(str(wav)).read_text(encoding="utf-8"))["version"] == 1
+    assert [p.name for p in tmp_path.iterdir()] == ["Meeting-1.transcript.json", "Meeting-1.wav"]
+
+
+def test_sidecar_older_than_the_wav_is_ignored(tmp_path):
+    wav = _wav(tmp_path)
+    save_transcript(str(wav), RESULT)
+    os.utime(sidecar_path(str(wav)), (1, 1))
+    assert load_transcript(str(wav)) is None
+
+
+def test_corrupt_sidecar_is_ignored(tmp_path):
+    wav = _wav(tmp_path)
+    sidecar_path(str(wav)).write_text("{not json", encoding="utf-8")
+    assert load_transcript(str(wav)) is None
+
+
+def test_unknown_version_is_ignored(tmp_path):
+    wav = _wav(tmp_path)
+    save_transcript(str(wav), RESULT)
+    path = sidecar_path(str(wav))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["version"] = 2
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert load_transcript(str(wav)) is None
+
+
+def test_malformed_segments_are_ignored(tmp_path):
+    wav = _wav(tmp_path)
+    sidecar_path(str(wav)).write_text(
+        json.dumps({"version": 1, "segments": [{"start": "x"}]}), encoding="utf-8")
+    assert load_transcript(str(wav)) is None
+
+
+def test_missing_wav_or_sidecar_loads_nothing(tmp_path):
+    assert load_transcript(str(tmp_path / "none.wav")) is None
+    save_transcript(str(tmp_path / "none.wav"), RESULT)
+    assert load_transcript(str(tmp_path / "none.wav")) is None
+
+
+def test_result_without_segments_is_not_saved(tmp_path):
+    wav = _wav(tmp_path)
+    save_transcript(str(wav), {"text": "x"})
+    assert not sidecar_path(str(wav)).exists()
+
+
+def test_save_failure_is_ignored_and_leaves_no_temp_file(tmp_path, monkeypatch):
+    wav = _wav(tmp_path)
+
+    def boom(*_args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", boom)
+    save_transcript(str(wav), RESULT)
+    assert [p.name for p in tmp_path.iterdir()] == ["Meeting-1.wav"]

@@ -8,7 +8,7 @@ import pytest
 
 from tinysteno.personas import Persona
 from tinysteno.pipeline import (
-    PipelineError, PipelineResult, Stage, _extract_summary_text, run_pipeline)
+    PipelineError, PipelineResult, Stage, run_pipeline, summary_digest)
 from tinysteno.transcript import Segment
 
 
@@ -82,7 +82,7 @@ def _exporter_cls():
 def _run(  # pylint: disable=too-many-arguments
         tmp_path, *, name=None, text="hello there", config_overrides=None,
          reporter=None, orchestrator_cls=None, exporter_cls=None, warnings=None,
-         segments=None, **kwargs):
+         segments=None, wav_path="x.wav", transcriber=None, **kwargs):
     config = {
         "api_key": "k", "base_url": "u", "model": "m", "auto_title": True,
         "auto_tags": True, "obsidian_vault": str(tmp_path),
@@ -90,8 +90,8 @@ def _run(  # pylint: disable=too-many-arguments
     }
     config.update(config_overrides or {})
     return run_pipeline(
-        "x.wav", name, config, _persona(), datetime(2024, 1, 1),
-        transcriber=FakeTranscriber(text, warnings, segments),
+        wav_path, name, config, _persona(), datetime(2024, 1, 1),
+        transcriber=transcriber or FakeTranscriber(text, warnings, segments),
         orchestrator_cls=orchestrator_cls or _orchestrator_cls(),
         exporter_cls=exporter_cls or _exporter_cls(),
         reporter=reporter,
@@ -191,19 +191,86 @@ def test_no_speech_result_carries_transcriber_warnings(tmp_path):
     assert result.no_speech and result.warnings == (TRANSCRIBER_WARNING,)
 
 
-def test_summary_text_is_the_longest_string_field():
-    persona = _persona()
-    persona.schema = {"ceremony_type": {"type": "string", "description": "x"},
-                      "overview": {"type": "string", "description": "x"}}
-    data = {"ceremony_type": "Review", "overview": "We reviewed the sprint."}
-    assert _extract_summary_text(persona, data) == "We reviewed the sprint."
+PERSONA_SCHEMA = {
+    "ceremony_type": {"type": "string", "description": "x"},
+    "overview": {"type": "string", "description": "x"},
+    "action_items": {"type": "list", "description": "x"},
+}
 
 
-def test_summary_text_ties_go_to_the_earlier_field():
+def test_digest_covers_strings_then_lists_and_is_bounded():
     persona = _persona()
-    persona.schema = {"a": {"type": "string", "description": "x"},
-                      "b": {"type": "string", "description": "x"}}
-    assert _extract_summary_text(persona, {"a": " one ", "b": "two"}) == "one"
+    persona.schema = PERSONA_SCHEMA
+    data = {"overview": "We met.", "ceremony_type": "Review", "action_items": ["Ship it (Priya)"]}
+    assert summary_digest(persona, data) == "Review\nWe met.\nShip it (Priya)"
+    assert len(summary_digest(persona, {"overview": "x" * 9000})) == 4000
+
+
+def test_digest_skips_empty_values_and_is_none_when_nothing_is_left():
+    persona = _persona()
+    persona.schema = PERSONA_SCHEMA
+    assert summary_digest(persona, {"overview": "  ", "action_items": ["", " a "]}) == "a"
+    assert summary_digest(persona, {}) is None
+
+
+class CountingTranscriber(FakeTranscriber):
+    """Fake transcriber that counts calls and returns real segments."""
+
+    def __init__(self):
+        super().__init__("hi there", segments=[Segment(0.0, 1.0, "hi there", "You")])
+        self.calls = 0
+
+    def transcribe(self, path, diarize=False, on_progress=None):
+        self.calls += 1
+        return super().transcribe(path, diarize, on_progress)
+
+
+def _real_wav(tmp_path):
+    wav = tmp_path / "Meeting-1.wav"
+    wav.write_bytes(b"RIFF")
+    return str(wav)
+
+
+def test_second_run_reuses_the_saved_transcript(tmp_path):
+    transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav)
+    result = _run(tmp_path, transcriber=transcriber, wav_path=wav)
+    assert transcriber.calls == 1
+    assert result.duration_seconds == 61.0 and not result.no_speech
+
+
+def test_retranscribe_ignores_the_saved_transcript(tmp_path):
+    transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav, retranscribe=True)
+    assert transcriber.calls == 2
+
+
+def test_reused_transcript_still_reports_the_transcribe_stage(tmp_path):
+    transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav)
+    reporter = RecordingReporter()
+    _run(tmp_path, transcriber=transcriber, wav_path=wav, reporter=reporter)
+    assert reporter.events[:3] == [
+        ("started", Stage.TRANSCRIBE), ("progress", Stage.TRANSCRIBE),
+        ("finished", Stage.TRANSCRIBE)]
+
+
+def test_reused_transcript_keeps_its_warnings(tmp_path):
+    transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
+    transcriber.warnings = [TRANSCRIBER_WARNING]
+    _run(tmp_path, transcriber=transcriber, wav_path=wav)
+    assert _run(tmp_path, transcriber=transcriber, wav_path=wav).warnings == (
+        TRANSCRIBER_WARNING,)
+
+
+def test_a_silent_recording_is_not_transcribed_again(tmp_path):
+    transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
+    transcriber.segments = []
+    transcriber.text = ""
+    assert _run(tmp_path, transcriber=transcriber, wav_path=wav).no_speech
+    assert _run(tmp_path, transcriber=transcriber, wav_path=wav).no_speech
+    assert transcriber.calls == 1
 
 
 def _segment_run(tmp_path, segments, config_overrides=None):

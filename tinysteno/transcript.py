@@ -1,13 +1,21 @@
 """Transcript segments and the single assembly path shared by both backends."""
+import json
+import logging
+import os
+import tempfile
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Callable, Iterable
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 YOU = "You"
 OTHERS = "Others"
 SILENCE_RMS = 0.001
 SAMPLE_RATE = 16000
+SIDECAR_VERSION = 1
 
 _CHANNEL_NAMES = {YOU: "Microphone", OTHERS: "System"}
 
@@ -149,3 +157,77 @@ def assemble(
         "segments": segments,
         "warnings": warnings,
     }
+
+
+def sidecar_path(wav_path: str) -> Path:
+    """Where the saved transcript of a recording lives: `Meeting-1.transcript.json`."""
+    return Path(wav_path).with_suffix(".transcript.json")
+
+
+def save_transcript(wav_path: str, result: dict) -> None:
+    """Write the transcriber result beside the recording, atomically.
+
+    A result without a segment list is not saved. A failure to write is logged and ignored.
+    """
+    segments = result.get("segments")
+    if not isinstance(segments, list):
+        return
+    payload = {
+        "version": SIDECAR_VERSION,
+        "detected_language": result.get("detected_language", ""),
+        "duration_seconds": result.get("duration_seconds", 0.0),
+        "warnings": list(result.get("warnings") or []),
+        "segments": [
+            {"start": seg.start, "end": seg.end, "text": seg.text, "speaker": seg.speaker}
+            for seg in segments
+        ],
+    }
+    target = sidecar_path(wav_path)
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=target.parent, prefix=target.name + ".",
+            suffix=".tmp", delete=False,
+        ) as handle:
+            temp_name = handle.name
+            json.dump(payload, handle, ensure_ascii=False)
+        os.replace(temp_name, target)
+    except OSError as err:
+        logger.warning("Could not save the transcript to %s: %s", target, err)
+        if temp_name:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
+
+
+def load_transcript(wav_path: str) -> dict | None:
+    """The saved transcriber result for a recording, or None when it cannot be trusted.
+
+    None when the sidecar is missing, older than the WAV, of another version or unreadable,
+    and when the WAV itself is missing (there is nothing to compare against).
+    """
+    path = sidecar_path(wav_path)
+    try:
+        if path.stat().st_mtime < Path(wav_path).stat().st_mtime:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data["version"] != SIDECAR_VERSION:
+            return None
+        segments = [
+            Segment(float(item["start"]), float(item["end"]), str(item["text"]),
+                    str(item.get("speaker", "")))
+            for item in data["segments"]
+        ]
+        return {
+            "text": plain_text(segments),
+            "diarised_text": labelled_text(segments),
+            "duration_seconds": float(data["duration_seconds"]),
+            "detected_language": str(data["detected_language"]),
+            "segments": segments,
+            "warnings": [str(text) for text in data["warnings"]],
+        }
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
+        if not isinstance(err, FileNotFoundError):
+            logger.info("Ignoring saved transcript %s: %s", path, err)
+        return None

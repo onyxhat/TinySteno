@@ -12,7 +12,7 @@ from typing import Iterator, Optional, Protocol
 from tinysteno.orchestrator import PromptContext
 from tinysteno.personas import Persona
 from tinysteno.transcriber import Transcriber
-from tinysteno.transcript import render_transcript
+from tinysteno.transcript import load_transcript, render_transcript, save_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -100,24 +100,21 @@ def _merge_warnings(*groups: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(text for group in groups for text in group))
 
 
-def _extract_summary_text(persona: Persona, data: dict) -> Optional[str]:
-    """Extract the best text from summarized data for title/tag generation."""
-    candidates = [
-        value.strip()
-        for field, defn in persona.schema.items()
-        if defn["type"] == "string"
-        for value in [data.get(field, "")]
-        if isinstance(value, str)
-    ]
-    # Longest wins (a one-word field is a poor title source); max keeps the earliest on ties.
-    first_string_value = max(candidates, key=len, default=None)
-    if not first_string_value:
-        all_items: list[str] = []
+def summary_digest(persona: Persona, data: dict, limit: int = 4000) -> Optional[str]:
+    """Every non-empty string field, then every list item, one per line, cut to `limit`.
+
+    Fields and items come in schema order; None when there is nothing to digest.
+    """
+    lines: list[str] = []
+    for kind in ("string", "list"):
         for field, defn in persona.schema.items():
-            if defn["type"] == "list":
-                all_items.extend(data.get(field, []))
-        return ". ".join(all_items) if all_items else None
-    return first_string_value
+            if defn["type"] != kind:
+                continue
+            value = data.get(field)
+            for item in [value] if kind == "string" else value or []:
+                if isinstance(item, str) and item.strip():
+                    lines.append(item.strip())
+    return "\n".join(lines)[:limit] or None
 
 
 @contextmanager
@@ -129,6 +126,25 @@ def _stage(reporter: PipelineReporter, stage: Stage) -> Iterator[None]:
     except Exception as exc:
         raise PipelineError(stage, str(exc)) from exc
     reporter.stage_finished(stage)
+
+
+def _transcript_result(
+    wav_path: str, config: dict, transcriber: Transcriber, reporter: PipelineReporter,
+    retranscribe: bool,
+) -> dict:
+    """The saved transcript when one is usable, else a fresh transcription (which is saved)."""
+    result = None if retranscribe else load_transcript(wav_path)
+    if result is not None:
+        logger.info("Reusing the saved transcript for %s", wav_path)
+        reporter.stage_progress(Stage.TRANSCRIBE, 1.0)
+        return result
+    result = transcriber.transcribe(
+        wav_path,
+        diarize=config.get("diarization", False),
+        on_progress=lambda fraction: reporter.stage_progress(Stage.TRANSCRIBE, fraction),
+    )
+    save_transcript(wav_path, result)
+    return result
 
 
 def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
@@ -143,16 +159,16 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
     exporter_cls: type,
     reporter: Optional[PipelineReporter] = None,
     notes: str = "",
+    retranscribe: bool = False,
 ) -> PipelineResult:
-    """Transcribe, summarize, tag and export a recording, reporting each stage."""
+    """Transcribe, summarize, tag and export a recording, reporting each stage.
+
+    A transcript saved beside the recording is reused unless `retranscribe` is set.
+    """
     reporter = reporter or NullReporter()
 
     with _stage(reporter, Stage.TRANSCRIBE):
-        result = transcriber.transcribe(
-            wav_path,
-            diarize=config.get("diarization", False),
-            on_progress=lambda fraction: reporter.stage_progress(Stage.TRANSCRIBE, fraction),
-        )
+        result = _transcript_result(wav_path, config, transcriber, reporter, retranscribe)
     duration_seconds = result.get("duration_seconds", 0.0)
     logger.debug("Detected language: %s", result.get("detected_language"))
     logger.debug("Duration: %.0fs", duration_seconds)
@@ -203,9 +219,7 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
     else:
         reporter.stage_skipped(Stage.SUMMARIZE)
 
-    # Longest string field for title/tag generation; list-only personas (e.g. 1on1)
-    # fall back to joining all list values.
-    summary_text = _extract_summary_text(persona, data)
+    summary_text = summary_digest(persona, data)
     generated_title = None
     generated_tags: list = []
     wants_title = config.get("auto_title")
