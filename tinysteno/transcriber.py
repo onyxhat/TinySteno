@@ -12,9 +12,10 @@ import soundfile as sf
 from faster_whisper import WhisperModel
 from scipy.signal import resample as scipy_resample
 
+from tinysteno.levels import load_levels
 from tinysteno.transcript import (
     OTHERS, SAMPLE_RATE, SPLIT_DECODE_SHARE, YOU, Segment, TranscriptOptions, assemble,
-    is_silent, scale_progress, split_enabled)
+    audible_channels, scale_progress, split_enabled)
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,18 @@ def split_channels(data: np.ndarray, sr: int) -> dict[str, np.ndarray]:
         YOU: convert_to_16khz_array(data[:, 0].copy(), sr),
         OTHERS: convert_to_16khz_array(data[:, 1].copy(), sr),
     }
+
+
+def recorded_gains(audio_path: str, data: np.ndarray) -> dict[str, float]:
+    """The recorder's gain per channel label (as `split_channels` names them), from the levels
+    file beside the recording; empty when there is no valid one."""
+    count = 1 if data.ndim == 1 else data.shape[1]
+    gains = load_levels(audio_path, count)
+    if gains is None:
+        return {}
+    if count == 1:
+        return {"": gains[0]}
+    return {YOU: gains[0], OTHERS: gains[1]}
 
 
 def _scaled_progress(
@@ -187,7 +200,8 @@ class WhisperTranscriber:
 
         data, sr = sf.read(str(path))
         audio = split_channels(data, sr)
-        to_decode = [label for label, samples in audio.items() if not is_silent(samples)]
+        gains = recorded_gains(str(path), data)
+        to_decode = audible_channels(audio, gains)
 
         splitting = split_enabled(self.options, diarize)
         decode_share = SPLIT_DECODE_SHARE if splitting else 1.0
@@ -208,7 +222,7 @@ class WhisperTranscriber:
         )
         result = assemble(
             channels, audio, diarize=diarize, language=language, options=self.options,
-            on_progress=scale_progress(on_progress, SPLIT_DECODE_SHARE, 1.0))
+            on_progress=scale_progress(on_progress, SPLIT_DECODE_SHARE, 1.0), gains=gains)
         if splitting and on_progress is not None:
             on_progress(1.0)
         return result

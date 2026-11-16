@@ -61,12 +61,23 @@ def scale_progress(
     return lambda value: on_progress(low + (high - low) * value)
 
 
-def is_silent(samples: np.ndarray) -> bool:
-    """True when the RMS of the samples is below SILENCE_RMS (empty is silent)."""
+def is_silent(samples: np.ndarray, gain: float = 1.0) -> bool:
+    """True when the RMS of the samples, divided by the gain they were recorded with, is below
+    SILENCE_RMS (empty is silent)."""
     if samples.size == 0:
         return True
     rms = float(np.sqrt(np.mean(np.square(samples.astype(np.float64)))))
-    return rms < SILENCE_RMS
+    return rms / gain < SILENCE_RMS
+
+
+def audible_channels(audio: dict[str, np.ndarray], gains: dict[str, float]) -> list[str]:
+    """The channels worth decoding: not silent at the level they were recorded at.
+
+    `gains` maps a channel to the gain the recorder applied to it; a channel without one is
+    taken as it is in the file.
+    """
+    return [label for label, samples in audio.items()
+            if not is_silent(samples, gains.get(label, 1.0))]
 
 
 def _speaker_rank(speaker: str) -> int:
@@ -192,6 +203,7 @@ def assemble(  # pylint: disable=too-many-arguments,too-many-locals
     options: TranscriptOptions | None = None,
     turns_for: Callable[[str, np.ndarray], list[Turn]] | None = None,
     on_progress: Callable[[float], None] | None = None,
+    gains: dict[str, float] | None = None,
 ) -> dict:
     """Build the transcriber result from per-channel segments and 16 kHz mono audio.
 
@@ -199,11 +211,14 @@ def assemble(  # pylint: disable=too-many-arguments,too-many-locals
     split into speakers after the filters; any failure keeps the plain channel labels and sets
     the result's `split_failed`, so the result is not saved for reuse.
     `turns_for(label, audio)` supplies the raw turns; `on_progress` receives the diarizer's
-    0-1 fraction.
+    0-1 fraction. `gains` (from the recording's levels file) holds the gain the recorder applied
+    to each channel; the loud-but-empty warnings and the speaker-bleed comparison use the levels
+    as recorded, divided by it. Without it the levels in the file are used.
     """
     from tinysteno.hygiene import drop_hallucinations, suppress_bleed
 
     options = options or TranscriptOptions()
+    gains = gains or {}
     stamped = {
         label: [seg if seg.speaker else replace(seg, speaker=label) for seg in segs]
         for label, segs in channels.items()
@@ -212,14 +227,16 @@ def assemble(  # pylint: disable=too-many-arguments,too-many-locals
     warnings = [
         f"{_CHANNEL_NAMES[label]} audio was present but no speech was recognised."
         for label, segs in channels.items()
-        if label in _CHANNEL_NAMES and not segs and not is_silent(audio[label])
+        if label in _CHANNEL_NAMES and not segs
+        and not is_silent(audio[label], gains.get(label, 1.0))
     ]
 
     def level(label: str, start: float, end: float) -> float:
         return _level_over(audio, label, start, end)
 
-    def channel_level(label: str) -> Callable[[float, float], float]:
-        return lambda start, end: level(label, start, end)
+    def recorded_level(label: str) -> Callable[[float, float], float]:
+        # Across channels, compare the levels as recorded, before each was normalised.
+        return lambda start, end: level(label, start, end) / gains.get(label, 1.0)
 
     if options.drop_hallucinations:
         stamped = {
@@ -231,7 +248,7 @@ def assemble(  # pylint: disable=too-many-arguments,too-many-locals
         }
     if options.suppress_bleed and YOU in stamped and OTHERS in stamped:
         stamped[YOU], stamped[OTHERS] = suppress_bleed(
-            stamped[YOU], stamped[OTHERS], channel_level(YOU), channel_level(OTHERS))
+            stamped[YOU], stamped[OTHERS], recorded_level(YOU), recorded_level(OTHERS))
 
     split_failed = split_enabled(options, diarize) and _split_speakers(
         stamped, audio, options, turns_for or _default_turns(on_progress), warnings)

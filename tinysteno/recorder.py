@@ -12,6 +12,8 @@ from typing import Optional
 
 import numpy as np
 
+from tinysteno.levels import save_levels
+
 try:
     import sounddevice as sd
 except Exception:  # pragma: no cover
@@ -22,20 +24,22 @@ except Exception:  # pragma: no cover
 NORMALISE_FLOOR = 0.003
 
 
-def _to_int16(audio: np.ndarray) -> np.ndarray:
+def _to_int16(audio: np.ndarray) -> tuple[np.ndarray, list[float]]:
     """Convert float audio [n, channels] to int16, scaling each column to its own peak.
 
     A column whose peak is below ``NORMALISE_FLOOR`` (including all zeros) is converted at
-    unit gain so a near-silent channel is not boosted into audible noise.
+    unit gain so a near-silent channel is not boosted into audible noise. Also returns each
+    column's gain relative to full scale (1.0 for a column that was not scaled).
     """
     audio = np.asarray(audio, dtype=np.float32)
     out = np.empty(audio.shape, dtype=np.int16)
+    gains = []
     for i in range(audio.shape[1]):
         column = audio[:, i]
         peak = float(np.max(np.abs(column))) if column.size else 0.0
-        gain = 32767.0 / peak if peak >= NORMALISE_FLOOR else 32767.0
-        out[:, i] = np.clip(column * gain, -32767, 32767).astype(np.int16)
-    return out
+        gains.append(1.0 / peak if peak >= NORMALISE_FLOOR else 1.0)
+        out[:, i] = np.clip(column * 32767.0 * gains[-1], -32767, 32767).astype(np.int16)
+    return out, gains
 
 
 def _rms_level(frame) -> float:
@@ -392,7 +396,7 @@ class AudioRecorder:
                 mic_data, loopback_raw_bytes, loopback_sr
             )
 
-            audio_data = _to_int16(audio_data)
+            audio_data, gains = _to_int16(audio_data)
 
             with wave.open(str(self.output_path), "w") as wav_file:
                 wav_file.setnchannels(out_channels)  # pylint: disable=no-member
@@ -410,6 +414,7 @@ class AudioRecorder:
         finally:
             self._reset_levels()
 
+        save_levels(str(self.output_path), gains)  # never raises; the WAV is already saved
         self._cleanup_temp_files()
         self._state = RecorderState.IDLE
         return True

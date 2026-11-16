@@ -19,10 +19,10 @@ import soundfile as sf
 from openai import BadRequestError, OpenAI, UnprocessableEntityError
 
 from tinysteno.speaker_split import Turn
-from tinysteno.transcriber import split_channels
+from tinysteno.transcriber import recorded_gains, split_channels
 from tinysteno.transcript import (
     OTHERS, SAMPLE_RATE, SPLIT_DECODE_SHARE, YOU, Segment, TranscriptOptions, assemble,
-    is_silent, scale_progress, split_enabled)
+    audible_channels, scale_progress, split_enabled)
 
 REJECTED_WARNING = "The transcription server rejected speaker separation; channel labels were used."
 
@@ -75,7 +75,8 @@ class ApiTranscriber:
 
         data, sr = sf.read(str(path), dtype="float32")
         audio = split_channels(data, sr)
-        to_decode = [label for label, samples in audio.items() if not is_silent(samples)]
+        gains = recorded_gains(str(path), data)
+        to_decode = audible_channels(audio, gains)
 
         splitting = split_enabled(self.options, diarize)
         decode_share = SPLIT_DECODE_SHARE if splitting else 1.0
@@ -110,7 +111,7 @@ class ApiTranscriber:
         result = assemble(
             channels, audio, diarize=diarize, language=language, options=self.options,
             turns_for=turns_for,
-            on_progress=scale_progress(on_progress, SPLIT_DECODE_SHARE, 1.0))
+            on_progress=scale_progress(on_progress, SPLIT_DECODE_SHARE, 1.0), gains=gains)
         if rejected:
             result["warnings"] = [*result.get("warnings", []), REJECTED_WARNING]
         if splitting and on_progress:
