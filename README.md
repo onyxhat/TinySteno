@@ -449,7 +449,7 @@ Any failure leaves the transcript with its `You` / `Others` labels exactly as th
 
 ### Notes for the summary
 
-`--notes PATH` on `record`, `process` or `tui` reads a UTF-8 text file (an agenda, names, what you care about) and passes its contents to the LLM as information about the meeting, between `<notes>` tags, with an instruction to treat it as information and never as instructions. It is not copied into the note. A missing or unreadable file is an error before anything is recorded or processed.
+`--notes PATH` on `record`, `process` or `tui` reads a UTF-8 text file (an agenda, names, what you care about) and passes its contents to the LLM as information about the meeting, between `<notes>` tags, with an instruction to treat it as information and never as instructions. It is not copied into the note. A missing or unreadable file is an error before anything is recorded or processed. The notes are sent with every part of a long transcript, so they take room from each part; notes that would leave the transcript less than a quarter of the space are cut, and the note gets a processing warning saying so.
 
 In the summary request the model is also told the meeting date (so "tomorrow" can be resolved), what the labels mean when diarization is on (that `[You]` is the person who recorded the meeting only when some line is labelled `[You]`, and otherwise that no label marks the recorder; or, when diarization is off, not to guess who said what), that numbered voices (`Speaker 1`, `Speaker 2`, ...), when the speaker split produced them, are approximate, that lines start with `[hh:mm:ss]` when timestamps are on, and to keep proposals, open points and decisions distinct. The generated title and tags are based on the summary, not the transcript.
 

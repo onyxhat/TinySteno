@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
@@ -32,6 +32,9 @@ _WARN_CHUNKS_FAILED = (
 _WARN_MERGE_FAILED = (
     "The section summaries could not be merged by the model; "
     "they were combined without de-duplication."
+)
+_WARN_NOTES_SHORTENED = (
+    "The notes were too long for the model's context window; only their beginning was used."
 )
 _WARN_TOO_LONG_TO_MERGE = (
     "The summary was too long to merge in one pass; "
@@ -102,6 +105,23 @@ def _english_date(when: datetime) -> str:
     return f"{day_name}, {when.day:02d} {month_name} {when.year}"
 
 
+def _clean_notes(notes: str) -> str:
+    """The notes as sent: trimmed, and unable to close their `<notes>` fence early."""
+    return notes.strip().replace("</notes>", "</ notes>")
+
+
+def _notes_lines(notes: str) -> list[str]:
+    """The context lines that carry the notes; none for blank notes."""
+    cleaned = _clean_notes(notes)
+    return [_CTX_NOTES, "<notes>", cleaned, "</notes>"] if cleaned else []
+
+
+def _notes_chars(notes: str) -> int:
+    """How many characters the notes add to a summary request."""
+    lines = _notes_lines(notes)
+    return len("\n".join(lines)) + 1 if lines else 0
+
+
 class Orchestrator:
     """Orchestrate LLM calls for transcript extraction and title generation."""
 
@@ -131,7 +151,9 @@ class Orchestrator:
         Missing/invalid fields from the LLM default to "" (string) or [] (list).
         """
         self.warnings = []
-        chunks = self._chunk_transcript(transcript)
+        context = self._fit_notes(context or PromptContext())
+        budget = max(self._chunk_chars - _notes_chars(context.notes), self._chunk_chars // 4)
+        chunks = self._chunk_transcript(transcript, budget)
 
         if len(chunks) == 1:
             result = self._extract(
@@ -289,20 +311,33 @@ class Orchestrator:
             logger.warning("Tag generation failed: %s", e)
             return []
 
-    def _chunk_transcript(self, transcript: str) -> list[str]:
-        """Split a transcript into chunks of at most _chunk_chars, on line boundaries.
+    def _fit_notes(self, context: PromptContext) -> PromptContext:
+        """The context with its notes cut, with a warning, if they would leave the transcript
+        less than a quarter of a chunk."""
+        allowance = self._chunk_chars - self._chunk_chars // 4
+        if _notes_chars(context.notes) <= allowance:
+            return context
+        notes = _clean_notes(context.notes)
+        keep = max(0, len(notes) - (_notes_chars(notes) - allowance) - 1)
+        self.warnings.append(_WARN_NOTES_SHORTENED)
+        return replace(context, notes=notes[:keep].rstrip() + "…")
+
+    def _chunk_transcript(self, transcript: str, limit: int | None = None) -> list[str]:
+        """Split a transcript into chunks of at most `limit` (default _chunk_chars) characters,
+        on line boundaries.
 
         Whole lines are packed together with no overlap. A line longer than a chunk is
         split at the last space within the limit (hard at the limit if it has none).
         A transcript that fits returns one chunk.
         """
-        if len(transcript) <= self._chunk_chars:
+        limit = limit or self._chunk_chars
+        if len(transcript) <= limit:
             return [transcript]
 
         chunks: list[str] = []
         current = ""
-        for line in self._lines_within_limit(transcript):
-            if current and len(current) + 1 + len(line) > self._chunk_chars:
+        for line in self._lines_within_limit(transcript, limit):
+            if current and len(current) + 1 + len(line) > limit:
                 chunks.append(current)
                 current = line
             else:
@@ -311,9 +346,9 @@ class Orchestrator:
             chunks.append(current)
         return chunks
 
-    def _lines_within_limit(self, transcript: str) -> list[str]:
-        """Non-blank lines, with any line over _chunk_chars split into shorter pieces."""
-        limit = self._chunk_chars
+    @staticmethod
+    def _lines_within_limit(transcript: str, limit: int) -> list[str]:
+        """Non-blank lines, with any line over `limit` split into shorter pieces."""
         lines: list[str] = []
         for line in transcript.split("\n"):
             while len(line) > limit:
@@ -344,9 +379,7 @@ class Orchestrator:
         lines.append(_CTX_FIDELITY)
         if part is not None:
             lines.append(_CTX_PART.format(n=part[0], m=part[1]))
-        notes = context.notes.strip().replace("</notes>", "</ notes>")
-        if notes:
-            lines.extend([_CTX_NOTES, "<notes>", notes, "</notes>"])
+        lines.extend(_notes_lines(context.notes))
         return "Context:\n" + "\n".join(lines)
 
     def _build_user_message(

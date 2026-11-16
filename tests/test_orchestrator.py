@@ -670,3 +670,43 @@ def test_the_llm_client_does_not_retry_on_its_own():
     with patch("tinysteno.orchestrator.OpenAI") as client_class:
         Orchestrator(api_key="k", base_url="http://llm/v1", model="m")
     assert client_class.call_args.kwargs["max_retries"] == 0
+
+
+_LINES = "\n".join(f"line {i:03d} " + "w" * 40 for i in range(10))  # about 500 characters
+
+
+def _chunked_run(notes: str):
+    """Summarize _LINES with a 600-character chunk budget; return the orchestrator, the user
+    messages that carried transcript text, and those transcript chunks."""
+    orch = _make_orchestrator()
+    orch._chunk_chars = 600
+    orch._client.chat.completions.create.side_effect = (
+        lambda **_kw: _llm_response({"summary": "ok", "items": ["x"]}))
+    orch.summarize(_LINES, PERSONA, PromptContext(notes=notes))
+    calls = orch._client.chat.completions.create.call_args_list
+    messages = [c.kwargs["messages"][1]["content"] for c in calls]
+    messages = [m for m in messages if "Transcript:\n" in m]
+    return orch, messages, [m.split("Transcript:\n", 1)[1] for m in messages]
+
+
+def _notes_block(message: str) -> str:
+    start = message.index("The recorder's own notes")
+    return message[start:message.index("</notes>") + len("</notes>")]
+
+
+def test_notes_take_their_share_of_the_chunk_budget():
+    _, _, alone = _chunked_run("")
+    assert len(alone) == 1
+    orch, messages, chunks = _chunked_run("Agenda: " + "budget review " * 14)
+    assert len(chunks) > 1 and not orch.warnings
+    for message, chunk in zip(messages, chunks):
+        assert len(chunk) + len(_notes_block(message)) < 600
+
+
+def test_notes_too_long_for_the_budget_are_shortened_with_a_warning():
+    orch, messages, chunks = _chunked_run("n" * 5000)
+    assert orch.warnings == [
+        "The notes were too long for the model's context window; only their beginning was used."]
+    block = _notes_block(messages[0])
+    assert len(block) <= 450 and "n…\n</notes>" in block
+    assert all(len(chunk) <= 600 // 4 for chunk in chunks)
