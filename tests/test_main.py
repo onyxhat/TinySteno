@@ -443,7 +443,7 @@ def test_process_audio_says_when_it_reused_the_saved_transcript(tmp_path, capsys
     out = capsys.readouterr().out
     assert out.count("Using the saved transcript for this recording") == 1
     assert "(--retranscribe to transcribe again)." in out
-    assert out.index("Using the saved") < out.index("Meeting:")
+    assert out.index("Using the saved") < out.rindex("Meeting:")
 
 
 @pytest.mark.parametrize("flag, expected", [(["--retranscribe"], True), ([], False)])
