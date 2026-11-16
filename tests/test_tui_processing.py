@@ -340,3 +340,36 @@ async def test_retry_and_home_keys_show_only_when_they_can_act(tmp_path):
         await _settle(app, pilot)
         keys = _footer_keys(app)                           # no speech: home only
         assert "n" in keys and "r" not in keys
+
+
+async def test_failure_view_lists_the_warnings_gathered_before_it(tmp_path):
+    wav = _wav(tmp_path)
+
+    def fake(wav_path, name, persona, ts, reporter):  # pylint: disable=unused-argument
+        reporter.stage_started(Stage.SUMMARIZE)
+        raise PipelineError(Stage.SUMMARIZE, warnings=("one channel silent",)) from \
+            ConnectionError("endpoint down")
+
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path, run_pipeline=fake))
+    async with app.run_test() as pilot:
+        app.process_file(str(wav), "default")
+        await _settle(app, pilot)
+        lines = _text(app.screen, "#error").splitlines()
+        assert lines[0] == "Summarizing failed: endpoint down"
+        assert lines[1] == "one channel silent"
+        assert lines[2] == f"Audio kept at {wav}"
+
+
+async def test_no_speech_from_a_saved_transcript_says_so(tmp_path):
+    wav = _wav(tmp_path)
+
+    def fake(wav_path, name, persona, ts, reporter):  # pylint: disable=unused-argument
+        return PipelineResult(str(wav), None, None, 3.0, True, reused_transcript=True)
+
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path, run_pipeline=fake))
+    async with app.run_test(notifications=True) as pilot:
+        app.process_file(str(wav), "default")
+        await _settle(app, pilot)
+        assert "No speech detected" in _text(app.screen, "#error")
+        shown = [(n.message, n.severity) for n in app._notifications]  # pylint: disable=protected-access
+    assert shown == [("Used the saved transcript for this recording.", "information")]

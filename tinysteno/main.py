@@ -297,6 +297,8 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
                 retranscribe=retranscribe,
             )
         except PipelineError as err:
+            for text in err.warnings:
+                print(f"Warning: {text}")
             cause = err.__cause__
             if err.stage is Stage.EXPORT and isinstance(cause, RuntimeError):
                 print(f"Error rendering note: {cause}")

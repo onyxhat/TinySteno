@@ -230,6 +230,8 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
             self.set_state(stage, "-skipped")
         lines = [f"No speech detected. Audio kept at {self.wav_path}", *result.warnings]
         self._show_error("\n".join(lines))
+        if result.reused_transcript:
+            self.app.notify("Used the saved transcript for this recording.", markup=False)
 
     def _on_failed(self, err: Exception) -> None:
         self.state = Run.FAILED
@@ -243,7 +245,9 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
                 if self._row(stage).has_class("-active"):
                     self.set_state(stage, "-pending")
             text = f"Processing failed: {err}"
-        self._show_error(f"{text}\nAudio kept at {self.wav_path}\nPress r to retry or n for home.")
+        warnings = err.warnings if isinstance(err, PipelineError) else ()
+        self._show_error("\n".join([
+            text, *warnings, f"Audio kept at {self.wav_path}", "Press r to retry or n for home."]))
 
     def _show_error(self, text: str) -> None:
         error = self.query_one("#error", Static)

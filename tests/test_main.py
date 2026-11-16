@@ -793,3 +793,21 @@ def test_validate_config_rejects_bad_api_timeout(bad):
 
 def test_validate_config_accepts_api_timeout():
     _validate_config({"whisper_api_timeout": 0.5})
+
+
+def test_process_audio_prints_warnings_gathered_before_a_failed_stage(tmp_path, capsys):
+    def setup(exporter):
+        exporter.export.side_effect = RuntimeError("Template render error")
+    _run_process_audio(tmp_path, exporter_setup=setup,
+                       transcript_extra={"warnings": ["one channel silent"]})
+    out = capsys.readouterr().out
+    assert out.index("Warning: one channel silent") < out.index("Error rendering note")
+
+
+def test_process_audio_prints_warnings_before_raising_a_failed_stage(tmp_path, capsys):
+    def setup(orchestrator):
+        orchestrator.summarize.side_effect = ConnectionError("endpoint down")
+    with pytest.raises(ConnectionError):
+        _run_process_audio(tmp_path, orchestrator_setup=setup,
+                           transcript_extra={"warnings": ["one channel silent"]})
+    assert "Warning: one channel silent\n" in capsys.readouterr().out

@@ -554,3 +554,20 @@ def test_fingerprint_tracks_the_transcription_server_on_the_api_backend_only(tmp
     local = {"whisper_base_url": "http://a/v1"}
     assert "whisper_base_url" not in transcript_fingerprint(wav, local)
     assert transcript_fingerprint(wav, local) == transcript_fingerprint(wav, {})
+
+
+def test_pipeline_error_carries_the_warnings_gathered_so_far(tmp_path):
+    orchestrator_cls = _orchestrator_cls()
+    orchestrator_cls.return_value.warnings = [ORCHESTRATOR_WARNING]
+    orchestrator_cls.return_value.summarize.side_effect = ConnectionError("down")
+    with pytest.raises(PipelineError) as info:
+        _run(tmp_path, warnings=[TRANSCRIBER_WARNING, "two\nlines"],
+             orchestrator_cls=orchestrator_cls)
+    assert info.value.warnings == (TRANSCRIBER_WARNING, "two lines", ORCHESTRATOR_WARNING)
+    exporter_cls = _exporter_cls()
+    exporter_cls.return_value.export.side_effect = RuntimeError("bad template")
+    with pytest.raises(PipelineError) as info:
+        _run(tmp_path, warnings=[TRANSCRIBER_WARNING], exporter_cls=exporter_cls)
+    assert info.value.stage is Stage.EXPORT and info.value.warnings == (TRANSCRIBER_WARNING,)
+    default = PipelineError(Stage.TRANSCRIBE).warnings
+    assert isinstance(default, tuple) and not default

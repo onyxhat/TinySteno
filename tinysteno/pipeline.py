@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Iterator, Optional, Protocol
+from typing import Callable, Iterator, Optional, Protocol
 
 from tinysteno.orchestrator import PromptContext
 from tinysteno.personas import Persona
@@ -59,11 +59,15 @@ class NullReporter:
 
 
 class PipelineError(RuntimeError):
-    """A pipeline stage failed; the original exception is the __cause__."""
+    """A pipeline stage failed; the original exception is the __cause__.
 
-    def __init__(self, stage: Stage, message: str = ""):
+    `warnings` holds the warnings gathered before the failure, ready to show.
+    """
+
+    def __init__(self, stage: Stage, message: str = "", warnings: tuple[str, ...] = ()):
         super().__init__(message or f"{stage.value} failed")
         self.stage = stage
+        self.warnings = tuple(warnings)
 
 
 @dataclass(frozen=True)
@@ -135,13 +139,17 @@ def summary_digest(persona: Persona, data: dict, limit: int = 4000) -> Optional[
 
 
 @contextmanager
-def _stage(reporter: PipelineReporter, stage: Stage) -> Iterator[None]:
-    """Report a stage as started/finished; re-raise failures as PipelineError."""
+def _stage(
+    reporter: PipelineReporter, stage: Stage,
+    gathered: Callable[[], tuple[str, ...]] = tuple,
+) -> Iterator[None]:
+    """Report a stage as started/finished; re-raise failures as PipelineError carrying the
+    warnings `gathered()` returns at that moment."""
     reporter.stage_started(stage)
     try:
         yield
     except Exception as exc:
-        raise PipelineError(stage, str(exc)) from exc
+        raise PipelineError(stage, str(exc), warnings=gathered()) from exc
     reporter.stage_finished(stage)
 
 
@@ -221,6 +229,12 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
     A transcript saved beside the recording is reused unless `retranscribe` is set.
     """
     reporter = reporter or NullReporter()
+    transcriber_warnings: list[str] = []
+    orchestrator = None
+
+    def gathered() -> tuple[str, ...]:
+        return _merge_warnings(
+            transcriber_warnings, _string_list(getattr(orchestrator, "warnings", [])))
 
     with _stage(reporter, Stage.TRANSCRIBE):
         result, reused = _transcript_result(wav_path, config, transcriber, reporter, retranscribe)
@@ -254,9 +268,8 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
         )
 
     data: dict = {}
-    orchestrator = None
     if config.get("api_key"):
-        with _stage(reporter, Stage.SUMMARIZE):
+        with _stage(reporter, Stage.SUMMARIZE, gathered):
             extra = {}
             if "llm_context_tokens" in config:
                 extra["context_tokens"] = config["llm_context_tokens"]
@@ -287,7 +300,7 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
     wants_title = config.get("auto_title")
     wants_tags = config.get("auto_tags")
     if (wants_title or wants_tags) and orchestrator and summary_text:
-        with _stage(reporter, Stage.METADATA):
+        with _stage(reporter, Stage.METADATA, gathered):
             with ThreadPoolExecutor(max_workers=2) as executor:
                 title_future = (
                     executor.submit(orchestrator.generate_title, summary_text)
@@ -305,10 +318,9 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
         reporter.stage_skipped(Stage.METADATA)
 
     title = name or generated_title or Path(wav_path).stem
-    warnings = _merge_warnings(
-        transcriber_warnings, _string_list(getattr(orchestrator, "warnings", [])))
+    warnings = gathered()
 
-    with _stage(reporter, Stage.EXPORT):
+    with _stage(reporter, Stage.EXPORT, gathered):
         metadata = {
             "title": title,
             "date": timestamp.strftime("%Y-%m-%d %H:%M"),
