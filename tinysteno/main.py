@@ -24,7 +24,8 @@ from tinysteno.pipeline import PipelineError, Stage, run_pipeline
 from tinysteno.log_file import log_to_file
 from tinysteno.signals import deferred_exit_signals
 from tinysteno.config import (
-    config_path as _config_path, load_config, recordings_dir as _recordings_dir,
+    config_dir as _config_dir, config_path as _config_path,
+    read_stored, invalid_settings, load_config, recordings_dir as _recordings_dir,
     validate_config as _validate_config, update_config, write_config as _write_config,
     is_timeout_minutes as _is_timeout_minutes, is_positive_number as _is_positive_number,
     is_speaker_count as _is_speaker_count,
@@ -318,7 +319,7 @@ def cmd_tui(args, config):
         load_persona=load_persona,
         recordings_dir=_recordings_dir(config),
     )
-    log_path = Path.home() / ".tinysteno" / "tui.log"
+    log_path = _config_dir() / "tui.log"
     with log_to_file(log_path, getattr(args, "verbose", False)) as log:
         message, code = run_tui(
             config, deps,
@@ -441,7 +442,7 @@ def cmd_test(_args):  # pylint: disable=too-many-statements  # large interactive
         issues.append("rich")
         console.print("✗ rich (pip install rich)")
 
-    config_path = Path.home() / ".tinysteno" / "config.yaml"
+    config_path = _config_path()
     if config_path.exists():
         console.print("✓ Config file exists")
     else:
@@ -459,8 +460,7 @@ def cmd_config(args):
     """Show or edit configuration."""
     import yaml
 
-    config_path = Path.home() / ".tinysteno" / "config.yaml"
-    config = load_config()
+    config_path = _config_path()
 
     if args.edit:
         editor = (
@@ -470,8 +470,14 @@ def cmd_config(args):
         )
         editor_cmd = shlex.split(editor) + [str(config_path)]
         subprocess.call(editor_cmd)
-    else:
-        print(yaml.dump(config, indent=2))
+        return
+    try:
+        config = load_config()
+    except (ValueError, OSError, yaml.YAMLError) as exc:
+        print(f"Cannot read {config_path}: {exc}", file=sys.stderr)
+        print("Fix the file with: tinysteno config --edit", file=sys.stderr)
+        sys.exit(1)
+    print(yaml.dump(config, indent=2))
 
 
 def _prompt(console, label: str, default: str, hint: str = "") -> str:
@@ -496,7 +502,7 @@ def _prompt_bool(console, label: str, default: bool, hint: str = "") -> bool:
 
 def _print_seed_summary(console, result: dict) -> None:
     """Print persona seeding summary using rich."""
-    user_dir = Path.home() / ".tinysteno" / "personas"
+    user_dir = _config_dir() / "personas"
     if result["copied"]:
         console.print(f"[green]✓[/green] Personas seeded in [bold]{user_dir}[/bold]")
         console.print(f"  Copied: {', '.join(result['copied'])}")
@@ -504,9 +510,35 @@ def _print_seed_summary(console, result: dict) -> None:
         console.print(f"  Skipped (kept yours): {', '.join(result['skipped'])}")
 
 
+_ASKED_KEYS = frozenset({
+    "obsidian_vault", "output_folder", "recordings_path", "api_key", "base_url", "model",
+    "auto_title", "auto_tags", "whisper_model", "diarization", "channels", "sample_rate",
+    "persona", "session_timeout_minutes",
+})
+
+
+def _shown(key: str, value) -> str:
+    """Repr of a value for messages; secrets are hidden."""
+    lowered = key.lower()
+    return "(hidden)" if "key" in lowered or "token" in lowered else repr(value)
+
+
+def _report_invalid_settings(existing: dict) -> dict:
+    """Report invalid stored settings. Asked keys are dropped from `existing` (so the prompt
+    default falls back to the built-in); unasked keys are returned as removals (key -> None)."""
+    removals = {}
+    for key, reason in invalid_settings(existing).items():
+        if key in _ASKED_KEYS:
+            print(f"Current value of {key} is invalid: {reason}")
+            del existing[key]
+        else:
+            print(f"Removing invalid setting {key} (was {_shown(key, existing[key])}): {reason}")
+            removals[key] = None
+    return removals
+
+
 def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # large interactive CLI setup function
     """Interactively create or update ~/.tinysteno/config.yaml."""
-    import yaml
     from rich.console import Console
     from rich.rule import Rule
 
@@ -520,13 +552,15 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
 
     cfg_path = _config_path()
 
-    # Load existing values as defaults, or fall back to built-in defaults.
-    if cfg_path.exists():
-        existing = yaml.safe_load(cfg_path.read_text()) or {}
-        action = "Updating"
-    else:
-        existing = {}
-        action = "Creating"
+    # Read the stored file once, before asking anything.
+    try:
+        existing = read_stored()
+    except (ValueError, OSError) as exc:
+        print(f"Cannot read {cfg_path}: {exc}")
+        print("Fix or remove the file, or run: tinysteno config --edit")
+        sys.exit(1)
+    action = "Updating" if cfg_path.exists() else "Creating"
+    removals = _report_invalid_settings(existing)
 
     def get(key, fallback):
         return existing.get(key, fallback)
@@ -542,7 +576,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
     obsidian_vault = _prompt(
         console,
         "Vault path",
-        get("obsidian_vault", str(Path.home() / "Obsidian" / "Vault")),
+        get("obsidian_vault", str(Path("~/Obsidian/Vault").expanduser())),
         "absolute path to your Obsidian vault",
     )
 
@@ -680,6 +714,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
     # --- Write ---
     try:
         update_config({
+            **removals,
             "obsidian_vault": obsidian_vault,
             "output_folder": output_folder,
             "recordings_path": recordings_path or None,
