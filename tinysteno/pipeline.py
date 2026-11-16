@@ -9,6 +9,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterator, Optional, Protocol
 
+from tinysteno.orchestrator import PromptContext
 from tinysteno.personas import Persona
 from tinysteno.transcriber import Transcriber
 from tinysteno.transcript import render_transcript
@@ -130,7 +131,7 @@ def _stage(reporter: PipelineReporter, stage: Stage) -> Iterator[None]:
     reporter.stage_finished(stage)
 
 
-def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
     wav_path: str,
     name: Optional[str],
     config: dict,
@@ -141,6 +142,7 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
     orchestrator_cls: type,
     exporter_cls: type,
     reporter: Optional[PipelineReporter] = None,
+    notes: str = "",
 ) -> PipelineResult:
     """Transcribe, summarize, tag and export a recording, reporting each stage."""
     reporter = reporter or NullReporter()
@@ -157,14 +159,16 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
 
     transcriber_warnings = _string_list(result.get("warnings"))
     segments = result.get("segments")
+    diarization = config.get("diarization", False)
+    timestamps = config.get("transcript_timestamps", True)
     if isinstance(segments, list):
-        transcript = render_transcript(
-            segments,
-            labels=config.get("diarization", False),
-            timestamps=config.get("transcript_timestamps", True),
-        )
+        transcript = render_transcript(segments, labels=diarization, timestamps=timestamps)
+        has_labels = bool(diarization) and any(seg.speaker for seg in segments)
+        has_timestamps = bool(timestamps)
     else:
         transcript = result["diarised_text"] or result["text"]
+        has_labels = bool(result["diarised_text"])
+        has_timestamps = False
     if not transcript.strip():
         for stage in (Stage.SUMMARIZE, Stage.METADATA, Stage.EXPORT):
             reporter.stage_skipped(stage)
@@ -182,7 +186,16 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
                 base_url=config["base_url"],
                 model=config["model"],
             )
-            data = orchestrator.summarize(transcript, persona)
+            data = orchestrator.summarize(
+                transcript,
+                persona,
+                PromptContext(
+                    meeting_date=timestamp,
+                    has_speaker_labels=has_labels,
+                    has_timestamps=has_timestamps,
+                    notes=notes,
+                ),
+            )
     else:
         reporter.stage_skipped(Stage.SUMMARIZE)
 

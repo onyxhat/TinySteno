@@ -207,13 +207,27 @@ class _RichReporter:
         """Nothing to show for a skipped stage."""
 
 
-def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def _read_notes(args) -> str:
+    """The text of the `--notes` file, or "" without one; exit 1 if it cannot be read."""
+    path = getattr(args, "notes", None)
+    if not path:
+        return ""
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as err:
+        reason = err.strerror if isinstance(err, OSError) and err.strerror else err
+        print(f"Error: cannot read notes file {path}: {reason}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     wav_path: str,
     name: Optional[str],
     config: dict,
     logger: logging.Logger,
     persona: Persona,
     timestamp: datetime,
+    notes: str = "",
 ) -> None:
     """Shared pipeline: transcribe → summarize → export, with Rich progress."""
     from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
@@ -231,6 +245,7 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
                 orchestrator_cls=Orchestrator,
                 exporter_cls=ObsidianExporter,
                 reporter=_RichReporter(progress),
+                notes=notes,
             )
         except PipelineError as err:
             cause = err.__cause__
@@ -275,7 +290,7 @@ def _capture(recorder, timer: SessionTimer, name: Optional[str], minutes: float)
         return wav_path, saved, bool(exit_signals)
 
 
-def cmd_record(args, config):
+def cmd_record(args, config):  # pylint: disable=too-many-locals
     """Record audio and process into meeting notes."""
     logger = logging.getLogger(__name__)
 
@@ -289,6 +304,7 @@ def cmd_record(args, config):
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    notes = _read_notes(args)
     name = args.name or None
     timestamp = datetime.now()  # capture at start of recording
 
@@ -320,7 +336,7 @@ def cmd_record(args, config):
     if not saved:
         print("No audio was captured.")
         return
-    _process_audio(wav_path, name, config, logger, persona, timestamp)
+    _process_audio(wav_path, name, config, logger, persona, timestamp, notes=notes)
 
 
 def _is_interactive() -> bool:
@@ -333,6 +349,7 @@ def cmd_tui(args, config):
     from tinysteno.tui import run_tui
     from tinysteno.tui.deps import TuiDeps
 
+    notes = _read_notes(args)
     _apply_cli_overrides(config, args)
 
     def make_recorder():
@@ -350,6 +367,7 @@ def cmd_tui(args, config):
             orchestrator_cls=Orchestrator,
             exporter_cls=ObsidianExporter,
             reporter=reporter,
+            notes=notes,
         ),
         list_personas=list_personas,
         load_persona=load_persona,
@@ -388,12 +406,14 @@ def cmd_process(args, config):
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    notes = _read_notes(args)
     timestamp = datetime.fromtimestamp(audio_file.stat().st_mtime)
 
     _apply_cli_overrides(config, args)
 
     logger = logging.getLogger(__name__)
-    _process_audio(str(audio_file), args.name or None, config, logger, persona, timestamp)
+    _process_audio(
+        str(audio_file), args.name or None, config, logger, persona, timestamp, notes=notes)
 
 
 def cmd_list(args):
@@ -764,6 +784,8 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
         "--timeout", type=_non_negative_minutes, metavar="MINUTES",
         help="Auto-stop after MINUTES (0 disables; default from config)",
     )
+    record_parser.add_argument(
+        "--notes", metavar="PATH", help="Text file of your own notes for the summary (UTF-8)")
     record_parser.add_argument("--verbose", action="store_true", help="Verbose output")
     record_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
     record_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
@@ -782,6 +804,8 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
         "--timeout", type=_non_negative_minutes, metavar="MINUTES",
         help="Auto-stop after MINUTES (0 disables; default from config)",
     )
+    tui_parser.add_argument(
+        "--notes", metavar="PATH", help="Text file of your own notes for the summary (UTF-8)")
     tui_parser.add_argument("--verbose", action="store_true", help="Verbose output")
     tui_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
     tui_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
@@ -796,6 +820,8 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     process_parser.add_argument("audio", help="Audio file path")
     process_parser.add_argument("--name", help="Meeting name")
     process_parser.add_argument("--persona", help="Persona slug to use for this audio file")
+    process_parser.add_argument(
+        "--notes", metavar="PATH", help="Text file of your own notes for the summary (UTF-8)")
     process_parser.add_argument("--verbose", action="store_true", help="Verbose output")
     process_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
     process_parser.add_argument("--whisper-device", help="Whisper device (cpu, cuda, auto)")

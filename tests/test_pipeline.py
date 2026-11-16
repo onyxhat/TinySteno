@@ -82,7 +82,7 @@ def _exporter_cls():
 def _run(  # pylint: disable=too-many-arguments
         tmp_path, *, name=None, text="hello there", config_overrides=None,
          reporter=None, orchestrator_cls=None, exporter_cls=None, warnings=None,
-         segments=None):
+         segments=None, **kwargs):
     config = {
         "api_key": "k", "base_url": "u", "model": "m", "auto_title": True,
         "auto_tags": True, "obsidian_vault": str(tmp_path),
@@ -95,6 +95,7 @@ def _run(  # pylint: disable=too-many-arguments
         orchestrator_cls=orchestrator_cls or _orchestrator_cls(),
         exporter_cls=exporter_cls or _exporter_cls(),
         reporter=reporter,
+        **kwargs,
     )
 
 
@@ -246,3 +247,37 @@ def test_pipeline_non_list_segments_use_the_legacy_text(tmp_path):
     orchestrator_cls = _orchestrator_cls()
     _run(tmp_path, text="legacy words", segments="oops", orchestrator_cls=orchestrator_cls)
     assert orchestrator_cls.return_value.summarize.call_args.args[0] == "legacy words"
+
+
+def _context_for(tmp_path, segments, config_overrides=None, **kwargs):
+    orchestrator_cls = _orchestrator_cls()
+    _run(tmp_path, segments=segments, config_overrides=config_overrides,
+         orchestrator_cls=orchestrator_cls, **kwargs)
+    return orchestrator_cls.return_value.summarize.call_args.args[2]
+
+
+def test_pipeline_passes_meeting_date_labels_timestamps_and_notes(tmp_path):
+    segs = [Segment(3.0, 4.0, "hello there", "You")]
+    ctx = _context_for(tmp_path, segs, {"diarization": True}, notes="  my notes \n")
+    assert ctx.meeting_date == datetime(2024, 1, 1)
+    assert ctx.has_speaker_labels is True
+    assert ctx.has_timestamps is True
+    assert ctx.notes == "  my notes \n"
+
+
+def test_pipeline_context_has_no_labels_when_diarization_is_off_or_speakers_are_empty(tmp_path):
+    segs = [Segment(3.0, 4.0, "hello there", "You")]
+    assert _context_for(tmp_path, segs).has_speaker_labels is False
+    bare = [Segment(3.0, 4.0, "hello there")]
+    assert _context_for(tmp_path, bare, {"diarization": True}).has_speaker_labels is False
+
+
+def test_pipeline_context_timestamps_follow_the_config_key(tmp_path):
+    segs = [Segment(3.0, 4.0, "hello there", "You")]
+    ctx = _context_for(tmp_path, segs, {"transcript_timestamps": False})
+    assert ctx.has_timestamps is False
+
+
+def test_pipeline_context_for_legacy_text_has_no_timestamps(tmp_path):
+    ctx = _context_for(tmp_path, None)
+    assert ctx.has_timestamps is False and ctx.has_speaker_labels is False

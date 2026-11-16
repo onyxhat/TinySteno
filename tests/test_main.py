@@ -13,7 +13,8 @@ import pytest
 import yaml
 
 from tinysteno.main import (
-    cmd_record, cmd_setup, create_transcriber, load_config, main, _process_audio, _validate_config,
+    cmd_process, cmd_record, cmd_setup, create_transcriber, load_config, main,
+    _process_audio, _validate_config,
 )
 from tinysteno.main import cmd_tui as run_cmd_tui
 from tinysteno.personas import Persona
@@ -292,7 +293,7 @@ def test_validate_config_accepts_session_timeout(good):
 
 
 def _record_args(**overrides):
-    base = {"persona": None, "name": None, "timeout": None}
+    base = {"persona": None, "name": None, "timeout": None, "notes": None}
     return argparse.Namespace(**{**base, **overrides})
 
 
@@ -646,3 +647,47 @@ def test_setup_still_offers_an_existing_channels_value(tmp_path, monkeypatch):
         tmp_path, monkeypatch, diarization=True, existing={"channels": 2}
     )
     assert seen["channels"][0] == "2" and saved == 2
+
+
+def test_missing_notes_file_fails_before_recording(tmp_path, capsys):
+    with patch("tinysteno.main.AudioRecorder") as rec_cls, patch("tinysteno.main.load_persona"), \
+         pytest.raises(SystemExit) as exit_info:
+        cmd_record(
+            _record_args(notes=str(tmp_path / "nope.txt")), {"obsidian_vault": str(tmp_path)})
+    assert exit_info.value.code == 1 and "cannot read notes file" in capsys.readouterr().err
+    rec_cls.assert_not_called()
+    rec_cls.return_value.start.assert_not_called()
+
+
+def test_notes_file_is_read_and_passed_to_processing(tmp_path):
+    notes = tmp_path / "n.txt"
+    notes.write_text("Budget is 40k \u2013 agreed", encoding="utf-8")
+    config = {"session_timeout_minutes": 0.001, "obsidian_vault": str(tmp_path)}
+    with patch("tinysteno.main.AudioRecorder") as rec_cls, \
+         patch("tinysteno.main.load_persona", return_value=_make_list_only_persona()), \
+         patch("tinysteno.main._process_audio") as process:
+        rec_cls.return_value.start.return_value = "/tmp/x.wav"
+        cmd_record(_record_args(notes=str(notes)), config)
+    assert process.call_args.kwargs["notes"] == "Budget is 40k \u2013 agreed"
+
+
+def test_process_reads_notes_before_processing(tmp_path, capsys):
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"x")
+    args = argparse.Namespace(
+        audio=str(audio), persona=None, name=None, notes=str(tmp_path / "nope.txt"))
+    with patch("tinysteno.main._process_audio") as process, \
+         patch("tinysteno.main.load_persona"), pytest.raises(SystemExit) as exit_info:
+        cmd_process(args, {})
+    assert exit_info.value.code == 1
+    assert "Error: cannot read notes file" in capsys.readouterr().err
+    process.assert_not_called()
+
+
+def test_tui_reads_notes_before_the_app_starts(tmp_path, capsys):
+    args = argparse.Namespace(notes=str(tmp_path / "nope.txt"))
+    with patch("tinysteno.tui.run_tui") as run_tui, pytest.raises(SystemExit) as exit_info:
+        run_cmd_tui(args, {})
+    assert exit_info.value.code == 1
+    assert "cannot read notes file" in capsys.readouterr().err
+    run_tui.assert_not_called()
