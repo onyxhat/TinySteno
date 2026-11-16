@@ -336,7 +336,7 @@ Full transcript text here...
 \```
 ```
 
-When diarization is enabled and system audio is captured, the transcript is interleaved chronologically with speaker labels:
+System audio is always transcribed when it is captured. When diarization is enabled, the transcript is interleaved chronologically with `[You]` / `[Others]` speaker labels:
 
 ```
 [You] I think we should go with option A.
@@ -398,7 +398,8 @@ whisper_api_model: "whisper-large-v3"    # defaults to whisper-1
 The API backend supports the same features as the local backend:
 
 - Mono transcription
-- Stereo diarization (two API calls, one per channel)
+- Stereo transcription: each channel is uploaded once, whether or not diarization is on (diarization only adds the `[You]` / `[Others]` labels)
+- Interleaved speakers from the server's returned segments; if the server returns no segments, one block per speaker
 - Language detection fallback
 - Progress callbacks
 
