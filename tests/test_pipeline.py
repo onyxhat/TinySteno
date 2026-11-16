@@ -498,3 +498,13 @@ def test_a_quiet_split_skip_is_saved_and_reused(tmp_path):
     _run(tmp_path, transcriber=transcriber, wav_path=wav, config_overrides=SPLIT_ON)
     result = _run(tmp_path, transcriber=transcriber, wav_path=wav, config_overrides=SPLIT_ON)
     assert transcriber.calls == 1 and result.reused_transcript
+
+
+def test_warnings_are_made_single_line_and_bounded(tmp_path):
+    native = "Speaker separation could not run:\n  native error\r\n\tat frame 1  "
+    result = _run(tmp_path, warnings=[native, "x" * 400, "y" * 300])
+    assert result.warnings == (
+        "Speaker separation could not run: native error at frame 1",
+        "x" * 299 + "…",
+        "y" * 300,
+    )

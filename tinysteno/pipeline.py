@@ -96,9 +96,25 @@ def _string_list(value: object) -> list[str]:
     return []
 
 
+_WARNING_MAX_CHARS = 300
+
+
+def _one_line(text: str) -> str:
+    """A warning on one line: whitespace runs become one space, cut to 300 characters with `…`."""
+    text = " ".join(text.split())
+    if len(text) > _WARNING_MAX_CHARS:
+        text = text[:_WARNING_MAX_CHARS - 1] + "…"
+    return text
+
+
 def _merge_warnings(*groups: list[str]) -> tuple[str, ...]:
-    """Concatenate warning groups in order, keeping each distinct text once."""
-    return tuple(dict.fromkeys(text for group in groups for text in group))
+    """Concatenate warning groups in order, each made one bounded line, distinct texts once.
+
+    A warning left empty is dropped. Every warning shown or written passes through here, so a
+    multi-line error message cannot break the note's bullet list or a notification.
+    """
+    lines = (_one_line(text) for group in groups for text in group)
+    return tuple(dict.fromkeys(line for line in lines if line))
 
 
 def summary_digest(persona: Persona, data: dict, limit: int = 4000) -> Optional[str]:
