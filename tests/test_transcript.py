@@ -378,14 +378,20 @@ def test_in_person_meeting_splits_the_microphone():
 
     result = assemble(channels, {YOU: LONG, OTHERS: SILENT_LONG}, diarize=True, language="en",
                       options=ON, turns_for=turns_for)
-    assert _speakers(result) == ["You", "Speaker 2"] and seen == [YOU]
+    # The most-heard voice in the room is not necessarily the person recording.
+    assert _speakers(result) == ["Speaker 1", "Speaker 2"] and seen == [YOU]
 
 
-def test_mono_file_is_labelled_you_and_split():
+def test_mono_file_is_split_into_numbered_speakers_never_you():
+    seen = []
+
+    def turns_for(label, _audio):
+        seen.append(label)
+        return [Turn(0, 60, 0), Turn(60, 90, 1)]
+
     result = assemble({"": [S(1, "host"), S(70, "guest")]}, {"": LONG}, diarize=True,
-                      language="en", options=ON,
-                      turns_for=lambda _label, _audio: [Turn(0, 60, 0), Turn(60, 90, 1)])
-    assert _speakers(result) == ["You", "Speaker 2"]
+                      language="en", options=ON, turns_for=turns_for)
+    assert _speakers(result) == ["Speaker 1", "Speaker 2"] and seen == [YOU]
 
 
 def test_mono_file_keeps_empty_speakers_when_off_or_failed():
@@ -498,7 +504,7 @@ def test_split_runs_after_the_filters():
 
     result = assemble(channels, LONG_BOTH, diarize=True, language="en", options=ON,
                       turns_for=turns_for)
-    assert seen == [YOU] and _speakers(result) == ["You", "Speaker 2"]
+    assert seen == [YOU] and _speakers(result) == ["Speaker 1", "Speaker 2"]
 
 
 def test_saved_numbered_speakers_load_unchanged(tmp_path):

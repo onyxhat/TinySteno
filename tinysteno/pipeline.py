@@ -12,7 +12,7 @@ from typing import Iterator, Optional, Protocol
 from tinysteno.orchestrator import PromptContext
 from tinysteno.personas import Persona
 from tinysteno.transcriber import Transcriber
-from tinysteno.transcript import load_transcript, render_transcript, save_transcript
+from tinysteno.transcript import YOU, load_transcript, render_transcript, save_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -231,10 +231,13 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
         transcript = render_transcript(segments, labels=diarization, timestamps=timestamps)
         has_labels = bool(diarization) and any(seg.speaker for seg in segments)
         has_timestamps = bool(timestamps)
+        has_you = has_labels and any(seg.speaker == YOU for seg in segments)
         has_numbered = has_labels and any(seg.speaker.startswith("Speaker ") for seg in segments)
     else:
         transcript = result["diarised_text"] or result["text"]
         has_labels = bool(result["diarised_text"])
+        has_you = has_labels and any(
+            line.startswith(f"[{YOU}]") for line in result["diarised_text"].splitlines())
         has_timestamps = False
         has_numbered = False
     if not transcript.strip():
@@ -264,6 +267,7 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
                 PromptContext(
                     meeting_date=timestamp,
                     has_speaker_labels=has_labels,
+                    has_you_label=has_you,
                     has_numbered_speakers=has_numbered,
                     has_timestamps=has_timestamps,
                     notes=notes,

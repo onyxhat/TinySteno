@@ -64,3 +64,10 @@ def test_label_segments_does_not_mutate_input():
     segs = [Segment(1, 5, "a", "Others")]
     label_segments(segs, [Turn(0, 30, 1)], "Others")
     assert segs == [Segment(1, 5, "a", "Others")]
+
+
+def test_label_segments_can_number_the_dominant_voice_too():
+    segs = [Segment(0, 1, "a", "You"), Segment(5, 6, "b", "You"), Segment(5, 6, "c", "Others")]
+    turns = [Turn(0, 2, 0), Turn(4, 7, 1)]
+    out = label_segments(segs, turns, "You", first_label="Speaker 1")
+    assert [s.speaker for s in out] == ["Speaker 1", "Speaker 2", "Others"]

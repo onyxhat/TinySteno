@@ -573,8 +573,8 @@ def _orch() -> Orchestrator:
 
 
 def test_context_block_for_a_labelled_timestamped_transcript():
-    ctx = PromptContext(
-        meeting_date=datetime(2026, 11, 16), has_speaker_labels=True, has_timestamps=True)
+    ctx = PromptContext(meeting_date=datetime(2026, 11, 16), has_speaker_labels=True,
+                        has_you_label=True, has_timestamps=True)
     msg = _orch()._build_user_message("[00:00:01] [You] hi", PERSONA, ctx)
     assert "Speaker labels: [You] is the person who recorded this meeting" in msg
     assert "Each line starts with its time from the start of the recording as [hh:mm:ss]." in msg
@@ -638,7 +638,8 @@ _NUMBERED = (
 
 
 def test_numbered_speakers_line_follows_the_speaker_labels_line():
-    ctx = PromptContext(has_speaker_labels=True, has_numbered_speakers=True, has_timestamps=True)
+    ctx = PromptContext(has_speaker_labels=True, has_you_label=True, has_numbered_speakers=True,
+                        has_timestamps=True)
     msg = _orch()._build_user_message("[You] hi", PERSONA, ctx)
     assert _NUMBERED in msg
     assert msg.index("Speaker labels:") < msg.index(_NUMBERED) < msg.index("Each line starts")
@@ -649,3 +650,17 @@ def test_numbered_speakers_line_is_absent_by_default_and_without_labels():
         "t", PERSONA, PromptContext(has_speaker_labels=True))
     assert _NUMBERED not in _orch()._build_user_message(
         "t", PERSONA, PromptContext(has_numbered_speakers=True))
+
+
+def test_labels_without_you_never_name_a_label_as_the_recorder():
+    ctx = PromptContext(has_speaker_labels=True, has_numbered_speakers=True)
+    msg = _orch()._build_user_message("[Speaker 1] hi\n[Speaker 2] yo", PERSONA, ctx)
+    assert "[You] is the person" not in msg and _NUMBERED not in msg
+    assert "No speaker label marks the person who recorded this meeting" in msg
+    assert "Speaker 1, Speaker 2 and so on are voices separated automatically" in msg
+    assert msg.index("Speaker labels:") < msg.index("Speaker 1, Speaker 2 and so on")
+
+
+def test_you_line_needs_labels_and_you():
+    msg = _orch()._build_user_message("t", PERSONA, PromptContext(has_you_label=True))
+    assert "Speaker labels:" not in msg and "has no speaker labels" in msg

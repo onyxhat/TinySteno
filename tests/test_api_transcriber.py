@@ -502,7 +502,7 @@ def test_microphone_is_asked_when_the_remote_channel_is_silent(mock_openai, tmp_
     mic = _response("me", [_spk(1.0, 31.0, "a", "S0"), _spk(40.0, 100.0, "b", "S1")])
     result = _server_run(client, tmp_path, [mic], path=str(path))
     assert client.audio.transcriptions.create.call_args.kwargs["extra_body"] == {"diarize": True}
-    assert {s.speaker for s in result["segments"]} == {"You", "Speaker 2"}
+    assert {s.speaker for s in result["segments"]} == {"Speaker 1", "Speaker 2"}
 
 
 def test_other_channel_gets_no_turns_when_its_segments_are_filtered_out(mock_openai, tmp_path):
@@ -537,7 +537,7 @@ def test_mono_recording_uses_server_speaker_labels(mock_openai, tmp_path):
                             _spk(40.0, 100.0, "b", "SPEAKER_01")])
     result = _server_run(client, tmp_path, [reply], path=_mono(tmp_path))
     assert client.audio.transcriptions.create.call_args.kwargs["extra_body"] == {"diarize": True}
-    assert [s.speaker for s in result["segments"]] == ["Speaker 2", "You"]
+    assert [s.speaker for s in result["segments"]] == ["Speaker 2", "Speaker 1"]
 
 
 def test_mono_recording_without_server_labels_stays_unlabelled(mock_openai, tmp_path):

@@ -142,14 +142,21 @@ def _speaker_for(segment: Segment, turns: list[Turn]) -> int:
     return 0
 
 
-def label_segments(segments: list[Segment], turns: list[Turn], base_label: str) -> list[Segment]:
-    """Give each segment on the base channel the speaker of the turn it overlaps most."""
+def label_segments(
+        segments: list[Segment], turns: list[Turn], base_label: str, *,
+        first_label: str | None = None) -> list[Segment]:
+    """Give each segment on the base channel the speaker of the turn it overlaps most.
+
+    The most-heard voice is labelled `first_label` (default: `base_label`), voice N+1 `Speaker
+    N+1`; segments on other channels are untouched.
+    """
+    first = base_label if first_label is None else first_label
     out = []
     for segment in segments:
         if segment.speaker != base_label:
             out.append(segment)
             continue
         speaker = _speaker_for(segment, turns)
-        label = base_label if speaker == 0 else f"Speaker {speaker + 1}"
+        label = first if speaker == 0 else f"Speaker {speaker + 1}"
         out.append(replace(segment, speaker=label))
     return out

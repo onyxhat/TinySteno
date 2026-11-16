@@ -508,3 +508,38 @@ def test_warnings_are_made_single_line_and_bounded(tmp_path):
         "x" * 299 + "…",
         "y" * 300,
     )
+
+
+def test_prompt_names_the_recorder_only_when_a_line_is_labelled_you(tmp_path):
+    with_you = [Segment(1.0, 2.0, "hi", "You"), Segment(3.0, 4.0, "yo", "Speaker 2")]
+    ctx = _context_for(tmp_path, with_you, {"diarization": True})
+    assert ctx.has_you_label and ctx.has_numbered_speakers
+    in_room = [Segment(1.0, 2.0, "hi", "Speaker 1"), Segment(3.0, 4.0, "yo", "Speaker 2")]
+    ctx = _context_for(tmp_path, in_room, {"diarization": True})
+    assert not ctx.has_you_label and ctx.has_numbered_speakers and ctx.has_speaker_labels
+    assert not _context_for(tmp_path, with_you).has_you_label  # labels not shown
+
+
+def test_prompt_for_a_split_mono_recording_does_not_call_anyone_the_recorder(tmp_path):
+    from tinysteno.orchestrator import Orchestrator
+    in_room = [Segment(1.0, 2.0, "hi", "Speaker 1"), Segment(3.0, 4.0, "yo", "Speaker 2")]
+    ctx = _context_for(tmp_path, in_room, {"diarization": True})
+    block = Orchestrator._context_block(ctx, None)  # pylint: disable=protected-access
+    assert "[You]" not in block and "recorded this meeting" in block
+    assert "Speaker 1, Speaker 2" in block
+
+
+def test_prompt_for_legacy_text_names_the_recorder_only_when_you_appears(tmp_path):
+    class Legacy(FakeTranscriber):
+        """A result in the old shape: labelled text and no segment list."""
+
+        def __init__(self, diarised):
+            super().__init__("a b")
+            self.diarised = diarised
+
+        def transcribe(self, path, diarize=False, on_progress=None):
+            return {**super().transcribe(path, diarize, on_progress),
+                    "diarised_text": self.diarised}
+
+    assert _context_for(tmp_path, None, transcriber=Legacy("[You] a\n[Others] b")).has_you_label
+    assert not _context_for(tmp_path, None, transcriber=Legacy("[Others] a b")).has_you_label

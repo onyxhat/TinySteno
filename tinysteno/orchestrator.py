@@ -50,6 +50,10 @@ _CTX_LABELS = (
     "Speaker labels: [You] is the person who recorded this meeting; "
     "[Others] is everyone else on the call, possibly several people."
 )
+_CTX_LABELS_NO_YOU = (
+    "Speaker labels: No speaker label marks the person who recorded this meeting; "
+    "[Others], where it appears, is the other side of the call, possibly several people."
+)
 _CTX_NO_LABELS = (
     "The transcript has no speaker labels. Do not guess who said what, and do not name "
     "an owner for an action unless the transcript states the name."
@@ -63,6 +67,11 @@ _CTX_NUMBERED = (
     "Speaker 2, Speaker 3 and so on are further voices separated automatically. "
     "The separation is approximate: do not assign an action to a numbered speaker "
     "unless the transcript names them."
+)
+_CTX_NUMBERED_NO_YOU = (
+    "Speaker 1, Speaker 2 and so on are voices separated automatically, numbered from the "
+    "most heard. The separation is approximate: do not assign an action to a numbered "
+    "speaker unless the transcript names them."
 )
 _CTX_FIDELITY = (
     "Keep what was proposed, what is not yet agreed and what was decided distinct; "
@@ -81,6 +90,7 @@ class PromptContext:
 
     meeting_date: datetime | None = None
     has_speaker_labels: bool = False
+    has_you_label: bool = False
     has_numbered_speakers: bool = False
     has_timestamps: bool = False
     notes: str = ""
@@ -319,9 +329,13 @@ class Orchestrator:
     @staticmethod
     def _context_block(context: PromptContext, part: tuple[int, int] | None) -> str:
         """The `Context:` lines that apply, in a fixed order."""
-        lines = [_CTX_LABELS if context.has_speaker_labels else _CTX_NO_LABELS]
-        if context.has_speaker_labels and context.has_numbered_speakers:
-            lines.append(_CTX_NUMBERED)
+        you = context.has_you_label
+        if not context.has_speaker_labels:
+            lines = [_CTX_NO_LABELS]
+        else:
+            lines = [_CTX_LABELS if you else _CTX_LABELS_NO_YOU]
+            if context.has_numbered_speakers:
+                lines.append(_CTX_NUMBERED if you else _CTX_NUMBERED_NO_YOU)
         if context.has_timestamps:
             lines.append(_CTX_TIMESTAMPS)
         if context.meeting_date is not None:

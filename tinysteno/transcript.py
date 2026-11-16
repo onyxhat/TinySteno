@@ -168,7 +168,10 @@ def _split_speakers(
         if turns is None:
             return False
         segments = [seg if seg.speaker else replace(seg, speaker=base) for seg in stamped[key]]
-        relabelled = label_segments(segments, turns, base)
+        # Only the remote side keeps its label on its most-heard voice. On the microphone or a
+        # single-channel file that voice may not be the person recording, so it is numbered.
+        relabelled = label_segments(
+            segments, turns, base, first_label=None if key == OTHERS else "Speaker 1")
     except DiarizerUnavailable as err:
         warnings.append(str(err))
         return True
