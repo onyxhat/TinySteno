@@ -12,7 +12,7 @@ from tinysteno.personas import seed_builtin_personas
 from tinysteno.session import DEFAULT_SESSION_TIMEOUT_MINUTES
 
 DEFAULT_CONFIG: dict = {
-    "obsidian_vault": str(Path.home() / "Obsidian" / "Vault"),
+    "obsidian_vault": "~/Obsidian/Vault",
     "api_key": "ollama",
     "base_url": "http://localhost:11434/v1",
     "model": "llama3.2:3b",
@@ -43,9 +43,14 @@ DEFAULT_CONFIG: dict = {
 }
 
 
+def config_dir() -> Path:
+    """Return ~/.tinysteno, resolved against the current home on every call."""
+    return Path.home() / ".tinysteno"
+
+
 def config_path() -> Path:
     """Return ~/.tinysteno/config.yaml, resolved against the current home on every call."""
-    return Path.home() / ".tinysteno" / "config.yaml"
+    return config_dir() / "config.yaml"
 
 
 def is_timeout_minutes(value) -> bool:
@@ -103,9 +108,9 @@ def recordings_dir(config: dict) -> Path:
     """Return the effective recordings directory from config."""
     if config.get("recordings_path"):
         return Path(config["recordings_path"]).expanduser()
-    vault = config.get("obsidian_vault", str(Path.home() / "Obsidian" / "Vault"))
+    vault = Path(config.get("obsidian_vault", DEFAULT_CONFIG["obsidian_vault"])).expanduser()
     folder = config.get("output_folder", "meetings")
-    return Path(vault) / folder / "audio"
+    return vault / folder / "audio"
 
 
 def write_config(path: Path, config: dict) -> None:
@@ -116,6 +121,9 @@ def write_config(path: Path, config: dict) -> None:
     is untouched and no temp file is left behind.
     """
     import yaml
+    path = Path(os.path.realpath(path))  # write through a symlink, never replace it
+    if path.exists() and not os.access(path, os.W_OK):
+        raise PermissionError(f"Config file is read-only: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         mode = stat.S_IMODE(path.stat().st_mode)
@@ -125,6 +133,8 @@ def write_config(path: Path, config: dict) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(yaml.dump(config, default_flow_style=False))
+            handle.flush()
+            os.fsync(handle.fileno())
         os.chmod(tmp_name, mode)
         os.replace(tmp_name, path)
     except BaseException:
@@ -138,7 +148,8 @@ def write_config(path: Path, config: dict) -> None:
 def read_stored() -> dict:
     """Return the config file's own contents, unexpanded; {} when the file is missing.
 
-    Raises ValueError when the file is not valid YAML or not a mapping.
+    An empty or comments-only file counts as {}. Raises ValueError when the file is not
+    valid YAML or not a mapping.
     """
     import yaml
     path = config_path()
@@ -150,9 +161,22 @@ def read_stored() -> dict:
         stored = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise ValueError(f"Config file is not valid YAML: {path}: {exc}") from exc
+    if stored is None:
+        return {}
     if not isinstance(stored, dict):
         raise ValueError(f"Config file is malformed: {path}")
     return stored
+
+
+def invalid_settings(stored: dict) -> dict:
+    """Return {key: reason} for each stored key that fails validation on its own."""
+    problems = {}
+    for key, value in stored.items():
+        try:
+            validate_config({key: value})
+        except ValueError as exc:
+            problems[key] = str(exc)
+    return problems
 
 
 def update_config(changes: dict) -> dict:
