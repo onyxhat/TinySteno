@@ -28,6 +28,7 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=1.0",
     "pylint==4.0.5",
+    "sherpa-onnx>=2.0.1",
 ]
 
 [tool.setuptools.packages.find]
@@ -39,6 +40,11 @@ include = ["tinysteno*"]
 
 [project.scripts]
 tinysteno = "tinysteno.main:main"
+
+[project.optional-dependencies]
+diarize = [
+    "sherpa-onnx>=2.0.1",
+]
 
 [tool.uv]
 package = true
