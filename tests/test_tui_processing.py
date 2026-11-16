@@ -378,12 +378,10 @@ async def test_no_speech_from_a_saved_transcript_says_so(tmp_path):
 async def test_retranscribe_reaches_the_pipeline_once(tmp_path):
     deps = make_deps(tmp_path)
     inner = deps.run_pipeline
-    calls = []
 
     def flaky(*args, **kwargs):
-        calls.append(len(deps.retranscribes) + 1)
         result = inner(*args, **kwargs)
-        if len(calls) == 1:
+        if len(deps.pipeline_kwargs) == 1:
             raise RuntimeError("boom")
         return result
 
@@ -392,7 +390,8 @@ async def test_retranscribe_reaches_the_pipeline_once(tmp_path):
     async with app.run_test() as pilot:
         app.process_file(str(_wav(tmp_path)), "default", retranscribe=True)
         await _settle(app, pilot)
-        assert deps.retranscribes == [True]
         await pilot.press("r")
         await _settle(app, pilot)
-    assert deps.retranscribes == [True, False]
+    assert len(deps.pipeline_kwargs) == 2
+    assert deps.pipeline_kwargs[0].get("retranscribe") is True
+    assert not deps.pipeline_kwargs[1].get("retranscribe")

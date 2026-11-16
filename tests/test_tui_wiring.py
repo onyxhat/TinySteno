@@ -1,5 +1,6 @@
 """cmd_tui builds TuiDeps whose settings, recorder and pipeline follow the live config."""
 import argparse
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -7,6 +8,7 @@ import yaml
 
 from tinysteno.config import config_path, load_config
 from tinysteno.main import cmd_tui
+from tinysteno.tui.deps import SettingsNotApplied
 
 
 class FakeRecorder:  # pylint: disable=too-few-public-methods
@@ -143,3 +145,79 @@ def test_pipeline_forwards_retranscribe_and_reads_the_live_config():
          patch("tinysteno.main.create_transcriber"):
         deps.run_pipeline("a.wav", None, object(), None, None, retranscribe=True)
     assert run.call_args.kwargs["retranscribe"] is True
+
+
+class _WatchedConfig(dict):
+    """A dict that refuses clear() and notes which keys exist after every mutation."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.history: list[set] = []
+
+    def clear(self):
+        raise AssertionError("the live config must never be cleared")
+
+    def update(self, *args, **kwargs):
+        super().update(*args, **kwargs)
+        self.history.append(set(self))
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self.history.append(set(self))
+
+
+def test_save_never_empties_the_live_config():
+    config = _WatchedConfig(load_config())
+    deps, _ = _launch(config=config)
+    config["whisper_prompt"] = "old"  # a key the save will remove
+    before = set(config)
+    config.history.clear()
+    deps.save_settings({"model": "new", "whisper_prompt": None})
+    stable = before - {"whisper_prompt"}
+    assert config.history and all(stable <= seen for seen in config.history)
+    assert "whisper_prompt" not in config and config["model"] == "new"
+
+
+def test_a_run_keeps_its_own_snapshot_of_the_config():
+    deps, _config = _launch()
+    entered, release = threading.Event(), threading.Event()
+    seen = []
+
+    def fake_pipeline(_wav, _name, cfg, *_rest, **_kwargs):
+        seen.append(cfg["model"])
+        entered.set()
+        release.wait(5)
+        seen.append(cfg["model"])
+
+    def fake_transcriber(cfg):
+        seen.append(cfg["model"])
+
+    with patch("tinysteno.main.run_pipeline", side_effect=fake_pipeline), \
+         patch("tinysteno.main.create_transcriber", side_effect=fake_transcriber):
+        old = _config["model"]
+        worker = threading.Thread(
+            target=deps.run_pipeline, args=("a.wav", None, object(), None, None))
+        worker.start()
+        assert entered.wait(5)
+        deps.save_settings({"model": "new"})
+        release.set()
+        worker.join(5)
+        deps.run_pipeline("b.wav", None, object(), None, None)
+    assert seen[:3] == [old, old, old] and seen[3:] == ["new"] * 3
+
+
+def test_failure_after_the_write_is_settings_not_applied():
+    deps, config = _launch()
+    before = dict(config)
+    with patch("tinysteno.main.load_config", side_effect=RuntimeError("cannot reload")):
+        with pytest.raises(SettingsNotApplied, match="cannot reload"):
+            deps.save_settings({"model": "new"})
+    assert _stored()["model"] == "new"  # written
+    assert config == before  # not applied
+
+
+def test_overridden_keys():
+    deps, _config = _launch(argparse.Namespace(backend="api", speakers=3))
+    assert deps.overridden_keys == {"transcription_backend", "max_speakers"}
+    deps, _config = _launch()
+    assert deps.overridden_keys == frozenset()

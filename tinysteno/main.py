@@ -100,17 +100,26 @@ def create_transcriber(config: dict) -> Transcriber:
     )
 
 
+_CLI_TO_CONFIG = {
+    "backend": "transcription_backend",
+    "whisper_device": "whisper_device",
+    "whisper_compute_type": "whisper_compute_type",
+    "whisper_api_key": "whisper_api_key",
+    "whisper_api_model": "whisper_api_model",
+    "speakers": "max_speakers",
+}
+
+
+def _cli_overridden(args: argparse.Namespace) -> frozenset[str]:
+    """The config keys these CLI flags set."""
+    return frozenset(
+        key for flag, key in _CLI_TO_CONFIG.items() if getattr(args, flag, None) is not None
+    )
+
+
 def _apply_cli_overrides(config: dict, args: argparse.Namespace) -> None:
     """Merge CLI flags into config in-place (CLI overrides take precedence)."""
-    cli_to_config = {
-        "backend": "transcription_backend",
-        "whisper_device": "whisper_device",
-        "whisper_compute_type": "whisper_compute_type",
-        "whisper_api_key": "whisper_api_key",
-        "whisper_api_model": "whisper_api_model",
-        "speakers": "max_speakers",
-    }
-    for cli_key, config_key in cli_to_config.items():
+    for cli_key, config_key in _CLI_TO_CONFIG.items():
         val = getattr(args, cli_key, None)
         if val is not None:
             config[config_key] = val
@@ -295,7 +304,7 @@ def _is_interactive() -> bool:
 def cmd_tui(args, config, *, first_run: bool = False):
     """Launch the Textual interface."""
     from tinysteno.tui import run_tui
-    from tinysteno.tui.deps import TuiDeps
+    from tinysteno.tui.deps import SettingsNotApplied, TuiDeps
 
     notes = _read_notes(args)
     _apply_cli_overrides(config, args)
@@ -311,9 +320,10 @@ def cmd_tui(args, config, *, first_run: bool = False):
     def pipeline(  # pylint: disable=too-many-arguments
         wav_path, name, persona, timestamp, reporter, *, retranscribe=False
     ):
+        snapshot = dict(config)  # one consistent view for the whole run, whatever is saved
         return run_pipeline(
-            wav_path, name, config, persona, timestamp,
-            transcriber=create_transcriber(config),
+            wav_path, name, snapshot, persona, timestamp,
+            transcriber=create_transcriber(snapshot),
             orchestrator_cls=Orchestrator,
             exporter_cls=ObsidianExporter,
             reporter=reporter,
@@ -322,12 +332,18 @@ def cmd_tui(args, config, *, first_run: bool = False):
         )
 
     def save_settings(changes: dict) -> None:
-        update_config(changes)  # raises before anything in memory changes
-        fresh = load_config()
-        _apply_cli_overrides(fresh, args)  # a CLI flag wins for this session, never the file
-        config.clear()
+        update_config(changes)  # ValueError / OSError: nothing written, nothing changed
+        try:
+            fresh = load_config()
+            _apply_cli_overrides(fresh, args)  # a CLI flag wins for this session, never the file
+            new_dir = _recordings_dir(fresh)
+        except Exception as err:
+            raise SettingsNotApplied(str(err)) from err
+        # In place, never empty: overwrite first, then drop the keys that went away.
         config.update(fresh)
-        deps.recordings_dir = _recordings_dir(config)
+        for key in [key for key in config if key not in fresh]:
+            del config[key]
+        deps.recordings_dir = new_dir
 
     deps = TuiDeps(
         make_recorder=make_recorder,
@@ -341,6 +357,7 @@ def cmd_tui(args, config, *, first_run: bool = False):
         seed_personas=lambda: seed_builtin_personas(force=True),
         delete_recording=lambda wav: delete_recording(deps.recordings_dir, wav),
         first_run=first_run,
+        overridden_keys=_cli_overridden(args),
     )
     log_path = _config_dir() / "tui.log"
     with log_to_file(log_path, getattr(args, "verbose", False)) as log:
