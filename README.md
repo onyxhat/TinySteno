@@ -464,7 +464,7 @@ It exists so that retrying after a failed summary, export or LLM outage does not
 
 A missing file, one from an earlier format version, or one that fails validation is ignored and the recording is transcribed afresh (and the file rewritten). Pass `--retranscribe` to `tinysteno process` to force a fresh transcription, or delete the file. `transcript_timestamps` is applied when the note is rendered, so changing it does not need a new transcription; nor does `diarization`, unless `speaker_split` is on (then the split is part of the transcript and toggling `diarization` transcribes again). A transcript saved before the speaker split existed does not match the current settings and is transcribed again once.
 
-When a saved transcript is used, the CLI prints `Using the saved transcript for this recording (--retranscribe to transcribe again).` and the TUI shows the notice `Used the saved transcript for this recording.` Nothing about it is written into the note. Nothing is saved when the recording file does not exist, and a failure to save is logged as a warning and never fails the run.
+When a saved transcript is used, the CLI prints `Using the saved transcript for this recording (--retranscribe to transcribe again).` and the TUI shows the notice `Used the saved transcript for this recording.` Nothing about it is written into the note. Nothing is saved when the recording file does not exist, or when the speaker split was attempted and failed (the extra missing, a model download or checksum failure, a diarizer error), so the next run tries the split again; a split that quietly does nothing (short audio, one voice) is saved as usual. A failure to save is logged as a warning and never fails the run.
 
 ### Long transcripts
 

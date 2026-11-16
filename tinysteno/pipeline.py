@@ -175,7 +175,8 @@ def _transcript_result(
         diarize=config.get("diarization", False),
         on_progress=lambda fraction: reporter.stage_progress(Stage.TRANSCRIBE, fraction),
     )
-    if fingerprint is not None:
+    if fingerprint is not None and not result.get("split_failed"):
+        # A failed speaker split is not saved, so the next run tries the split again.
         save_transcript(wav_path, result, fingerprint)
     return result, False
 

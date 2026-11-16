@@ -548,3 +548,30 @@ def test_lazy_import_holds_after_a_split_runs():
         "assert 'tinysteno.sherpa_diarizer' not in sys.modules\n"
     )
     subprocess.run([sys.executable, "-c", check], check=True)
+
+
+def test_a_failed_split_is_flagged_on_both_failure_paths():
+    def unavailable(_label, _audio):
+        raise DiarizerUnavailable(UNAVAILABLE)
+
+    def boom(_label, _audio):
+        raise ValueError("model exploded")
+
+    for turns_for in (unavailable, boom):
+        result = assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en", options=ON,
+                          turns_for=turns_for)
+        assert result["split_failed"] is True
+
+
+def test_a_quiet_skip_or_a_split_is_not_a_failure():
+    short = np.full(16000 * 20, 0.1, dtype=np.float32)
+    runs = [
+        assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en", options=ON,
+                 turns_for=lambda _label, _audio: TWO_VOICES),
+        assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en", options=ON,
+                 turns_for=lambda _label, _audio: [Turn(0, 90, 0)]),
+        assemble(SPLIT_CHANNELS, {YOU: short, OTHERS: short}, diarize=True, language="en",
+                 options=ON, turns_for=_must_not_be_called),
+        assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en"),
+    ]
+    assert [run["split_failed"] for run in runs] == [False] * 4

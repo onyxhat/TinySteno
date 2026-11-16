@@ -48,6 +48,7 @@ class Transcriber(Protocol):
             detected_language (str)    — ISO language code
             segments (list[Segment])   — time-ordered, speaker-labelled segments
             warnings (list[str])       — problems worth showing the user
+            split_failed (bool)        — the speaker split was tried and failed
         """
 
 

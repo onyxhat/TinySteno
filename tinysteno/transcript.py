@@ -151,28 +151,33 @@ def _split_speakers(
     options: TranscriptOptions,
     turns_for: Callable[[str, np.ndarray], list[Turn]],
     warnings: list[str],
-) -> None:
-    """Relabel one channel's segments by speaker, in place; keep them as they are on failure."""
+) -> bool:
+    """Relabel one channel's segments by speaker, in place; keep them as they are on failure.
+
+    True when the split was attempted and failed; a quiet skip (short audio, nothing to split,
+    the policy keeping the channel label) is not a failure.
+    """
     key = _split_target(stamped)
     if key is None or key not in audio or options.max_speakers == 1:
-        return
+        return False
     if len(audio[key]) / SAMPLE_RATE < MIN_AUDIO_SECONDS:
-        return
+        return False
     base = key or YOU
     try:
         turns = apply_policy(turns_for(base, audio[key]), max_speakers=options.max_speakers)
         if turns is None:
-            return
+            return False
         segments = [seg if seg.speaker else replace(seg, speaker=base) for seg in stamped[key]]
         relabelled = label_segments(segments, turns, base)
     except DiarizerUnavailable as err:
         warnings.append(str(err))
-        return
+        return True
     except Exception:
         logger.warning("Speaker separation failed", exc_info=True)
         warnings.append(_WARN_SPLIT_FAILED)
-        return
+        return True
     stamped[key] = relabelled
+    return False
 
 
 def assemble(  # pylint: disable=too-many-arguments
@@ -188,7 +193,8 @@ def assemble(  # pylint: disable=too-many-arguments
     """Build the transcriber result from per-channel segments and 16 kHz mono audio.
 
     With `options.speaker_split` and `diarize` on, the remote channel (else the microphone) is
-    split into speakers after the filters; any failure keeps the plain channel labels.
+    split into speakers after the filters; any failure keeps the plain channel labels and sets
+    the result's `split_failed`, so the result is not saved for reuse.
     `turns_for(label, audio)` supplies the raw turns; `on_progress` receives the diarizer's
     0-1 fraction.
     """
@@ -224,9 +230,8 @@ def assemble(  # pylint: disable=too-many-arguments
         stamped[YOU], stamped[OTHERS] = suppress_bleed(
             stamped[YOU], stamped[OTHERS], channel_level(YOU), channel_level(OTHERS))
 
-    if split_enabled(options, diarize):
-        _split_speakers(stamped, audio, options, turns_for or _default_turns(on_progress),
-                        warnings)
+    split_failed = split_enabled(options, diarize) and _split_speakers(
+        stamped, audio, options, turns_for or _default_turns(on_progress), warnings)
 
     segments = interleave(seg for segs in stamped.values() for seg in segs)
     longest = max((len(arr) for arr in audio.values()), default=0)
@@ -237,6 +242,7 @@ def assemble(  # pylint: disable=too-many-arguments
         "detected_language": language,
         "segments": segments,
         "warnings": warnings,
+        "split_failed": split_failed,
     }
 
 

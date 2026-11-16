@@ -466,3 +466,35 @@ def test_fingerprint_tracks_server_diarization_only_when_effective(tmp_path):
     for off in ({"transcription_backend": "local"}, {"speaker_split": False}):
         assert (transcript_fingerprint(str(wav), {**on, **off, "whisper_api_diarize": True})
                 == transcript_fingerprint(str(wav), {**on, **off}))
+
+
+class SplitTranscriber(CountingTranscriber):
+    """Counting transcriber whose result says whether the speaker split failed."""
+
+    def __init__(self, split_failed):
+        super().__init__()
+        self.split_failed = split_failed
+
+    def transcribe(self, path, diarize=False, on_progress=None):
+        result = super().transcribe(path, diarize, on_progress)
+        return {**result, "split_failed": self.split_failed,
+                "warnings": ["Speaker separation failed; channel labels were used."]
+                if self.split_failed else []}
+
+
+SPLIT_ON = {"speaker_split": True, "diarization": True}
+
+
+def test_a_failed_split_is_not_saved_so_the_next_run_tries_again(tmp_path):
+    transcriber, wav = SplitTranscriber(split_failed=True), _real_wav(tmp_path)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav, config_overrides=SPLIT_ON)
+    result = _run(tmp_path, transcriber=transcriber, wav_path=wav, config_overrides=SPLIT_ON)
+    assert transcriber.calls == 2 and not result.reused_transcript
+    assert not Path(wav + ".transcript.json").exists()
+
+
+def test_a_quiet_split_skip_is_saved_and_reused(tmp_path):
+    transcriber, wav = SplitTranscriber(split_failed=False), _real_wav(tmp_path)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav, config_overrides=SPLIT_ON)
+    result = _run(tmp_path, transcriber=transcriber, wav_path=wav, config_overrides=SPLIT_ON)
+    assert transcriber.calls == 1 and result.reused_transcript
