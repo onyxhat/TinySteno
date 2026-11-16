@@ -1,8 +1,10 @@
 """Command palette contents of the app, and proof that nothing in it saves a screenshot."""
+import asyncio
 import inspect
 from pathlib import Path
 
 import pytest
+from textual.app import App
 
 from tinysteno.tui.app import TinyStenoApp
 from tests.tui_fakes import make_deps
@@ -57,10 +59,15 @@ async def test_screenshot_action_saves_nothing(tmp_path, monkeypatch):
 
 async def test_no_palette_command_saves_a_screenshot(tmp_path, monkeypatch):
     app = TinyStenoApp(CONFIG, make_deps(tmp_path))
-    calls = _record_screenshots(app, monkeypatch)
+    calls: list = []
+    # export_screenshot is what deliver_screenshot calls first; save_screenshot is the other
+    # way to write one. Neither may run, whatever route a command takes.
+    for name in ("save_screenshot", "export_screenshot"):
+        monkeypatch.setattr(app, name, lambda *a, _n=name, **k: calls.append(_n))
     async with app.run_test() as pilot:
         base = len(app.screen_stack)
-        for command in list(app.get_system_commands(app.screen)):
+        # Textual's own list, unfiltered, so its Screenshot command is included.
+        for command in list(App.get_system_commands(app, app.screen)):
             if command.title == "Quit":      # exits the app; covered by its own tests
                 continue
             result = command.callback()
@@ -70,5 +77,7 @@ async def test_no_palette_command_saves_a_screenshot(tmp_path, monkeypatch):
             while len(app.screen_stack) > base:   # e.g. the theme picker
                 app.pop_screen()
                 await pilot.pause()
+        await asyncio.sleep(0.3)             # the Screenshot command fires on a 0.1 s timer
+        await pilot.pause()
     assert not calls
     assert not list(tmp_path.rglob("*.svg"))

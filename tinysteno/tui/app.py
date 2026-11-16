@@ -178,6 +178,15 @@ class TinyStenoApp(App):
         """Do nothing: screenshots are made by scripts/tui_screenshots.py, which calls
         save_screenshot directly."""
 
+    def deliver_screenshot(  # pylint: disable=arguments-differ
+        self,
+        filename: str | None = None,
+        path: str | None = None,
+        time_format: str | None = None,
+    ) -> str | None:
+        """Do nothing: the palette command and the action both end here, so neither saves."""
+        return None
+
     def action_dismiss_notices(self) -> None:
         """Clear every notice on screen (a failed-save notice stays until this or a click)."""
         self.clear_notifications()
