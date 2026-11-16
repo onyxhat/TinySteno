@@ -109,6 +109,25 @@ async def test_no_speech_keeps_audio_and_offers_home(tmp_path):
         assert sum(isinstance(s, HomeScreen) for s in app.screen_stack) == 1
 
 
+async def test_no_speech_shows_each_warning_under_the_message(tmp_path):
+    wav = _wav(tmp_path)
+    warning = "System audio was present but no speech was recognised."
+
+    def fake(wav_path, name, persona, ts, reporter):  # pylint: disable=unused-argument
+        reporter.stage_started(Stage.TRANSCRIBE)
+        reporter.stage_finished(Stage.TRANSCRIBE)
+        return PipelineResult(str(wav), None, None, 3.0, True, warnings=(warning, "[x] other"))
+
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path, run_pipeline=fake))
+    async with app.run_test() as pilot:
+        app.process_file(str(wav), "default")
+        await _settle(app, pilot)
+        assert isinstance(app.screen, ProcessingScreen)
+        lines = _text(app.screen, "#error").splitlines()
+        assert lines[0].startswith("No speech detected")
+        assert lines[1:] == [warning, "[x] other"]
+
+
 async def test_failure_shows_stage_cause_and_wav_then_retry_succeeds(tmp_path):
     wav = _wav(tmp_path)
     attempts = []
