@@ -16,3 +16,7 @@
 - [ ] TUI stretch: Splash and text effects (`textualeffects` / terminaltexteffects)
 - [ ] TUI stretch: Real waveform via the Textual Line API (`render_line` with half-block characters)
 - [ ] TUI stretch: SVG snapshot tests with `pytest-textual-snapshot`
+- [ ] Speaker split: name speakers (voiceprints), with human confirmation
+- [ ] Speaker split: split a segment between speakers at word level
+- [ ] Speaker split: add a Parakeet backend
+- [ ] Speaker split: measure it against hand-labelled recordings

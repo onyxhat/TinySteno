@@ -5,7 +5,7 @@ from tinysteno.pipeline import PipelineResult
 from tinysteno.tui.app import TinyStenoApp
 from tinysteno.tui.home import HomeScreen
 from tinysteno.tui.result import ResultScreen, obsidian_url, strip_frontmatter
-from tests.tui_fakes import FakeRecorder, make_deps
+from tests.tui_fakes import NOTE_TEXT, FakeRecorder, make_deps
 
 CONFIG = {"persona": "default", "session_timeout_minutes": 120}
 
@@ -99,3 +99,33 @@ async def test_note_path_with_brackets_is_not_read_as_markup(tmp_path):
         await _settle(app, pilot)
         assert str(app.screen.query_one("#note-path").content) == str(note)
         assert app.screen.query_one("#note").source == "# Hi\n"
+
+
+async def test_each_warning_becomes_a_warning_notification(tmp_path):
+    note = tmp_path / "Sync.md"
+    note.write_text(NOTE_TEXT)
+    result = PipelineResult(
+        wav_path="a.wav", note_path=str(note), title="Sync", duration_seconds=61.0,
+        no_speech=False, warnings=("first [bold]problem[/]", "second problem"),
+    )
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
+    async with app.run_test(notifications=True) as pilot:
+        await app.push_screen(ResultScreen(result))
+        await _settle(app, pilot)
+        shown = [(n.message, n.severity) for n in app._notifications]  # pylint: disable=protected-access
+    assert shown == [("first [bold]problem[/]", "warning"), ("second problem", "warning")]
+
+
+async def test_reused_transcript_gets_an_information_notification(tmp_path):
+    note = tmp_path / "Sync.md"
+    note.write_text(NOTE_TEXT)
+    result = PipelineResult(
+        wav_path="a.wav", note_path=str(note), title="Sync", duration_seconds=61.0,
+        no_speech=False, reused_transcript=True,
+    )
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
+    async with app.run_test(notifications=True) as pilot:
+        await app.push_screen(ResultScreen(result))
+        await _settle(app, pilot)
+        shown = [(n.message, n.severity) for n in app._notifications]  # pylint: disable=protected-access
+    assert shown == [("Used the saved transcript for this recording.", "information")]

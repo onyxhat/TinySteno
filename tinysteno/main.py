@@ -14,6 +14,7 @@ from typing import Optional
 from tinysteno.recorder import AudioRecorder
 from tinysteno.api_transcriber import ApiTranscriber
 from tinysteno.transcriber import Transcriber, WhisperTranscriber
+from tinysteno.transcript import TranscriptOptions
 from tinysteno.orchestrator import Orchestrator
 from tinysteno.obsidian import ObsidianExporter
 from tinysteno.session import (
@@ -46,6 +47,7 @@ def load_config() -> dict:
             "api_key": "ollama",
             "base_url": "http://localhost:11434/v1",
             "model": "llama3.2:3b",
+            "llm_context_tokens": 8192,
             "whisper_model": "small",
             "transcription_backend": "local",
             "whisper_device": "auto",
@@ -53,7 +55,15 @@ def load_config() -> dict:
             "whisper_api_key": "",
             "whisper_base_url": "",
             "whisper_api_model": "whisper-1",
+            "whisper_api_diarize": False,
+            "whisper_api_timeout": 600,
+            "whisper_vad": True,
+            "whisper_prompt": "",
+            "hallucination_filter": True,
+            "bleed_filter": True,
             "diarization": False,
+            "speaker_split": False,
+            "transcript_timestamps": True,
             "auto_title": True,
             "auto_tags": True,
             "output_folder": "meetings",
@@ -98,8 +108,20 @@ def _validate_config(config: dict) -> None:
                 f"Config field '{field}' must be {expected_type.__name__}, "
                 f"got {type(config[field]).__name__}"
             )
+    if "llm_context_tokens" in config and (
+        isinstance(config["llm_context_tokens"], bool)
+        or not isinstance(config["llm_context_tokens"], int)
+    ):
+        raise ValueError(
+            "Config field 'llm_context_tokens' must be int, "
+            f"got {type(config['llm_context_tokens']).__name__}"
+        )
     if "channels" in config and config["channels"] not in (1, 2):
         raise ValueError("Config field 'channels' must be 1 or 2")
+    if "max_speakers" in config and not _is_speaker_count(config["max_speakers"]):
+        raise ValueError("Config field 'max_speakers' must be a whole number >= 1")
+    if "whisper_api_timeout" in config and not _is_positive_number(config["whisper_api_timeout"]):
+        raise ValueError("Config field 'whisper_api_timeout' must be a positive number of seconds")
     if "session_timeout_minutes" in config:
         if not _is_timeout_minutes(config["session_timeout_minutes"]):
             raise ValueError(
@@ -113,6 +135,30 @@ def _is_timeout_minutes(value) -> bool:
         isinstance(value, (int, float)) and not isinstance(value, bool)
         and math.isfinite(value) and value >= 0
     )
+
+
+def _is_positive_number(value) -> bool:
+    """True for a finite int/float > 0 that is not a bool."""
+    return (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        and math.isfinite(value) and value > 0
+    )
+
+
+def _is_speaker_count(value) -> bool:
+    """True for an int >= 1 that is not a bool."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _speaker_count(value: str) -> int:
+    """argparse type: a whole number of at least 1."""
+    try:
+        count = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a whole number of at least 1") from None
+    if count < 1:
+        raise argparse.ArgumentTypeError("must be a whole number of at least 1")
+    return count
 
 
 def _non_negative_minutes(value: str) -> float:
@@ -129,16 +175,34 @@ def _non_negative_minutes(value: str) -> float:
 def create_transcriber(config: dict) -> Transcriber:
     """Factory: build the appropriate transcriber backend from config."""
     backend = config.get("transcription_backend", "local")
+    prompt = config.get("whisper_prompt", "")
+    if not isinstance(prompt, str):
+        prompt = ""
+    options = TranscriptOptions(
+        drop_hallucinations=bool(config.get("hallucination_filter", True)),
+        suppress_bleed=bool(config.get("bleed_filter", True)),
+        speaker_split=bool(config.get("speaker_split", False)),
+        max_speakers=(config["max_speakers"]
+                      if _is_speaker_count(config.get("max_speakers")) else None),
+    )
     if backend == "api":
         return ApiTranscriber(
             api_key=config.get("whisper_api_key") or config["api_key"],
             base_url=config.get("whisper_base_url") or config.get("base_url"),
             model=config.get("whisper_api_model", "whisper-1"),
+            prompt=prompt,
+            options=options,
+            server_diarize=bool(config.get("whisper_api_diarize", False)),
+            timeout=(float(config["whisper_api_timeout"])
+                     if _is_positive_number(config.get("whisper_api_timeout")) else 600.0),
         )
     return WhisperTranscriber(
         model_size=config.get("whisper_model", "small"),
         device=config.get("whisper_device", "auto"),
         compute_type=config.get("whisper_compute_type", "auto"),
+        vad=config.get("whisper_vad", True),
+        prompt=prompt,
+        options=options,
     )
 
 
@@ -150,6 +214,7 @@ def _apply_cli_overrides(config: dict, args: argparse.Namespace) -> None:
         "whisper_compute_type": "whisper_compute_type",
         "whisper_api_key": "whisper_api_key",
         "whisper_api_model": "whisper_api_model",
+        "speakers": "max_speakers",
     }
     for cli_key, config_key in cli_to_config.items():
         val = getattr(args, cli_key, None)
@@ -189,13 +254,28 @@ class _RichReporter:
         """Nothing to show for a skipped stage."""
 
 
-def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def _read_notes(args) -> str:
+    """The text of the `--notes` file, or "" without one; exit 1 if it cannot be read."""
+    path = getattr(args, "notes", None)
+    if not path:
+        return ""
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as err:
+        reason = err.strerror if isinstance(err, OSError) and err.strerror else err
+        print(f"Error: cannot read notes file {path}: {reason}", file=sys.stderr)
+        sys.exit(1)
+
+
+def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     wav_path: str,
     name: Optional[str],
     config: dict,
     logger: logging.Logger,
     persona: Persona,
     timestamp: datetime,
+    notes: str = "",
+    retranscribe: bool = False,
 ) -> None:
     """Shared pipeline: transcribe → summarize → export, with Rich progress."""
     from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
@@ -213,8 +293,12 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
                 orchestrator_cls=Orchestrator,
                 exporter_cls=ObsidianExporter,
                 reporter=_RichReporter(progress),
+                notes=notes,
+                retranscribe=retranscribe,
             )
         except PipelineError as err:
+            for text in err.warnings:
+                print(f"Warning: {text}")
             cause = err.__cause__
             if err.stage is Stage.EXPORT and isinstance(cause, RuntimeError):
                 print(f"Error rendering note: {cause}")
@@ -222,6 +306,11 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
             raise cause from None  # pylint: disable=raising-non-exception
 
     logger.debug(f"Duration: {result.duration_seconds:.0f}s")
+    if result.reused_transcript:
+        print("Using the saved transcript for this recording "
+              "(--retranscribe to transcribe again).")
+    for text in result.warnings:
+        print(f"Warning: {text}")
     if result.no_speech:
         print("No speech detected, skipping export.")
         return
@@ -255,7 +344,7 @@ def _capture(recorder, timer: SessionTimer, name: Optional[str], minutes: float)
         return wav_path, saved, bool(exit_signals)
 
 
-def cmd_record(args, config):
+def cmd_record(args, config):  # pylint: disable=too-many-locals
     """Record audio and process into meeting notes."""
     logger = logging.getLogger(__name__)
 
@@ -269,6 +358,7 @@ def cmd_record(args, config):
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    notes = _read_notes(args)
     name = args.name or None
     timestamp = datetime.now()  # capture at start of recording
 
@@ -300,7 +390,7 @@ def cmd_record(args, config):
     if not saved:
         print("No audio was captured.")
         return
-    _process_audio(wav_path, name, config, logger, persona, timestamp)
+    _process_audio(wav_path, name, config, logger, persona, timestamp, notes=notes)
 
 
 def _is_interactive() -> bool:
@@ -313,6 +403,7 @@ def cmd_tui(args, config):
     from tinysteno.tui import run_tui
     from tinysteno.tui.deps import TuiDeps
 
+    notes = _read_notes(args)
     _apply_cli_overrides(config, args)
 
     def make_recorder():
@@ -330,6 +421,7 @@ def cmd_tui(args, config):
             orchestrator_cls=Orchestrator,
             exporter_cls=ObsidianExporter,
             reporter=reporter,
+            notes=notes,
         ),
         list_personas=list_personas,
         load_persona=load_persona,
@@ -368,12 +460,15 @@ def cmd_process(args, config):
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+    notes = _read_notes(args)
     timestamp = datetime.fromtimestamp(audio_file.stat().st_mtime)
 
     _apply_cli_overrides(config, args)
 
     logger = logging.getLogger(__name__)
-    _process_audio(str(audio_file), args.name or None, config, logger, persona, timestamp)
+    _process_audio(
+        str(audio_file), args.name or None, config, logger, persona, timestamp, notes=notes,
+        retranscribe=getattr(args, "retranscribe", False))
 
 
 def cmd_list(args):
@@ -631,7 +726,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         console,
         "Enable speaker diarization ([You]/[Others] labels)?",
         get("diarization", False),
-        "requires stereo recording (channels = 2)",
+        "labels come from recording system audio; no microphone setting is needed",
     )
 
     # --- Audio ---
@@ -646,17 +741,16 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         f"leave blank to use default: {computed_recordings}",
     )
 
-    channels_fallback = "2" if diarization else "1"
     channels_input = _prompt(
         console,
         "Channels",
-        str(get("channels", channels_fallback)),
-        "1 = mono, 2 = stereo (required for diarization)",
+        str(get("channels", 1)),
+        "microphone input channels (1 is right for almost every microphone)",
     )
     try:
         channels = int(channels_input)
     except ValueError:
-        channels = 2 if diarization else 1
+        channels = 1
 
     sample_rate_input = _prompt(console, "Sample rate", str(get("sample_rate", 44100)), "Hz")
     try:
@@ -745,6 +839,8 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
         "--timeout", type=_non_negative_minutes, metavar="MINUTES",
         help="Auto-stop after MINUTES (0 disables; default from config)",
     )
+    record_parser.add_argument(
+        "--notes", metavar="PATH", help="Text file of your own notes for the summary (UTF-8)")
     record_parser.add_argument("--verbose", action="store_true", help="Verbose output")
     record_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
     record_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
@@ -754,6 +850,10 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     )
     record_parser.add_argument("--whisper-api-key", help="API key for API backend")
     record_parser.add_argument("--whisper-api-model", help="Model name for API backend")
+    record_parser.add_argument(
+        "--speakers", type=_speaker_count, metavar="N",
+        help="Most voices to expect when splitting the remote side by speaker (this run only)",
+    )
 
     tui_parser = subparsers.add_parser("tui", help="Interactive terminal interface")
     tui_parser.add_argument("--now", action="store_true", help="Start recording immediately")
@@ -763,6 +863,8 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
         "--timeout", type=_non_negative_minutes, metavar="MINUTES",
         help="Auto-stop after MINUTES (0 disables; default from config)",
     )
+    tui_parser.add_argument(
+        "--notes", metavar="PATH", help="Text file of your own notes for the summary (UTF-8)")
     tui_parser.add_argument("--verbose", action="store_true", help="Verbose output")
     tui_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
     tui_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
@@ -772,11 +874,20 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     )
     tui_parser.add_argument("--whisper-api-key", help="API key for API backend")
     tui_parser.add_argument("--whisper-api-model", help="Model name for API backend")
+    tui_parser.add_argument(
+        "--speakers", type=_speaker_count, metavar="N",
+        help="Most voices to expect when splitting the remote side by speaker (this run only)",
+    )
 
     process_parser = subparsers.add_parser("process", help="Process existing audio")
     process_parser.add_argument("audio", help="Audio file path")
     process_parser.add_argument("--name", help="Meeting name")
     process_parser.add_argument("--persona", help="Persona slug to use for this audio file")
+    process_parser.add_argument(
+        "--notes", metavar="PATH", help="Text file of your own notes for the summary (UTF-8)")
+    process_parser.add_argument(
+        "--retranscribe", action="store_true",
+        help="Transcribe again even if a saved transcript sits beside the recording")
     process_parser.add_argument("--verbose", action="store_true", help="Verbose output")
     process_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
     process_parser.add_argument("--whisper-device", help="Whisper device (cpu, cuda, auto)")
@@ -786,6 +897,10 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     )
     process_parser.add_argument("--whisper-api-key", help="API key for API backend")
     process_parser.add_argument("--whisper-api-model", help="Model name for API backend")
+    process_parser.add_argument(
+        "--speakers", type=_speaker_count, metavar="N",
+        help="Most voices to expect when splitting the remote side by speaker (this run only)",
+    )
 
     list_parser = subparsers.add_parser("list", help="List meetings")
     list_parser.add_argument("--vault", default="", help="Vault path")

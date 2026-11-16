@@ -1,5 +1,6 @@
 """UI-free transcribe -> summarize -> export pipeline with per-stage reporting."""
 
+import hashlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -7,10 +8,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Iterator, Optional, Protocol
+from typing import Callable, Iterator, Optional, Protocol
 
+from tinysteno.orchestrator import PromptContext
 from tinysteno.personas import Persona
 from tinysteno.transcriber import Transcriber
+from tinysteno.transcript import YOU, load_transcript, render_transcript, save_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +60,15 @@ class NullReporter:
 
 
 class PipelineError(RuntimeError):
-    """A pipeline stage failed; the original exception is the __cause__."""
+    """A pipeline stage failed; the original exception is the __cause__.
 
-    def __init__(self, stage: Stage, message: str = ""):
+    `warnings` holds the warnings gathered before the failure, ready to show.
+    """
+
+    def __init__(self, stage: Stage, message: str = "", warnings: tuple[str, ...] = ()):
         super().__init__(message or f"{stage.value} failed")
         self.stage = stage
+        self.warnings = tuple(warnings)
 
 
 @dataclass(frozen=True)
@@ -73,6 +80,8 @@ class PipelineResult:
     title: Optional[str]
     duration_seconds: float
     no_speech: bool
+    warnings: tuple[str, ...] = ()
+    reused_transcript: bool = False
 
 
 def _format_duration(duration_seconds: float) -> str:
@@ -85,34 +94,125 @@ def _format_duration(duration_seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-def _extract_summary_text(persona: Persona, data: dict) -> Optional[str]:
-    """Extract the best text from summarized data for title/tag generation."""
-    first_string_value = next(
-        (data.get(field, "") for field, defn in persona.schema.items()
-         if defn["type"] == "string"),
-        None,
-    )
-    if not first_string_value:
-        all_items: list[str] = []
+def _string_list(value: object) -> list[str]:
+    """The strings in a list or tuple; anything else (a missing or mock attribute) is none."""
+    if isinstance(value, (list, tuple)):
+        return [item for item in value if isinstance(item, str)]
+    return []
+
+
+_WARNING_MAX_CHARS = 300
+
+
+def _one_line(text: str) -> str:
+    """A warning on one line: whitespace runs become one space, cut to 300 characters with `…`."""
+    text = " ".join(text.split())
+    if len(text) > _WARNING_MAX_CHARS:
+        text = text[:_WARNING_MAX_CHARS - 1] + "…"
+    return text
+
+
+def _merge_warnings(*groups: list[str]) -> tuple[str, ...]:
+    """Concatenate warning groups in order, each made one bounded line, distinct texts once.
+
+    A warning left empty is dropped. Every warning shown or written passes through here, so a
+    multi-line error message cannot break the note's bullet list or a notification.
+    """
+    lines = (_one_line(text) for group in groups for text in group)
+    return tuple(dict.fromkeys(line for line in lines if line))
+
+
+def summary_digest(persona: Persona, data: dict, limit: int = 4000) -> Optional[str]:
+    """Every non-empty string field, then every list item, one per line, cut to `limit`.
+
+    Fields and items come in schema order; None when there is nothing to digest.
+    """
+    lines: list[str] = []
+    for kind in ("string", "list"):
         for field, defn in persona.schema.items():
-            if defn["type"] == "list":
-                all_items.extend(data.get(field, []))
-        return ". ".join(all_items) if all_items else None
-    return first_string_value
+            if defn["type"] != kind:
+                continue
+            value = data.get(field)
+            for item in [value] if kind == "string" else value or []:
+                if isinstance(item, str) and item.strip():
+                    lines.append(item.strip())
+    return "\n".join(lines)[:limit] or None
 
 
 @contextmanager
-def _stage(reporter: PipelineReporter, stage: Stage) -> Iterator[None]:
-    """Report a stage as started/finished; re-raise failures as PipelineError."""
+def _stage(
+    reporter: PipelineReporter, stage: Stage,
+    gathered: Callable[[], tuple[str, ...]] = tuple,
+) -> Iterator[None]:
+    """Report a stage as started/finished; re-raise failures as PipelineError carrying the
+    warnings `gathered()` returns at that moment."""
     reporter.stage_started(stage)
     try:
         yield
     except Exception as exc:
-        raise PipelineError(stage, str(exc)) from exc
+        raise PipelineError(stage, str(exc), warnings=gathered()) from exc
     reporter.stage_finished(stage)
 
 
-def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+def transcript_fingerprint(wav_path: str, config: dict) -> dict:
+    """What a saved transcript depends on: the recording's size and the transcription settings."""
+    backend = config.get("transcription_backend", "local")
+    prompt = config.get("whisper_prompt", "")
+    split = bool(config.get("speaker_split", False)) and bool(config.get("diarization", False))
+    fingerprint = {
+        "size": Path(wav_path).stat().st_size,
+        "backend": backend,
+        "model": (config.get("whisper_api_model", "whisper-1") if backend == "api"
+                  else config.get("whisper_model", "small")),
+        "prompt": prompt if isinstance(prompt, str) else "",
+        "vad": bool(config.get("whisper_vad", True)),
+        "hallucination_filter": bool(config.get("hallucination_filter", True)),
+        "bleed_filter": bool(config.get("bleed_filter", True)),
+        "speaker_split": split,
+        "max_speakers": config.get("max_speakers") if split else None,
+    }
+    if backend == "api":
+        # Which server transcribed it (the LLM endpoint when no separate one is set), as a
+        # digest: the URL can carry credentials, and the sidecar sits in the (synced) vault.
+        url = config.get("whisper_base_url") or config.get("base_url") or ""
+        fingerprint["server_id"] = hashlib.sha256(str(url).encode("utf-8")).hexdigest()
+    if split and backend == "api" and config.get("whisper_api_diarize"):
+        # Present only while it is in effect, so setting the option while the split is off
+        # (or on the local backend) does not make a saved transcript stale.
+        fingerprint["whisper_api_diarize"] = True
+    return fingerprint
+
+
+def _transcript_result(
+    wav_path: str, config: dict, transcriber: Transcriber, reporter: PipelineReporter,
+    retranscribe: bool,
+) -> tuple[dict, bool]:
+    """The saved transcript when one is usable, else a fresh transcription (which is saved).
+
+    The flag says whether a saved transcript was used.
+    """
+    try:
+        fingerprint = transcript_fingerprint(wav_path, config)
+    except OSError:
+        fingerprint = None  # no recording on disk: nothing to reuse, nothing to save
+    if fingerprint is not None and not retranscribe:
+        result = load_transcript(wav_path, fingerprint)
+        if result is not None:
+            logger.info("Reusing the saved transcript for %s", wav_path)
+            reporter.stage_progress(Stage.TRANSCRIBE, 1.0)
+            return result, True
+    result = transcriber.transcribe(
+        wav_path,
+        diarize=config.get("diarization", False),
+        on_progress=lambda fraction: reporter.stage_progress(Stage.TRANSCRIBE, fraction),
+    )
+    if fingerprint is not None and not result.get("split_failed"):
+        # A failed speaker split is not saved, so the next run tries the split again.
+        save_transcript(wav_path, result, fingerprint)
+    return result, False
+
+
+def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
     wav_path: str,
     name: Optional[str],
     config: dict,
@@ -123,48 +223,88 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
     orchestrator_cls: type,
     exporter_cls: type,
     reporter: Optional[PipelineReporter] = None,
+    notes: str = "",
+    retranscribe: bool = False,
 ) -> PipelineResult:
-    """Transcribe, summarize, tag and export a recording, reporting each stage."""
+    """Transcribe, summarize, tag and export a recording, reporting each stage.
+
+    A transcript saved beside the recording is reused unless `retranscribe` is set.
+    """
     reporter = reporter or NullReporter()
+    transcriber_warnings: list[str] = []
+    orchestrator = None
+
+    def gathered() -> tuple[str, ...]:
+        return _merge_warnings(
+            transcriber_warnings, _string_list(getattr(orchestrator, "warnings", [])))
 
     with _stage(reporter, Stage.TRANSCRIBE):
-        result = transcriber.transcribe(
-            wav_path,
-            diarize=config.get("diarization", False),
-            on_progress=lambda fraction: reporter.stage_progress(Stage.TRANSCRIBE, fraction),
-        )
+        result, reused = _transcript_result(wav_path, config, transcriber, reporter, retranscribe)
     duration_seconds = result.get("duration_seconds", 0.0)
     logger.debug("Detected language: %s", result.get("detected_language"))
     logger.debug("Duration: %.0fs", duration_seconds)
 
-    transcript = result["diarised_text"] or result["text"]
+    transcriber_warnings = _string_list(result.get("warnings"))
+    segments = result.get("segments")
+    diarization = config.get("diarization", False)
+    timestamps = config.get("transcript_timestamps", True)
+    if isinstance(segments, list):
+        transcript = render_transcript(segments, labels=diarization, timestamps=timestamps)
+        has_labels = bool(diarization) and any(seg.speaker for seg in segments)
+        has_timestamps = bool(timestamps)
+        has_you = has_labels and any(seg.speaker == YOU for seg in segments)
+        has_numbered = has_labels and any(seg.speaker.startswith("Speaker ") for seg in segments)
+        has_speaker_one = has_labels and any(seg.speaker == "Speaker 1" for seg in segments)
+    else:
+        transcript = result["diarised_text"] or result["text"]
+        has_labels = bool(result["diarised_text"])
+        has_you = has_labels and any(
+            line.startswith(f"[{YOU}]") for line in result["diarised_text"].splitlines())
+        has_timestamps = False
+        has_numbered = has_speaker_one = False
     if not transcript.strip():
         for stage in (Stage.SUMMARIZE, Stage.METADATA, Stage.EXPORT):
             reporter.stage_skipped(stage)
-        return PipelineResult(wav_path, None, None, duration_seconds, no_speech=True)
+        return PipelineResult(
+            wav_path, None, None, duration_seconds, no_speech=True,
+            warnings=_merge_warnings(transcriber_warnings), reused_transcript=reused,
+        )
 
     data: dict = {}
-    orchestrator = None
     if config.get("api_key"):
-        with _stage(reporter, Stage.SUMMARIZE):
+        with _stage(reporter, Stage.SUMMARIZE, gathered):
+            extra = {}
+            if "llm_context_tokens" in config:
+                extra["context_tokens"] = config["llm_context_tokens"]
             orchestrator = orchestrator_cls(
                 api_key=config["api_key"],
                 base_url=config["base_url"],
                 model=config["model"],
+                **extra,
             )
-            data = orchestrator.summarize(transcript, persona)
+            data = orchestrator.summarize(
+                transcript,
+                persona,
+                PromptContext(
+                    meeting_date=timestamp,
+                    has_speaker_labels=has_labels,
+                    has_you_label=has_you,
+                    has_numbered_speakers=has_numbered,
+                    has_speaker_one=has_speaker_one,
+                    has_timestamps=has_timestamps,
+                    notes=notes,
+                ),
+            )
     else:
         reporter.stage_skipped(Stage.SUMMARIZE)
 
-    # First string field for title/tag generation; list-only personas (e.g. 1on1)
-    # fall back to joining all list values.
-    summary_text = _extract_summary_text(persona, data)
+    summary_text = summary_digest(persona, data)
     generated_title = None
     generated_tags: list = []
     wants_title = config.get("auto_title")
     wants_tags = config.get("auto_tags")
     if (wants_title or wants_tags) and orchestrator and summary_text:
-        with _stage(reporter, Stage.METADATA):
+        with _stage(reporter, Stage.METADATA, gathered):
             with ThreadPoolExecutor(max_workers=2) as executor:
                 title_future = (
                     executor.submit(orchestrator.generate_title, summary_text)
@@ -182,8 +322,9 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
         reporter.stage_skipped(Stage.METADATA)
 
     title = name or generated_title or Path(wav_path).stem
+    warnings = gathered()
 
-    with _stage(reporter, Stage.EXPORT):
+    with _stage(reporter, Stage.EXPORT, gathered):
         metadata = {
             "title": title,
             "date": timestamp.strftime("%Y-%m-%d %H:%M"),
@@ -191,6 +332,7 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
             "transcript": transcript,
             "detected_language": result.get("detected_language", ""),
             "generated_tags": generated_tags,
+            "processing_warnings": list(warnings),
         }
         exporter = exporter_cls(
             vault_path=config["obsidian_vault"],
@@ -198,4 +340,6 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
         )
         note_path = str(exporter.export(data, persona, metadata))
 
-    return PipelineResult(wav_path, note_path, title, duration_seconds, no_speech=False)
+    return PipelineResult(
+        wav_path, note_path, title, duration_seconds, no_speech=False, warnings=warnings,
+        reused_transcript=reused)

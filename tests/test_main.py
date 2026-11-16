@@ -13,10 +13,12 @@ import pytest
 import yaml
 
 from tinysteno.main import (
-    cmd_record, cmd_setup, load_config, main, _process_audio, _validate_config,
+    cmd_process, cmd_record, cmd_setup, create_transcriber, load_config, main,
+    _apply_cli_overrides, _process_audio, _validate_config,
 )
 from tinysteno.main import cmd_tui as run_cmd_tui
 from tinysteno.personas import Persona
+from tinysteno.transcript import Segment, TranscriptOptions
 
 
 def _write_config(path: Path) -> None:
@@ -36,6 +38,55 @@ def _write_config(path: Path) -> None:
         "persona": "default",
     }
     path.write_text(yaml.dump(config))
+
+
+def test_create_transcriber_reads_vad_and_prompt_from_config():
+    with patch("tinysteno.main.WhisperTranscriber") as cls:
+        create_transcriber({"whisper_vad": False, "whisper_prompt": "Acme"})
+    assert cls.call_args.kwargs["vad"] is False and cls.call_args.kwargs["prompt"] == "Acme"
+
+
+def test_create_transcriber_defaults_and_ignores_non_string_prompt():
+    with patch("tinysteno.main.WhisperTranscriber") as cls:
+        create_transcriber({})
+        assert cls.call_args.kwargs["vad"] is True and cls.call_args.kwargs["prompt"] == ""
+        create_transcriber({"whisper_prompt": None})
+        assert cls.call_args.kwargs["prompt"] == ""
+        create_transcriber({"whisper_prompt": 42})
+        assert cls.call_args.kwargs["prompt"] == ""
+
+
+def test_create_transcriber_passes_prompt_to_api_backend():
+    with patch("tinysteno.main.ApiTranscriber") as cls:
+        create_transcriber({"transcription_backend": "api", "api_key": "k",
+                            "whisper_prompt": "Acme"})
+    assert cls.call_args.kwargs["prompt"] == "Acme"
+
+
+def test_create_transcriber_maps_filter_switches_for_both_backends():
+    with patch("tinysteno.main.WhisperTranscriber") as cls:
+        create_transcriber({})
+        assert cls.call_args.kwargs["options"] == TranscriptOptions(True, True)
+        create_transcriber({"hallucination_filter": False, "bleed_filter": False})
+        assert cls.call_args.kwargs["options"] == TranscriptOptions(False, False)
+    with patch("tinysteno.main.ApiTranscriber") as cls:
+        create_transcriber({"transcription_backend": "api", "api_key": "k",
+                            "bleed_filter": False})
+    assert cls.call_args.kwargs["options"] == TranscriptOptions(True, False)
+
+
+def test_default_config_includes_filter_switches(tmp_path):
+    with patch.object(Path, "home", return_value=tmp_path):
+        with patch("tinysteno.main.seed_builtin_personas"):
+            config = load_config()
+    assert config["hallucination_filter"] is True and config["bleed_filter"] is True
+
+
+def test_default_config_includes_vad_and_prompt(tmp_path):
+    with patch.object(Path, "home", return_value=tmp_path):
+        with patch("tinysteno.main.seed_builtin_personas"):
+            config = load_config()
+    assert config["whisper_vad"] is True and config["whisper_prompt"] == ""
 
 
 def test_load_config_seeds_personas_when_dir_absent(tmp_path):
@@ -242,7 +293,7 @@ def test_validate_config_accepts_session_timeout(good):
 
 
 def _record_args(**overrides):
-    base = {"persona": None, "name": None, "timeout": None}
+    base = {"persona": None, "name": None, "timeout": None, "notes": None}
     return argparse.Namespace(**{**base, **overrides})
 
 
@@ -342,7 +393,8 @@ def test_setup_timeout_prompt_keeps_a_valid_existing_value_else_the_default(
     assert value == (30 if existing == 30 else 75)
 
 
-def _run_process_audio(tmp_path, *, orchestrator_setup=None, exporter_setup=None):
+def _run_process_audio(tmp_path, *, orchestrator_setup=None, exporter_setup=None,
+                       transcript_extra=None):
     """Call _process_audio with mocked backends, letting callers set side effects."""
     config = {
         "api_key": "ollama", "base_url": "http://localhost", "model": "test",
@@ -351,7 +403,7 @@ def _run_process_audio(tmp_path, *, orchestrator_setup=None, exporter_setup=None
     }
     transcript = {
         "text": "hello", "diarised_text": "", "detected_language": "en",
-        "duration_seconds": 5.0,
+        "duration_seconds": 5.0, **(transcript_extra or {}),
     }
     persona = Persona(
         slug="default", name="Default", description="desc",
@@ -370,6 +422,47 @@ def _run_process_audio(tmp_path, *, orchestrator_setup=None, exporter_setup=None
             exporter_setup(exporter_cls.return_value)
         _process_audio(str(tmp_path / "a.wav"), None, config, MagicMock(), persona,
                        datetime(2024, 1, 1))
+
+
+def test_process_audio_prints_warnings_before_the_meeting_line(tmp_path, capsys):
+    def setup(orchestrator):
+        orchestrator.warnings = ["summary incomplete"]
+        orchestrator.summarize.return_value = {"summary": "We met."}
+    _run_process_audio(tmp_path, orchestrator_setup=setup,
+                       transcript_extra={"warnings": ["one channel silent"]})
+    out = capsys.readouterr().out
+    assert out.index("Warning: one channel silent\n") < out.index("Warning: summary incomplete\n")
+    assert out.index("Warning: summary incomplete") < out.index("Meeting:")
+
+
+def test_process_audio_says_when_it_reused_the_saved_transcript(tmp_path, capsys):
+    (tmp_path / "a.wav").write_bytes(b"RIFF")
+    extra = {"segments": [Segment(0.0, 1.0, "hello", "You")]}
+    for _ in range(2):
+        _run_process_audio(tmp_path, transcript_extra=extra)
+    out = capsys.readouterr().out
+    assert out.count("Using the saved transcript for this recording") == 1
+    assert "(--retranscribe to transcribe again)." in out
+    assert out.index("Using the saved") < out.rindex("Meeting:")
+
+
+@pytest.mark.parametrize("flag, expected", [(["--retranscribe"], True), ([], False)])
+def test_process_passes_retranscribe_through(tmp_path, flag, expected):
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"x")
+    with patch("tinysteno.main._process_audio") as process, \
+         patch("tinysteno.main.load_persona"), patch("tinysteno.main.setup_logging"), \
+         patch("tinysteno.main.load_config", return_value={}), \
+         patch.object(sys, "argv", ["tinysteno", "process", str(audio), *flag]):
+        main()
+    assert process.call_args.kwargs["retranscribe"] is expected
+
+
+def test_process_audio_prints_warnings_before_the_no_speech_message(tmp_path, capsys):
+    _run_process_audio(tmp_path, transcript_extra={
+        "text": " ", "warnings": ["both channels silent"]})
+    out = capsys.readouterr().out
+    assert out.index("Warning: both channels silent") < out.index("No speech detected")
 
 
 def test_process_audio_reports_template_error_and_returns(tmp_path, capsys):
@@ -528,3 +621,193 @@ def test_cmd_record_saves_and_does_not_process_when_killed(tmp_path, capsys):
     process.assert_not_called()
     out = capsys.readouterr().out
     assert "Saved recording: /tmp/x.wav" in out and "tinysteno process /tmp/x.wav" in out
+
+
+def _run_setup_capturing_prompts(tmp_path, monkeypatch, diarization: bool, existing=None):
+    """Run the wizard; return (diarization hint, channels default/hint, saved channels)."""
+    if existing is not None:
+        (tmp_path / ".tinysteno").mkdir()
+        (tmp_path / ".tinysteno" / "config.yaml").write_text(yaml.dump(existing))
+    seen = {}
+
+    def answer(_console, label, default, hint=""):
+        if label == "Channels":
+            seen["channels"] = (default, hint)
+        return default
+
+    def answer_bool(_console, label, default, hint=""):
+        if label.startswith("Enable speaker diarization"):
+            seen["diarization_hint"] = hint
+            return diarization
+        return default
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    with patch.object(Path, "home", return_value=tmp_path), \
+         patch("tinysteno.main._prompt", side_effect=answer), \
+         patch("tinysteno.main._prompt_bool", side_effect=answer_bool), \
+         patch("tinysteno.main.seed_builtin_personas",
+               return_value={"copied": [], "skipped": []}), \
+         patch("tinysteno.main.list_personas", return_value=["default"]), \
+         patch("tinysteno.main._write_config") as write:
+        cmd_setup(argparse.Namespace(reset_personas=False))
+    return seen, write.call_args.args[1]["channels"]
+
+
+def test_setup_diarization_hint_does_not_ask_for_two_channels(tmp_path, monkeypatch):
+    seen, _ = _run_setup_capturing_prompts(tmp_path, monkeypatch, diarization=False)
+    assert "channels = 2" not in seen["diarization_hint"]
+    assert "recording system audio" in seen["diarization_hint"]
+
+
+def test_setup_diarization_yes_keeps_the_channels_default_at_one(tmp_path, monkeypatch):
+    seen, saved = _run_setup_capturing_prompts(tmp_path, monkeypatch, diarization=True)
+    assert seen["channels"][0] == "1" and saved == 1
+    assert "1 is right for almost every microphone" in seen["channels"][1]
+
+
+def test_setup_still_offers_an_existing_channels_value(tmp_path, monkeypatch):
+    seen, saved = _run_setup_capturing_prompts(
+        tmp_path, monkeypatch, diarization=True, existing={"channels": 2}
+    )
+    assert seen["channels"][0] == "2" and saved == 2
+
+
+def test_missing_notes_file_fails_before_recording(tmp_path, capsys):
+    with patch("tinysteno.main.AudioRecorder") as rec_cls, patch("tinysteno.main.load_persona"), \
+         pytest.raises(SystemExit) as exit_info:
+        cmd_record(
+            _record_args(notes=str(tmp_path / "nope.txt")), {"obsidian_vault": str(tmp_path)})
+    assert exit_info.value.code == 1 and "cannot read notes file" in capsys.readouterr().err
+    rec_cls.assert_not_called()
+    rec_cls.return_value.start.assert_not_called()
+
+
+def test_notes_file_is_read_and_passed_to_processing(tmp_path):
+    notes = tmp_path / "n.txt"
+    notes.write_text("Budget is 40k \u2013 agreed", encoding="utf-8")
+    config = {"session_timeout_minutes": 0.001, "obsidian_vault": str(tmp_path)}
+    with patch("tinysteno.main.AudioRecorder") as rec_cls, \
+         patch("tinysteno.main.load_persona", return_value=_make_list_only_persona()), \
+         patch("tinysteno.main._process_audio") as process:
+        rec_cls.return_value.start.return_value = "/tmp/x.wav"
+        cmd_record(_record_args(notes=str(notes)), config)
+    assert process.call_args.kwargs["notes"] == "Budget is 40k \u2013 agreed"
+
+
+def test_process_reads_notes_before_processing(tmp_path, capsys):
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"x")
+    args = argparse.Namespace(
+        audio=str(audio), persona=None, name=None, notes=str(tmp_path / "nope.txt"))
+    with patch("tinysteno.main._process_audio") as process, \
+         patch("tinysteno.main.load_persona"), pytest.raises(SystemExit) as exit_info:
+        cmd_process(args, {})
+    assert exit_info.value.code == 1
+    assert "Error: cannot read notes file" in capsys.readouterr().err
+    process.assert_not_called()
+
+
+def test_tui_reads_notes_before_the_app_starts(tmp_path, capsys):
+    args = argparse.Namespace(notes=str(tmp_path / "nope.txt"))
+    with patch("tinysteno.tui.run_tui") as run_tui, pytest.raises(SystemExit) as exit_info:
+        run_cmd_tui(args, {})
+    assert exit_info.value.code == 1
+    assert "cannot read notes file" in capsys.readouterr().err
+    run_tui.assert_not_called()
+
+
+@pytest.mark.parametrize("bad", ["8192", 8192.5, True, None])
+def test_validate_config_rejects_bad_llm_context_tokens(bad):
+    with pytest.raises(ValueError, match="llm_context_tokens"):
+        _validate_config({"llm_context_tokens": bad})
+
+
+def test_validate_config_accepts_llm_context_tokens():
+    _validate_config({"llm_context_tokens": 4096})
+
+
+@pytest.mark.parametrize("command", ["record", "tui", "process"])
+@pytest.mark.parametrize("value", ["0", "-2", "two", "1.5"])
+def test_speakers_flag_rejects_zero_and_non_integers(command, value, capsys):
+    argv = ["tinysteno", command, f"--speakers={value}"]
+    if command == "process":
+        argv.insert(2, "x.wav")
+    with patch.object(sys, "argv", argv), \
+         patch("tinysteno.main.load_config", return_value={}), \
+         patch("tinysteno.main.cmd_record") as record, \
+         patch("tinysteno.main.cmd_tui") as tui, \
+         patch("tinysteno.main.cmd_process") as process:
+        with pytest.raises(SystemExit):
+            main()
+    assert "must be a whole number of at least 1" in capsys.readouterr().err
+    record.assert_not_called()
+    tui.assert_not_called()
+    process.assert_not_called()
+
+
+def test_speakers_flag_sets_max_speakers_for_the_run_only():
+    config = {}
+    _apply_cli_overrides(config, argparse.Namespace(speakers=3))
+    assert config == {"max_speakers": 3}
+    untouched = {}
+    _apply_cli_overrides(untouched, argparse.Namespace(speakers=None))
+    assert not untouched
+
+
+def test_speaker_split_is_off_in_the_default_config(tmp_path):
+    with patch.object(Path, "home", return_value=tmp_path):
+        with patch("tinysteno.main.seed_builtin_personas"):
+            config = load_config()
+    assert config["speaker_split"] is False and "max_speakers" not in config
+
+
+@pytest.mark.parametrize("bad", [0, -1, 1.5, "2", True, None])
+def test_validate_config_rejects_bad_max_speakers(bad):
+    with pytest.raises(ValueError, match="max_speakers"):
+        _validate_config({"max_speakers": bad})
+
+
+def test_validate_config_accepts_max_speakers():
+    _validate_config({"max_speakers": 4})
+
+
+def test_create_transcriber_passes_split_options():
+    with patch("tinysteno.main.WhisperTranscriber") as cls:
+        create_transcriber({"speaker_split": True, "max_speakers": 3})
+        assert cls.call_args.kwargs["options"].speaker_split is True
+        assert cls.call_args.kwargs["options"].max_speakers == 3
+        create_transcriber({})
+        assert cls.call_args.kwargs["options"].speaker_split is False
+        assert cls.call_args.kwargs["options"].max_speakers is None
+    with patch("tinysteno.main.ApiTranscriber") as cls:
+        create_transcriber({"transcription_backend": "api", "api_key": "k",
+                            "speaker_split": True})
+        assert cls.call_args.kwargs["options"].speaker_split is True
+
+
+@pytest.mark.parametrize("bad", [0, -1, "600", True, float("inf"), float("nan"), None])
+def test_validate_config_rejects_bad_api_timeout(bad):
+    with pytest.raises(ValueError, match="whisper_api_timeout"):
+        _validate_config({"whisper_api_timeout": bad})
+
+
+def test_validate_config_accepts_api_timeout():
+    _validate_config({"whisper_api_timeout": 0.5})
+
+
+def test_process_audio_prints_warnings_gathered_before_a_failed_stage(tmp_path, capsys):
+    def setup(exporter):
+        exporter.export.side_effect = RuntimeError("Template render error")
+    _run_process_audio(tmp_path, exporter_setup=setup,
+                       transcript_extra={"warnings": ["one channel silent"]})
+    out = capsys.readouterr().out
+    assert out.index("Warning: one channel silent") < out.index("Error rendering note")
+
+
+def test_process_audio_prints_warnings_before_raising_a_failed_stage(tmp_path, capsys):
+    def setup(orchestrator):
+        orchestrator.summarize.side_effect = ConnectionError("endpoint down")
+    with pytest.raises(ConnectionError):
+        _run_process_audio(tmp_path, orchestrator_setup=setup,
+                           transcript_extra={"warnings": ["one channel silent"]})
+    assert "Warning: one channel silent\n" in capsys.readouterr().out

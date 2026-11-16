@@ -1,6 +1,7 @@
 """Obsidian export module for TinySteno."""
 
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -64,25 +65,39 @@ class ObsidianExporter:
             raise RuntimeError(
                 f"Template render error in {persona.template_path}: {e}"
             ) from e
+        warnings = metadata.get("processing_warnings") or []
+        if warnings:
+            content = content.rstrip("\n")
+            if len(re.findall(r"^[ \t]*```", content, flags=re.MULTILINE)) % 2:
+                content += "\n```"
+            content += self._warnings_section(warnings)
 
         date_prefix = metadata["date"][:10]
         filename = self._sanitize_filename(f"{metadata['title']} ({date_prefix})")
         filepath = meetings_dir / f"{filename}.md"
+        counter = 2
+        while filepath.exists():
+            filepath = meetings_dir / f"{filename} {counter}.md"
+            counter += 1
         filepath.write_text(content)
         return str(filepath)
 
+    @staticmethod
+    def _warnings_section(warnings: list[str]) -> str:
+        """Markdown section listing processing warnings, or "" when there are none."""
+        if not warnings:
+            return ""
+        bullets = "\n".join(f"- {text}" for text in warnings)
+        return f"\n\n## Processing warnings\n\n{bullets}\n"
+
     def _collapse_blank_lines(self, content: str) -> str:
         """Collapse runs of 2+ blank lines to one, leaving fenced code blocks untouched."""
-        import re
-
         parts = re.split(r"(```.*?```)", content, flags=re.DOTALL)
         for i in range(0, len(parts), 2):
             parts[i] = re.sub(r"\n{3,}", "\n\n", parts[i])
         return "".join(parts)
 
     def _sanitize_filename(self, name: str) -> str:
-        import re
-
         name = re.sub(r'[:\\/\*\?"\|<>]', "-", name)
         name = re.sub(r"-+", "-", name)
         return name.strip("-")

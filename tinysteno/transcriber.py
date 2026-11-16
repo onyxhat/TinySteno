@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import platform
 from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
@@ -10,6 +11,13 @@ import numpy as np
 import soundfile as sf
 from faster_whisper import WhisperModel
 from scipy.signal import resample as scipy_resample
+
+from tinysteno.levels import load_levels
+from tinysteno.transcript import (
+    OTHERS, SAMPLE_RATE, SPLIT_DECODE_SHARE, YOU, Segment, TranscriptOptions, assemble,
+    audible_channels, scale_progress, split_enabled)
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +47,9 @@ class Transcriber(Protocol):
             diarised_text (str | None) — speaker-tagged transcript or None
             duration_seconds (float)   — audio duration
             detected_language (str)    — ISO language code
+            segments (list[Segment])   — time-ordered, speaker-labelled segments
+            warnings (list[str])       — problems worth showing the user
+            split_failed (bool)        — the speaker split was tried and failed
         """
 
 
@@ -65,6 +76,40 @@ def convert_to_16khz_array(data: np.ndarray, sr: int) -> np.ndarray:
     return data
 
 
+def split_channels(data: np.ndarray, sr: int) -> dict[str, np.ndarray]:
+    """Split audio into 16 kHz mono channels keyed by speaker label.
+
+    One-channel audio gives {"": mono}; two or more give {YOU: left, OTHERS: right}.
+    """
+    if data.ndim == 1 or data.shape[1] == 1:
+        return {"": convert_to_16khz_array(data, sr)}
+    return {
+        YOU: convert_to_16khz_array(data[:, 0].copy(), sr),
+        OTHERS: convert_to_16khz_array(data[:, 1].copy(), sr),
+    }
+
+
+def recorded_gains(audio_path: str, data: np.ndarray) -> dict[str, float]:
+    """The recorder's gain per channel label (as `split_channels` names them), from the levels
+    file beside the recording; empty when there is no valid one."""
+    count = 1 if data.ndim == 1 else data.shape[1]
+    gains = load_levels(audio_path, count)
+    if gains is None:
+        return {}
+    if count == 1:
+        return {"": gains[0]}
+    return {YOU: gains[0], OTHERS: gains[1]}
+
+
+def _scaled_progress(
+    on_progress: Callable[[float], None] | None, index: int, count: int
+) -> Callable[[float], None] | None:
+    """Map one pass's 0-1 progress onto its share of the whole job."""
+    if on_progress is None:
+        return None
+    return lambda value: on_progress((index + value) / count)
+
+
 # ---------------------------------------------------------------------------
 # GPU / device detection
 # ---------------------------------------------------------------------------
@@ -75,21 +120,21 @@ _MODEL_CACHE: dict[tuple[str, str, str], WhisperModel] = {}
 def _detect_device() -> tuple[str, str]:
     """Detect optimal device and compute type for faster-whisper.
 
-    Checks CUDA (via CTranslate2), Apple Silicon Metal, then falls back to CPU.
+    Checks CUDA (via CTranslate2); Apple Silicon gets "auto" (CTranslate2 resolves it to
+    the CPU); anything else uses the CPU.
 
     Returns (device, compute_type) tuple.
     """
-    # CUDA — check through CTranslate2's own device enumeration
+    # CUDA — ask CTranslate2 how many CUDA devices it can see
     try:
-        from ctranslate2 import get_supported_devices
+        from ctranslate2 import get_cuda_device_count
 
-        devices = get_supported_devices()
-        if "cuda" in devices:
+        if get_cuda_device_count() > 0:
             return ("cuda", "float16")
-    except ImportError:
-        pass
+    except Exception:
+        logger.debug("CUDA detection failed; assuming no CUDA device.", exc_info=True)
 
-    # Apple Silicon — CTranslate2 4+ supports MPS via device="auto"
+    # Apple Silicon — CTranslate2 has no MPS backend; "auto" resolves to the CPU
     if platform.system() == "Darwin" and platform.machine() == "arm64":
         return ("auto", "auto")
 
@@ -105,13 +150,20 @@ def _detect_device() -> tuple[str, str]:
 class WhisperTranscriber:
     """Transcribe audio files using local faster-whisper."""
 
-    def __init__(
+    def __init__(  # pylint: disable=too-many-arguments
         self,
         model_size: str = "small",
         device: str = "auto",
         compute_type: str = "auto",
+        *,
+        vad: bool = True,
+        prompt: str = "",
+        options: TranscriptOptions | None = None,
     ):
         self.model_size = model_size
+        self.vad = vad
+        self.prompt = prompt
+        self.options = options
 
         # Resolve "auto" to detected hardware once.
         if device == "auto" or compute_type == "auto":
@@ -131,7 +183,7 @@ class WhisperTranscriber:
             )
         self._model = _MODEL_CACHE[cache_key]
 
-    def transcribe(
+    def transcribe(  # pylint: disable=too-many-locals
         self,
         audio_path: str,
         diarize: bool = False,
@@ -140,68 +192,61 @@ class WhisperTranscriber:
         """Transcribe an audio file and return results.
 
         Returns:
-            dict with keys: text, diarised_text, duration_seconds, detected_language
+            dict as built by tinysteno.transcript.assemble
         """
         path = Path(audio_path)
         if not path.exists():
             raise FileNotFoundError(f"Audio file not found: {path}")
 
-        # Read original file before converting — conversion drops to mono,
-        # so we must check for stereo here to support diarization.
         data, sr = sf.read(str(path))
-        is_stereo = data.ndim == 2 and data.shape[1] >= 2
+        audio = split_channels(data, sr)
+        gains = recorded_gains(str(path), data)
+        to_decode = audible_channels(audio, gains)
 
-        audio_16k = convert_to_16khz_array(data, sr)
-        text, language = self._run_whisper(audio_16k, on_progress=on_progress)
-        duration = len(audio_16k) / 16000.0
+        splitting = split_enabled(self.options, diarize)
+        decode_share = SPLIT_DECODE_SHARE if splitting else 1.0
+        decode_progress = scale_progress(on_progress, 0.0, decode_share)
+        channels: dict[str, list[Segment]] = {label: [] for label in audio}
+        languages: dict[str, str] = {}
+        for index, label in enumerate(to_decode):
+            channels[label], languages[label] = self._decode(
+                audio[label],
+                _scaled_progress(decode_progress, index, len(to_decode)),
+            )
+        if on_progress is not None:
+            on_progress(decode_share)
 
-        diarised_text = None
-        if diarize and is_stereo:
-            diarised_text = self._diarize(data, sr)
+        language = next(
+            (languages[label] for label in (YOU, "", OTHERS) if channels.get(label)),
+            "en",
+        )
+        result = assemble(
+            channels, audio, diarize=diarize, language=language, options=self.options,
+            on_progress=scale_progress(on_progress, SPLIT_DECODE_SHARE, 1.0), gains=gains)
+        if splitting and on_progress is not None:
+            on_progress(1.0)
+        return result
 
-        return {
-            "text": text.strip(),
-            "diarised_text": diarised_text,
-            "duration_seconds": duration,
-            "detected_language": language,
-        }
-
-    def _run_whisper(
+    def _decode(
         self,
         audio: np.ndarray,
         on_progress: Callable[[float], None] | None = None,
-    ) -> tuple[str, str]:
-        """Run Whisper on a 16kHz mono float32 numpy array."""
-        duration = len(audio) / 16000.0
-        segments, info = self._model.transcribe(audio, beam_size=5)
-        parts = []
-        for seg in segments:
-            parts.append(seg.text)
+    ) -> tuple[list[Segment], str]:
+        """Run one Whisper pass over 16 kHz mono audio; return segments and language."""
+        duration = len(audio) / SAMPLE_RATE
+        raw_segments, info = self._model.transcribe(
+            audio,
+            beam_size=5,
+            vad_filter=self.vad,
+            initial_prompt=self.prompt or None,
+        )
+        segments = []
+        for seg in raw_segments:
+            text = seg.text.strip()
+            if text:
+                segments.append(Segment(start=seg.start, end=seg.end, text=text))
             if on_progress is not None and duration > 0:
                 on_progress(min(seg.start / duration, 1.0))
         if on_progress is not None:
             on_progress(1.0)
-        return "".join(parts), info.language
-
-    def _run_whisper_segments(self, audio: np.ndarray) -> list[tuple[float, str]]:
-        """Run Whisper and return (start_seconds, text) tuples."""
-        segments, _ = self._model.transcribe(audio, beam_size=5)
-        return [(seg.start, seg.text.strip()) for seg in segments if seg.text.strip()]
-
-    def _diarize(self, data: np.ndarray, sr: int) -> str | None:
-        """Split stereo channels and transcribe each independently."""
-        if data.ndim != 2:
-            return None
-
-        left_16k = convert_to_16khz_array(data[:, 0].copy(), sr)
-        right_16k = convert_to_16khz_array(data[:, 1].copy(), sr)
-
-        left_segs = self._run_whisper_segments(left_16k)
-        right_segs = self._run_whisper_segments(right_16k)
-
-        tagged = (
-            [("You", start, text) for start, text in left_segs]
-            + [("Others", start, text) for start, text in right_segs]
-        )
-        tagged.sort(key=lambda x: x[1])
-        return "\n".join(f"[{speaker}] {text}" for speaker, _, text in tagged)
+        return segments, info.language

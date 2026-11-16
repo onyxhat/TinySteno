@@ -160,6 +160,21 @@ def test_load_persona_reserved_field_name_raises(tmp_path):
             load_persona("reserved")
 
 
+@pytest.mark.parametrize("name", ["generated_tags", "tags", "processing_warnings"])
+def test_newly_reserved_field_names_are_rejected(tmp_path, name):
+    user_dir = tmp_path / "personas" / "reserved"
+    user_dir.mkdir(parents=True)
+    (user_dir / "persona.yaml").write_text(
+        f"name: R\ndescription: d\nschema:\n  {name}: {{type: string, description: x}}\n"
+    )
+    (user_dir / "system_prompt.md").write_text("x")
+    (user_dir / "template.md").write_text("x")
+
+    with patch("tinysteno.personas._USER_DIR", tmp_path / "personas"):
+        with pytest.raises(PersonaInvalidError, match=name):
+            load_persona("reserved")
+
+
 def test_load_persona_invalid_field_type_raises(tmp_path):
     user_dir = tmp_path / "personas" / "badtype"
     user_dir.mkdir(parents=True)

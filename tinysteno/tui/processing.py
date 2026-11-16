@@ -216,19 +216,22 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         if result.no_speech or not result.note_path:
             self.state = Run.NO_SPEECH
             self.refresh_bindings()
-            self._on_no_speech()
+            self._on_no_speech(result)
             return
         self.state = Run.DONE
         self.refresh_bindings()
         self.app.ledger.processed(self.wav_path)
         self.app.show_result(result)
 
-    def _on_no_speech(self) -> None:
+    def _on_no_speech(self, result: PipelineResult) -> None:
         if self._row(Stage.TRANSCRIBE).has_class("-active"):
             self.set_state(Stage.TRANSCRIBE, "-done")
         for stage in list(Stage)[1:]:
             self.set_state(stage, "-skipped")
-        self._show_error(f"No speech detected. Audio kept at {self.wav_path}")
+        lines = [f"No speech detected. Audio kept at {self.wav_path}", *result.warnings]
+        self._show_error("\n".join(lines))
+        if result.reused_transcript:
+            self.app.notify("Used the saved transcript for this recording.", markup=False)
 
     def _on_failed(self, err: Exception) -> None:
         self.state = Run.FAILED
@@ -242,7 +245,9 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
                 if self._row(stage).has_class("-active"):
                     self.set_state(stage, "-pending")
             text = f"Processing failed: {err}"
-        self._show_error(f"{text}\nAudio kept at {self.wav_path}\nPress r to retry or n for home.")
+        warnings = err.warnings if isinstance(err, PipelineError) else ()
+        self._show_error("\n".join([
+            text, *warnings, f"Audio kept at {self.wav_path}", "Press r to retry or n for home."]))
 
     def _show_error(self, text: str) -> None:
         error = self.query_one("#error", Static)
