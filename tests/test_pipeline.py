@@ -455,3 +455,14 @@ def test_speakers_hint_with_the_split_off_reuses_the_transcript(tmp_path):
     _run(tmp_path, transcriber=transcriber, wav_path=wav)
     _run(tmp_path, transcriber=transcriber, wav_path=wav, config_overrides={"max_speakers": 3})
     assert transcriber.calls == 1
+
+
+def test_fingerprint_tracks_server_diarization_only_when_effective(tmp_path):
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"x")
+    on = {"speaker_split": True, "diarization": True, "transcription_backend": "api"}
+    assert (transcript_fingerprint(str(wav), {**on, "whisper_api_diarize": True})
+            != transcript_fingerprint(str(wav), on))
+    for off in ({"transcription_backend": "local"}, {"speaker_split": False}):
+        assert (transcript_fingerprint(str(wav), {**on, **off, "whisper_api_diarize": True})
+                == transcript_fingerprint(str(wav), {**on, **off}))

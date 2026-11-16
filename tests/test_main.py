@@ -783,3 +783,13 @@ def test_create_transcriber_passes_split_options():
         create_transcriber({"transcription_backend": "api", "api_key": "k",
                             "speaker_split": True})
         assert cls.call_args.kwargs["options"].speaker_split is True
+
+
+@pytest.mark.parametrize("bad", [0, -1, "600", True, float("inf"), float("nan"), None])
+def test_validate_config_rejects_bad_api_timeout(bad):
+    with pytest.raises(ValueError, match="whisper_api_timeout"):
+        _validate_config({"whisper_api_timeout": bad})
+
+
+def test_validate_config_accepts_api_timeout():
+    _validate_config({"whisper_api_timeout": 0.5})

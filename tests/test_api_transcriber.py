@@ -5,11 +5,15 @@ from unittest.mock import MagicMock, patch
 
 from types import SimpleNamespace
 
+import httpx
+import openai
+
 import numpy as np
 import pytest
 import soundfile as sf
 
 from tinysteno.api_transcriber import ApiTranscriber
+from tinysteno.transcript import TranscriptOptions
 
 
 @pytest.fixture
@@ -61,7 +65,7 @@ def test_init(mock_openai):
 
     assert t.model == "whisper-1"
     mock_class.assert_called_once_with(
-        api_key="test-key", base_url="https://test.example.com/v1", timeout=180.0
+        api_key="test-key", base_url="https://test.example.com/v1", timeout=600.0
     )
 
 
@@ -357,8 +361,6 @@ def test_one_channel_malformed_other_still_interleaved(mock_openai, tmp_path):
 
 
 def test_split_progress_decodes_in_the_first_70_percent(mock_openai, tmp_path):
-    from tinysteno.transcript import TranscriptOptions
-
     _, client = mock_openai
     client.audio.transcriptions.create.side_effect = [
         _response("a", [_seg(0.0, "a")]), _response("b", [_seg(1.0, "b")])]
@@ -369,8 +371,6 @@ def test_split_progress_decodes_in_the_first_70_percent(mock_openai, tmp_path):
 
 
 def test_split_progress_is_untouched_when_labels_are_not_shown(mock_openai, tmp_path):
-    from tinysteno.transcript import TranscriptOptions
-
     _, client = mock_openai
     client.audio.transcriptions.create.side_effect = [
         _response("a", [_seg(0.0, "a")]), _response("b", [_seg(1.0, "b")])]
@@ -378,3 +378,148 @@ def test_split_progress_is_untouched_when_labels_are_not_shown(mock_openai, tmp_
     ApiTranscriber(api_key="k", options=TranscriptOptions(speaker_split=True)).transcribe(
         _write(tmp_path, stereo=True), diarize=False, on_progress=seen.append)
     assert seen == [0.0, 0.5, 1.0]
+
+
+def _spk(start, end, text, speaker=None):
+    return {"start": start, "end": end, "text": text, "speaker": speaker}
+
+
+def _status_error(cls, code):
+    request = httpx.Request("POST", "http://server/v1/audio/transcriptions")
+    return cls("nope", response=httpx.Response(code, request=request), body=None)
+
+
+def _long_stereo(tmp_path, seconds=110, right_only=False):
+    tone = np.full(16000 * seconds, 0.5, dtype=np.float32)
+    quiet = np.zeros_like(tone) if right_only else tone
+    path = tmp_path / "long.wav"
+    sf.write(str(path), np.stack([quiet, tone], axis=1), 16000)
+    return str(path)
+
+
+def _server_run(  # pylint: disable=too-many-arguments
+        client, tmp_path, uploads, *, split=True, server=True, diarize=True,
+                max_speakers=None, path=None):
+    client.audio.transcriptions.create.side_effect = uploads
+    options = TranscriptOptions(speaker_split=split, max_speakers=max_speakers)
+    t = ApiTranscriber(api_key="k", options=options, server_diarize=server)
+    return t.transcribe(path or _long_stereo(tmp_path), diarize=diarize)
+
+
+_LEFT = _response("me", [_spk(5.0, 6.0, "me")])
+_RIGHT = _response(
+    "them", [_spk(1.0, 31.0, "a", "SPEAKER_00"), _spk(40.0, 100.0, "b", "SPEAKER_01")])
+
+
+def test_diarize_field_is_sent_on_the_remote_channel_only(mock_openai, tmp_path):
+    _, client = mock_openai
+    result = _server_run(client, tmp_path, [_LEFT, _RIGHT], max_speakers=4)
+    calls = client.audio.transcriptions.create.call_args_list
+    assert "extra_body" not in calls[0].kwargs
+    assert calls[1].kwargs["extra_body"] == {"diarize": True, "max_speakers": 4}
+    assert [s.speaker for s in result["segments"]] == ["Speaker 2", "You", "Others"]
+
+
+def test_speaker_hint_of_one_is_not_sent(mock_openai, tmp_path):
+    _, client = mock_openai
+    _server_run(client, tmp_path, [_LEFT, _RIGHT], max_speakers=1)
+    calls = client.audio.transcriptions.create.call_args_list
+    assert calls[1].kwargs["extra_body"] == {"diarize": True}
+
+
+@pytest.mark.parametrize("split,server,diarize", [
+    (True, False, True), (False, True, True), (True, True, False)])
+def test_nothing_extra_is_sent_when_a_switch_is_off(mock_openai, tmp_path, split, server, diarize):
+    _, client = mock_openai
+    _server_run(client, tmp_path, [_LEFT, _RIGHT], split=split, server=server, diarize=diarize)
+    for call in client.audio.transcriptions.create.call_args_list:
+        assert set(call.kwargs) == {"model", "file", "response_format"}
+
+
+@pytest.mark.parametrize("error_class,code", [
+    (openai.BadRequestError, 400), (openai.UnprocessableEntityError, 422)])
+def test_server_that_rejects_the_field_still_yields_a_transcript(
+        mock_openai, tmp_path, error_class, code):
+    _, client = mock_openai
+    result = _server_run(
+        client, tmp_path, [_LEFT, _status_error(error_class, code), _RIGHT])
+    calls = client.audio.transcriptions.create.call_args_list
+    assert len(calls) == 3
+    assert "extra_body" in calls[1].kwargs and "extra_body" not in calls[2].kwargs
+    assert {s.speaker for s in result["segments"]} == {"You", "Others"}
+    assert result["warnings"] == [
+        "The transcription server rejected speaker separation; channel labels were used."]
+
+
+def test_other_server_errors_propagate(mock_openai, tmp_path):
+    _, client = mock_openai
+    with pytest.raises(openai.InternalServerError):
+        _server_run(client, tmp_path, [_LEFT, _status_error(openai.InternalServerError, 500)])
+
+
+def test_rejection_without_the_field_is_not_retried(mock_openai, tmp_path):
+    _, client = mock_openai
+    with pytest.raises(openai.BadRequestError):
+        _server_run(client, tmp_path, [_status_error(openai.BadRequestError, 400)],
+                    server=False)
+
+
+def test_server_without_speaker_labels_changes_nothing(mock_openai, tmp_path):
+    _, client = mock_openai
+    plain = _response("them", [_spk(1.0, 31.0, "a"), _spk(40.0, 100.0, "b", ""),
+                               _spk(101.0, 102.0, "c", 7)])
+    with patch("tinysteno.transcript._default_turns") as local:
+        result = _server_run(client, tmp_path, [_LEFT, plain])
+    local.assert_not_called()
+    assert {s.speaker for s in result["segments"]} == {"You", "Others"}
+    assert not result["warnings"]
+
+
+def test_malformed_times_yield_no_server_turns(mock_openai, tmp_path):
+    _, client = mock_openai
+    bad = _response("them", [_spk("x", 31.0, "a", "SPEAKER_00"),
+                             _spk(40.0, 100.0, "b", "SPEAKER_01")])
+    result = _server_run(client, tmp_path, [_LEFT, bad])
+    assert {s.speaker for s in result["segments"]} == {"You", "Others"}
+
+
+def test_labels_are_numbered_in_order_of_first_appearance(mock_openai):
+    _, client = mock_openai
+    client.audio.transcriptions.create.return_value = _response("x", [
+        _spk(0.0, 1.0, "a", "Z"), _spk(1.0, 2.0, "b", "A"), _spk(2.0, 3.0, "c", "Z")])
+    t = ApiTranscriber(api_key="k")
+    with patch.object(sf, "write"):
+        decoded = t._decode(  # pylint: disable=protected-access
+            np.zeros(16000, dtype=np.float32), {"diarize": True})
+    assert [turn.speaker for turn in decoded.turns] == [0, 1, 0]
+
+
+def test_microphone_is_asked_when_the_remote_channel_is_silent(mock_openai, tmp_path):
+    _, client = mock_openai
+    tone = np.full(16000 * 110, 0.5, dtype=np.float32)
+    path = tmp_path / "mic.wav"
+    sf.write(str(path), np.stack([tone, np.zeros_like(tone)], axis=1), 16000)
+    mic = _response("me", [_spk(1.0, 31.0, "a", "S0"), _spk(40.0, 100.0, "b", "S1")])
+    result = _server_run(client, tmp_path, [mic], path=str(path))
+    assert client.audio.transcriptions.create.call_args.kwargs["extra_body"] == {"diarize": True}
+    assert {s.speaker for s in result["segments"]} == {"You", "Speaker 2"}
+
+
+def test_other_channel_gets_no_turns_when_its_segments_are_filtered_out(mock_openai, tmp_path):
+    _, client = mock_openai
+    # Remote upload has audio but no recognised speech: assemble splits the microphone,
+    # which was uploaded without the extra fields, so nothing is split and no local run occurs.
+    mic = _response("me", [_spk(1.0, 31.0, "a"), _spk(40.0, 100.0, "b")])
+    with patch("tinysteno.transcript._default_turns") as local:
+        result = _server_run(client, tmp_path, [mic, _response("", [])])
+    local.assert_not_called()
+    assert {s.speaker for s in result["segments"]} == {"You"}
+
+
+@pytest.mark.parametrize("config", [{"whisper_api_timeout": 30}, {}])
+def test_timeout_comes_from_config(mock_openai, config):
+    from tinysteno.main import create_transcriber
+
+    mock_class, _ = mock_openai
+    create_transcriber({"transcription_backend": "api", "api_key": "k", **config})
+    assert mock_class.call_args.kwargs["timeout"] == float(config.get("whisper_api_timeout", 600))

@@ -134,7 +134,7 @@ def transcript_fingerprint(wav_path: str, config: dict) -> dict:
     backend = config.get("transcription_backend", "local")
     prompt = config.get("whisper_prompt", "")
     split = bool(config.get("speaker_split", False)) and bool(config.get("diarization", False))
-    return {
+    fingerprint = {
         "size": Path(wav_path).stat().st_size,
         "backend": backend,
         "model": (config.get("whisper_api_model", "whisper-1") if backend == "api"
@@ -146,6 +146,10 @@ def transcript_fingerprint(wav_path: str, config: dict) -> dict:
         "speaker_split": split,
         "max_speakers": config.get("max_speakers") if split else None,
     }
+    if split and backend == "api" and config.get("whisper_api_diarize"):
+        # Present only when on, so existing saved fingerprints stay valid.
+        fingerprint["whisper_api_diarize"] = True
+    return fingerprint
 
 
 def _transcript_result(

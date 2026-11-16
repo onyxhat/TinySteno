@@ -55,6 +55,8 @@ def load_config() -> dict:
             "whisper_api_key": "",
             "whisper_base_url": "",
             "whisper_api_model": "whisper-1",
+            "whisper_api_diarize": False,
+            "whisper_api_timeout": 600,
             "whisper_vad": True,
             "whisper_prompt": "",
             "hallucination_filter": True,
@@ -118,6 +120,8 @@ def _validate_config(config: dict) -> None:
         raise ValueError("Config field 'channels' must be 1 or 2")
     if "max_speakers" in config and not _is_speaker_count(config["max_speakers"]):
         raise ValueError("Config field 'max_speakers' must be a whole number >= 1")
+    if "whisper_api_timeout" in config and not _is_positive_number(config["whisper_api_timeout"]):
+        raise ValueError("Config field 'whisper_api_timeout' must be a positive number of seconds")
     if "session_timeout_minutes" in config:
         if not _is_timeout_minutes(config["session_timeout_minutes"]):
             raise ValueError(
@@ -130,6 +134,14 @@ def _is_timeout_minutes(value) -> bool:
     return (
         isinstance(value, (int, float)) and not isinstance(value, bool)
         and math.isfinite(value) and value >= 0
+    )
+
+
+def _is_positive_number(value) -> bool:
+    """True for a finite int/float > 0 that is not a bool."""
+    return (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+        and math.isfinite(value) and value > 0
     )
 
 
@@ -180,6 +192,9 @@ def create_transcriber(config: dict) -> Transcriber:
             model=config.get("whisper_api_model", "whisper-1"),
             prompt=prompt,
             options=options,
+            server_diarize=bool(config.get("whisper_api_diarize", False)),
+            timeout=(float(config["whisper_api_timeout"])
+                     if _is_positive_number(config.get("whisper_api_timeout")) else 600.0),
         )
     return WhisperTranscriber(
         model_size=config.get("whisper_model", "small"),
