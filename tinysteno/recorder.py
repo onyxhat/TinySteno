@@ -28,10 +28,12 @@ def _to_int16(audio: np.ndarray) -> tuple[np.ndarray, list[float]]:
     """Convert float audio [n, channels] to int16, scaling each column to its own peak.
 
     A column whose peak is below ``NORMALISE_FLOOR`` (including all zeros) is converted at
-    unit gain so a near-silent channel is not boosted into audible noise. Also returns each
+    unit gain so a near-silent channel is not boosted into audible noise. NaN samples become 0
+    and infinite ones full scale before the peak is taken. Also returns each
     column's gain relative to full scale (1.0 for a column that was not scaled).
     """
-    audio = np.asarray(audio, dtype=np.float32)
+    # One inf sample would make the peak infinite and scale the whole channel to zero.
+    audio = np.nan_to_num(np.asarray(audio, dtype=np.float32), nan=0.0, posinf=1.0, neginf=-1.0)
     out = np.empty(audio.shape, dtype=np.int16)
     gains = []
     for i in range(audio.shape[1]):

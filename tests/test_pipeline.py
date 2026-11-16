@@ -543,3 +543,14 @@ def test_prompt_for_legacy_text_names_the_recorder_only_when_you_appears(tmp_pat
 
     assert _context_for(tmp_path, None, transcriber=Legacy("[You] a\n[Others] b")).has_you_label
     assert not _context_for(tmp_path, None, transcriber=Legacy("[Others] a b")).has_you_label
+
+
+def test_fingerprint_tracks_the_transcription_server_on_the_api_backend_only(tmp_path):
+    wav = _real_wav(tmp_path)
+    api = {"transcription_backend": "api", "base_url": "http://llm/v1"}
+    assert transcript_fingerprint(wav, api)["whisper_base_url"] == "http://llm/v1"
+    assert (transcript_fingerprint(wav, {**api, "whisper_base_url": "http://a/v1"})
+            != transcript_fingerprint(wav, {**api, "whisper_base_url": "http://b/v1"}))
+    local = {"whisper_base_url": "http://a/v1"}
+    assert "whisper_base_url" not in transcript_fingerprint(wav, local)
+    assert transcript_fingerprint(wav, local) == transcript_fingerprint(wav, {})

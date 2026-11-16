@@ -162,8 +162,13 @@ def transcript_fingerprint(wav_path: str, config: dict) -> dict:
         "speaker_split": split,
         "max_speakers": config.get("max_speakers") if split else None,
     }
+    if backend == "api":
+        # The server that transcribed it (the LLM endpoint when no separate one is set).
+        fingerprint["whisper_base_url"] = (
+            config.get("whisper_base_url") or config.get("base_url") or "")
     if split and backend == "api" and config.get("whisper_api_diarize"):
-        # Present only when on, so existing saved fingerprints stay valid.
+        # Present only while it is in effect, so setting the option while the split is off
+        # (or on the local backend) does not make a saved transcript stale.
         fingerprint["whisper_api_diarize"] = True
     return fingerprint
 

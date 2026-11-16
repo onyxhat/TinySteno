@@ -203,3 +203,10 @@ def test_assemble_measures_bleed_and_empty_channels_at_the_recorded_level():
                     gains={YOU: 250.0, OTHERS: 2.0})["warnings"] == []
     assert assemble(empty_mic, quiet, diarize=True, language="en")["warnings"] == [
         "Microphone audio was present but no speech was recognised."]
+
+
+def test_one_non_finite_sample_does_not_zero_a_channel():
+    column = np.array([0.25, np.inf, -np.inf, np.nan, 0.5], dtype=np.float32)
+    out, gains = _to_int16(column.reshape(-1, 1))
+    assert out[:, 0].tolist() == [int(0.25 * 32767), 32767, -32767, 0, int(0.5 * 32767)]
+    assert gains == [1.0]
