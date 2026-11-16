@@ -7,7 +7,7 @@ TinySteno is a minimal meeting recorder that captures audio (microphone + system
 - **Language:** Python 3.12+
 - **Package manager:** uv
 - **Lines of code:** ~1,100 core + ~1,200 tests
-- **Modules:** 12 core modules (including the `tui/` package), 7 built-in personas
+- **Modules:** 13 core modules (including the `tui/` package), 7 built-in personas
 - **CLI entry:** `tinysteno` command (installed via `pip install`)
 
 ---
@@ -40,7 +40,9 @@ Each stage is independent and communicates through well-defined data contracts (
 - `load_config()` -- loads/saves `~/.tinysteno/config.yaml`. Seeds built-in personas on first run.
 - `cmd_record()` -- record audio, then immediately transcribe + summarize + export. Stops on Ctrl+C or when the session timeout elapses (`--timeout MINUTES`; resolved by `resolve_timeout_seconds`)
 - `cmd_tui()` -- imports `tinysteno.tui` lazily, builds a `TuiDeps` (recorder factory, `run_pipeline` bound to the config, persona loaders, recordings directory) and calls `run_tui`. While the app runs, logging goes to `~/.tinysteno/tui.log` instead of the terminal (`log_file.log_to_file`; DEBUG with `--verbose`) and the previous root handlers are restored afterwards. Prints the returned exit message (stderr when the exit code is non-zero), plus a final `Log: <path>` line when the exit code is non-zero or the session logged a warning, and exits with that code. The `tui` subcommand takes `--now`, `--name`, `--persona`, `--timeout` and the transcription override flags
-- `cmd_process()` -- transcribe + summarize + export a pre-recorded WAV
+- `cmd_process()` -- transcribe + summarize + export a pre-recorded WAV; `--retranscribe` ignores a saved transcript
+- `create_transcriber(config)` -- builds the local or API transcriber with `whisper_vad` (local only), `whisper_prompt` and the `TranscriptOptions` from `hallucination_filter` / `bleed_filter`
+- `_read_notes(args)` -- reads the `--notes PATH` file (`record`, `process`, `tui`) as UTF-8 before recording or processing starts; an unreadable file prints an error and exits 1. The text goes to `run_pipeline(notes=)`
 - `cmd_setup()` -- interactive wizard to set config values, including the session timeout in minutes
 - `_process_audio()` -- shared by `record` and `process`: delegates to `run_pipeline` with a Rich progress reporter. A template (`RuntimeError`) failure at export prints `Error rendering note`; any other stage failure re-raises the underlying exception
 
@@ -53,6 +55,9 @@ Each stage is independent and communicates through well-defined data contracts (
 - `sample_rate`, `channels` -- audio capture settings (`channels` is the microphone's input channels, 1 or 2; it does not control whether the WAV is stereo)
 - `persona` -- active persona slug
 - `session_timeout_minutes` -- maximum recording length in minutes, a finite number `>= 0` (default 75; `0` disables). `inf` and `nan` are rejected here, by `--timeout` and in `persona.yaml`
+- `llm_context_tokens` -- context window the model is served with (default 8192; an int, validated by `_validate_config`); the orchestrator sizes its chunks from it
+- `whisper_vad` (default true, local backend only), `whisper_prompt` (default empty, both backends) -- passed to Whisper as `vad_filter` / `initial_prompt` (`prompt` for the API)
+- `hallucination_filter`, `bleed_filter` (default true) -- switch the two `hygiene` filters; `transcript_timestamps` (default true) -- `[hh:mm:ss]` on each transcript line
 - `tui_theme` -- optional starting theme for the TUI (a Textual theme name)
 
 ### 2. `tinysteno/recorder.py` -- Audio Recording
@@ -84,6 +89,7 @@ Transcribes audio files using `faster-whisper` (CTranslate2-optimized Whisper). 
 **Key behaviors:**
 - `split_channels()` turns the file into 16kHz mono float32 channels keyed by speaker: one-channel audio gives a single unlabelled channel, two or more give `You` (left) and `Others` (right)
 - One Whisper decode per channel, so both channels of a stereo file are always transcribed. A channel whose RMS is below `SILENCE_RMS` (`is_silent`) is skipped
+- `WhisperTranscriber(..., vad=True, prompt="", options=None)`: `vad` is faster-whisper's `vad_filter`, `prompt` its `initial_prompt`, `options` the `TranscriptOptions` handed to `assemble`
 - The `diarization` setting only controls the `[You]` / `[Others]` labels (`diarised_text`); it never decides whether a channel is transcribed. A mono file with diarization on gives a plain transcript
 - Module-level model cache `_MODEL_CACHE` -- one shared model instance per (size, device, compute_type)
 - `transcribe()` returns: `text`, `diarised_text`, `duration_seconds`, `detected_language`, plus `segments` (time-ordered `Segment`s with a speaker) and `warnings` (for example a channel that had audio but no recognised speech). The result is built by `transcript.assemble`
@@ -92,11 +98,20 @@ Transcribes audio files using `faster-whisper` (CTranslate2-optimized Whisper). 
 
 **Class:** `ApiTranscriber`
 
-The same `transcribe()` contract against an OpenAI Whisper-compatible endpoint. Each non-silent channel is uploaded once as a 16kHz WAV with `response_format="verbose_json"`; segment times are read from the response and the channels are interleaved by `transcript.assemble`. When the server returns no usable segments, or any segment has a missing or non-finite start time, that channel falls back to a single block (`text`, or the joined segment texts) spanning the whole channel, so a stereo file still yields both speakers, one block each.
+The same `transcribe()` contract against an OpenAI Whisper-compatible endpoint. Each non-silent channel is uploaded once as a 16kHz WAV with `response_format="verbose_json"`; segment times are read from the response and the channels are interleaved by `transcript.assemble`. When the server returns no usable segments, or any segment has a missing or non-finite start time, that channel falls back to a single block (`text`, or the joined segment texts) spanning the whole channel, so a stereo file still yields both speakers, one block each. `ApiTranscriber(..., prompt="", options=None)` sends `prompt` with each upload when set and has no VAD switch.
 
 ### 3b. `tinysteno/transcript.py` -- Segments and Assembly
 
-The one place both backends build their result. `Segment(start, end, text, speaker)`; `YOU` / `OTHERS` labels; `is_silent(samples)`; `interleave()` sorts by start time with ties going You, then Others, so the order is stable between runs; `plain_text()`; `labelled_text()` (one `[You] text` line per segment, `None` when no segment has a speaker); and `assemble()`, which stamps the channel label on each segment, interleaves, adds a warning per non-silent channel that produced no speech, and returns the transcriber result dict.
+The one place both backends build their result. `Segment(start, end, text, speaker)`; `YOU` / `OTHERS` labels; `is_silent(samples)`; `interleave()` sorts by start time with ties going You, then Others, so the order is stable between runs; `plain_text()`; `labelled_text()` (one `[You] text` line per segment, `None` when no segment has a speaker); `render_transcript(segments, *, labels, timestamps)`, one `[hh:mm:ss] [Speaker] text` line per segment with each prefix only when enabled (plain text when neither applies), which is what the note's transcript is built from; and `assemble(channels, audio, *, diarize, language, options=None)`, which stamps the channel label on each segment, runs the `hygiene` filters selected by `TranscriptOptions(drop_hallucinations=True, suppress_bleed=True)`, interleaves, adds a warning per non-silent channel that produced no speech, and returns the transcriber result dict.
+
+The transcript sidecar: `sidecar_path(wav)` (`Meeting.transcript.json` beside `Meeting.wav`), `save_transcript(wav, result)` (atomic write of the segments, language, duration and warnings; skipped for a result with no segment list; a write failure is logged, not raised) and `load_transcript(wav)`, which returns the result dict or `None` when the sidecar is missing, older than the WAV, of another `SIDECAR_VERSION`, unreadable, or the WAV is missing. The file holds the full meeting text and sits in the recordings folder, which by default is inside the vault.
+
+### 3c. `tinysteno/hygiene.py` -- Transcript Clean-up
+
+Pure functions over `Segment` lists, called by `transcript.assemble`; every removal is logged at INFO with reason, speaker, start and text. Thresholds are module constants fixed deliberately.
+- `drop_hallucinations(segments, rms=None)` -- per channel, in time order: removes caption credits only when they are the whole line or start it (`Subtitles by ...`, `Thanks for watching`, `Please subscribe`, any `amara.org`); collapses a run of 5 or more identical lines to the first; and removes a line of at most 5 words that occurs at least 3 times only when it is isolated (no neighbour within 10 s) and its `rms(start, end)` level is under 0.25 of the channel's median segment level. With `rms=None` the last rule never applies
+- `suppress_bleed(mic, system, mic_rms, system_rms)` -- for each system segment, the nearest unpaired mic segment starting within 3 s; when both have at least 15 characters and their word sets overlap (Jaccard >= 0.5) the copy with the lower level goes, the mic copy on a tie. Levels are measured on the channel a segment came from, not its speaker label
+- Known limits: two people genuinely saying the same long sentence at once lose one copy; a real, quiet, isolated short line repeated three times can be dropped. `hallucination_filter: false` / `bleed_filter: false` switch them off
 
 ### 4. `tinysteno/orchestrator.py` -- LLM Orchestration
 
@@ -105,21 +120,23 @@ The one place both backends build their result. `Segment(start, end, text, speak
 Handles all LLM communication via the OpenAI-compatible API. Transforms raw transcripts into structured data matching a persona's schema.
 
 **Key behaviors:**
-- Chunking strategy: splits transcripts over 12,000 characters into overlapping chunks (500-char overlap)
-- Summarizes each chunk independently, then merges partial results
+- `Orchestrator(api_key, base_url, model, context_tokens=8192)`: chunk size is `max(context_tokens, 500) * 2 * 0.6` characters (2 characters per token, 60% of the window), so the default is 9,830 characters and the floor 600
+- Chunking: a transcript that fits is one chunk; otherwise whole lines are packed with no overlap, and a line longer than a chunk is split at the last space within the limit
+- `summarize(transcript, persona, context=None)` takes a `PromptContext(meeting_date, has_speaker_labels, has_timestamps, notes)`. Every user message carries a `Context:` block: what `[You]` / `[Others]` mean (or that there are no labels and owners must not be guessed), the `[hh:mm:ss]` format when timestamped, the meeting date for resolving relative dates, an instruction to keep proposals, open points and decisions distinct, `This is part n of m` for chunks, and the notes between `<notes>` tags as information, never instructions (a `</notes>` inside them is defanged)
+- Summarizes each chunk independently, then merges partial results in at most two rounds (`_reduce`): partials are packed into groups that fit one chunk, each group is merged by the LLM, and what remains after the second round is combined locally with a warning
 - The merge call asks the LLM to combine the partial results and drop duplicates; the code itself does no semantic de-duplication
 - Each LLM call is tried twice (`_extract`): a call that raises, or returns no usable fields, is retried once
 - Graceful degradation: if LLM returns invalid JSON, attempts recovery. Chunks that fail twice are left out and counted. If every chunk fails, the result is the defaults (empty string / empty list)
 - If the merge call fails, the partial results are combined locally (`_merge_locally`: string fields joined with a blank line, list fields concatenated with exact duplicates removed) instead of being thrown away
 - `Orchestrator.warnings` is a public list, reset by each `summarize()`, that says what was lost (the summary could not be generated, N of M sections failed, the merge fell back to local combination)
-- Also generates: titles (`generate_title`) and tags (`generate_tags`) via separate LLM calls with shorter context windows
+- Also generates: titles (`generate_title`) and tags (`generate_tags`) via separate LLM calls on the summary digest
 
 **Constants:**
-- Chunk size: 12,000 chars
-- Chunk overlap: 500 chars
+- Chunk size: `context_tokens * 2 * 0.6` chars (`_CHARS_PER_TOKEN`, `_CHUNK_CONTEXT_SHARE`, floor `_MIN_CONTEXT_TOKENS` = 500); no overlap
+- Merge rounds: 2 (`_REDUCE_ROUNDS`)
 - LLM timeout: 120 seconds
-- Title context: first 500 chars of the text passed in (the pipeline passes the longest string field)
-- Tag context: first 500 chars of the text passed in
+- Title context: first 4,000 chars of the text passed in (the pipeline passes `summary_digest`)
+- Tag context: first 4,000 chars of the text passed in
 
 ### 5. `tinysteno/obsidian.py` -- Obsidian Export
 
@@ -187,7 +204,7 @@ A pure countdown with no threads or sleeping. `SessionTimer(limit_seconds, clock
 
 ### 9. `tinysteno/pipeline.py` -- UI-free Pipeline
 
-`run_pipeline(wav_path, name, config, persona, timestamp, *, transcriber, orchestrator_cls, exporter_cls, reporter=None) -> PipelineResult` runs transcribe, summarize, title and tags, and export, reporting each `Stage` (`TRANSCRIBE`, `SUMMARIZE`, `METADATA`, `EXPORT`) to a `PipelineReporter` (`stage_started`, `stage_progress`, `stage_finished`, `stage_skipped`; `NullReporter` ignores them). A failure in any stage is re-raised as `PipelineError(stage)` with the original exception as `__cause__`. `PipelineResult` carries `wav_path`, `note_path`, `title`, `duration_seconds`, `no_speech` and `warnings` (transcriber and orchestrator warnings merged, without duplicates). The warnings are also passed to the exporter as `processing_warnings`; the CLI prints them as `Warning:` lines and the TUI shows them as notifications on the Result screen and as lines on the no-speech screen. Nothing here prints or imports a UI library, so the CLI (Rich) and the TUI (Textual) share it.
+`run_pipeline(wav_path, name, config, persona, timestamp, *, transcriber, orchestrator_cls, exporter_cls, reporter=None, notes="", retranscribe=False) -> PipelineResult` runs transcribe, summarize, title and tags, and export, reporting each `Stage` (`TRANSCRIBE`, `SUMMARIZE`, `METADATA`, `EXPORT`) to a `PipelineReporter` (`stage_started`, `stage_progress`, `stage_finished`, `stage_skipped`; `NullReporter` ignores them). The transcribe stage first tries `load_transcript` and reuses the saved transcript (reporting full progress) unless `retranscribe` is set; otherwise it transcribes and calls `save_transcript`. The note's transcript is `render_transcript(segments, labels=diarization, timestamps=transcript_timestamps)`, so both options apply at render time and need no new transcription; a result without segments falls back to `diarised_text` or `text`. `llm_context_tokens` is passed to the orchestrator as `context_tokens` when present, and `summarize` receives a `PromptContext` built from the meeting timestamp, whether labels and timestamps are shown, and `notes`. Title and tag generation are fed `summary_digest(persona, data, limit=4000)`: the non-empty string fields, then every list item, in schema order, one per line, cut to the limit (the stage is skipped when there is nothing to digest). A failure in any stage is re-raised as `PipelineError(stage)` with the original exception as `__cause__`. `PipelineResult` carries `wav_path`, `note_path`, `title`, `duration_seconds`, `no_speech` and `warnings` (transcriber and orchestrator warnings merged, without duplicates). The warnings are also passed to the exporter as `processing_warnings`; the CLI prints them as `Warning:` lines and the TUI shows them as notifications on the Result screen and as lines on the no-speech screen. Nothing here prints or imports a UI library, so the CLI (Rich) and the TUI (Textual) share it.
 
 ### 10. `tinysteno/tui/` -- Textual Interface
 
@@ -227,18 +244,21 @@ User runs: tinysteno record --persona rca
    ├── Read WAV file via soundfile
    ├── Split into 16kHz mono channels (You / Others for stereo)
    ├── Run faster-whisper once per non-silent channel
+   ├── Drop hallucinated lines and speaker bleed (hygiene, in transcript.assemble)
    ├── Interleave segments by start time (transcript.assemble)
    ├── Label speakers if diarization is enabled
    └── Return {text, diarised_text, duration, language, segments, warnings}
+   (pipeline.py then saves <wav>.transcript.json, or reuses it on a retry, and renders
+    the transcript one [hh:mm:ss] [Speaker] line per segment)
 
 4. Orchestrator (orchestrator.py:Orchestrator)
-   ├── Chunk transcript if > 12k chars (each LLM call retried once)
-   ├── Build user message (persona system prompt + transcript)
+   ├── Chunk transcript on line boundaries if over 0.6 x llm_context_tokens x 2 chars (each LLM call retried once)
+   ├── Build user message (persona system prompt + Context: block + transcript)
    ├── Call LLM (OpenAI-compatible API)
    ├── Parse JSON response, validate against schema
-   ├── Merge partial results if chunked (local merge if the call fails)
-   ├── Generate title (separate LLM call)
-   ├── Generate tags (separate LLM call)
+   ├── Merge partial results if chunked (two bounded rounds; local merge if a call fails)
+   ├── Generate title from the summary digest (separate LLM call)
+   ├── Generate tags from the summary digest (separate LLM call)
    └── Return {schema_fields, title, generated_tags}
 
 5. Exporter (obsidian.py:ObsidianExporter)
@@ -266,6 +286,7 @@ tinysteno.main
   │     ├── numpy
   │     ├── scipy                (audio resampling)
   │     └── tinysteno.transcript (segments, interleaving, result assembly)
+  │           └── tinysteno.hygiene (hallucination and bleed filters)
   ├── tinysteno.api_transcriber
   │     ├── openai               (Whisper API client)
   │     ├── tinysteno.transcriber (split_channels)
@@ -293,8 +314,14 @@ output_folder: meetings
 api_key: ollama
 base_url: http://localhost:11434/v1
 model: llama3.2:3b
+llm_context_tokens: 8192   # the context window the model is served with
 whisper_model: small
+whisper_vad: true         # local backend only
+whisper_prompt: ""
+hallucination_filter: true
+bleed_filter: true
 diarization: false        # only adds [You]/[Others] labels
+transcript_timestamps: true
 auto_title: true
 auto_tags: true
 sample_rate: 44100
@@ -318,7 +345,8 @@ Tests live in `tests/` and use `pytest` with `pylint` linting (CI via GitHub Act
 | `test_recorder.py` | AudioRecorder | Device detection, recording lifecycle, path generation |
 | `test_transcriber.py` | WhisperTranscriber | Per-channel decoding, silent channels, labels, resampling |
 | `test_api_transcriber.py` | ApiTranscriber | One upload per channel, segment interleaving, single-block fallback |
-| `test_transcript.py` | `tinysteno/transcript.py` | Interleave order, labelled text, assembly, warnings |
+| `test_transcript.py` | `tinysteno/transcript.py` | Interleave order, labelled text, rendering, assembly, warnings, transcript sidecar |
+| `test_hygiene.py` | `tinysteno/hygiene.py` | Caption credits, stuck and stranded repeats, bleed suppression |
 | `test_orchestrator.py` | Orchestrator | Chunking, LLM calls, merge logic, error handling |
 | `test_obsidian.py` | ObsidianExporter | Template rendering, file writing, frontmatter |
 | `test_personas.py` | Persona loading/validation | Directory validation, schema checking, error cases |
@@ -349,7 +377,8 @@ tinysteno/
 │   ├── recorder.py             # Audio capture (mic + loopback)
 │   ├── transcriber.py          # Local Whisper transcription (one decode per channel)
 │   ├── api_transcriber.py      # Whisper API transcription (one upload per channel)
-│   ├── transcript.py           # Segment type, interleaving and result assembly
+│   ├── transcript.py           # Segment type, interleaving, rendering, result assembly, transcript sidecar
+│   ├── hygiene.py              # Hallucination and speaker-bleed filters
 │   ├── orchestrator.py         # LLM orchestration and summarization
 │   ├── obsidian.py             # Obsidian Markdown export
 │   ├── _macos_loopback.py      # macOS ScreenCaptureKit audio capture
@@ -382,6 +411,7 @@ tinysteno/
     ├── test_transcriber.py     # Transcriber tests
     ├── test_api_transcriber.py # API transcriber tests
     ├── test_transcript.py      # Segment and assembly tests
+    ├── test_hygiene.py         # Transcript filter tests
     └── test_tui_*.py           # TUI screen tests (pilot-driven)
 ```
 
@@ -396,7 +426,7 @@ The recording -> transcription -> summarization -> export flow is inherently seq
 Users need different meeting note formats (RCA, 1-on-1, sprint retrospective). Hard-coding these would require code changes. The persona system makes the output format data-driven: each persona is a directory with a schema, system prompt, and Jinja2 template. Adding a new persona requires zero code changes.
 
 **Why chunked LLM processing?**
-Whisper transcripts of long meetings (1+ hours) can exceed 50,000 characters, beyond most LLM context windows for structured extraction. The chunking strategy splits transcripts into overlapping 12,000-char segments, extracts from each, then merges. The merge step deduplicates list fields to avoid repeated items.
+Whisper transcripts of long meetings (1+ hours) can exceed 50,000 characters, beyond most LLM context windows for structured extraction. The chunking strategy splits transcripts on line boundaries into chunks sized from `llm_context_tokens` (60% of the window at 2 characters per token), extracts from each, then merges in at most two bounded rounds. The merge step asks the model to deduplicate list fields; if it fails, the local merge removes exact duplicates.
 
 **Why faster-whisper over openai-whisper?**
 CTranslate2-optimized Whisper is 4x faster on CPU with int8 quantization, making real-time or near-real-time transcription viable on consumer hardware without a GPU.

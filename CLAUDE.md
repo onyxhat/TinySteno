@@ -56,3 +56,6 @@ Built-in personas live in `tinysteno/personas/<slug>/`, each with `persona.yaml`
   impact analysis.
 - The TUI lives in `tinysteno/tui/` (Textual). It takes all side effects through `TuiDeps`, must not
   import `tinysteno.main`, and is tested with `App.run_test()` (pytest-asyncio auto mode).
+- Transcript clean-up (hallucinated lines, speaker bleed) lives in `tinysteno/hygiene.py` and runs
+  inside `transcript.assemble()` for both backends. Its thresholds are deliberate (see the
+  constants and `tests/test_hygiene.py`); do not tune them without audio evidence.

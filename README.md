@@ -14,7 +14,10 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 - GPU auto-detection — CUDA, with a CPU fallback (Apple Silicon runs on the CPU)
 - Stereo diarization — `[You]` / `[Others]` labels when system audio is captured
 - Summarize via OpenAI-compatible API (Ollama, OpenAI, OpenRouter, etc.)
-- Handles long transcripts automatically — splits into chunks, summarizes each, then merges
+- Handles long transcripts automatically — splits into chunks sized to the model's context window, summarizes each, then merges
+- Timestamped transcript lines, and clean-up of lines Whisper invents in silence and of speaker audio picked up by the microphone
+- The model is told the meeting date, who `[You]` and `[Others]` are, and any notes you pass with `--notes`
+- Keeps the transcript beside the recording, so a retry skips transcription
 - Persona system — choose how recordings are summarized and formatted
 - Auto-generate note titles and tags from content
 - Export structured markdown notes to Obsidian vault
@@ -85,6 +88,12 @@ tinysteno process recordings/Meeting.wav --backend api --whisper-api-model whisp
 # Process with a specific persona
 tinysteno process recordings/Meeting.wav --persona executive-summary
 
+# Give the summary your own notes about the meeting (also on `record` and `tui`)
+tinysteno process recordings/Meeting.wav --notes agenda.txt
+
+# Transcribe again instead of reusing the saved transcript
+tinysteno process recordings/Meeting.wav --retranscribe
+
 # Verify setup
 tinysteno test
 
@@ -100,7 +109,7 @@ tinysteno config --edit
 
 ## TUI
 
-Run `tinysteno` with no subcommand in a terminal to open the interactive interface (outside a terminal it prints help, as before). `tinysteno tui` does the same and accepts `--now`, `--name`, `--persona`, `--timeout MINUTES` and the transcription override flags.
+Run `tinysteno` with no subcommand in a terminal to open the interactive interface (outside a terminal it prints help, as before). `tinysteno tui` does the same and accepts `--now`, `--name`, `--persona`, `--timeout MINUTES`, `--notes PATH` and the transcription override flags.
 
 ```bash
 tinysteno                       # open the TUI on the Home screen
@@ -259,6 +268,10 @@ persona: "default"
 api_key: "ollama"
 base_url: "http://localhost:11434/v1"
 model: "llama3.2:3b"
+# Context window, in tokens, the model is actually served with. Transcripts are
+# split into chunks of 60% of it (at 2 characters per token); values below 500
+# are treated as 500. Must be a whole number. See "Long transcripts" below.
+llm_context_tokens: 8192
 auto_title: true            # generate note titles from content
 auto_tags: true             # generate tags from content
 
@@ -277,6 +290,16 @@ transcription_backend: "local"
 whisper_device: "auto"
 whisper_compute_type: "auto"
 
+# Local backend only: skip stretches without speech (faster-whisper's VAD filter)
+whisper_vad: true
+# Text that primes Whisper's vocabulary: names, product terms, acronyms ("" = none).
+# Used by both backends; keep it short.
+whisper_prompt: ""
+
+# Transcript clean-up, see "Transcript clean-up" below
+hallucination_filter: true  # drop caption credits and repeats Whisper invents in silence
+bleed_filter: true          # drop the quieter copy of a sentence heard on both channels
+
 # API endpoint for remote transcription
 # Uses the same base_url/api_key as the summarizer if not set
 # whisper_base_url: "https://api.openai.com/v1"
@@ -287,6 +310,7 @@ whisper_compute_type: "auto"
 diarization: false          # add [You]/[Others] speaker labels; both channels are
                             # transcribed either way. System audio is captured as the
                             # right channel of a stereo file (L=mic, R=system audio)
+transcript_timestamps: true # start each transcript line with its [hh:mm:ss] time
 
 # Recording session limit in minutes: recording stops and is processed when it
 # elapses. 0 disables. Asked for by `tinysteno setup`. A persona's session_timeout_minutes or --timeout overrides it.
@@ -332,17 +356,54 @@ AI-generated summary of the meeting.
 
 ## Transcript
 \```
-Full transcript text here...
+[00:00:03] First line of the transcript.
+[00:00:09] Second line of the transcript.
 \```
 ```
 
-System audio is always transcribed when it is captured. Each channel is transcribed separately and a silent channel is skipped. If a channel has audio but no speech is recognised, or part of a summary could not be generated, the CLI prints `Warning:` lines, the TUI shows them, and the note gets a `## Processing warnings` section listing them. A note never overwrites an earlier one: a second note with the same title and date is saved as `<title> (<date>) 2.md`, then ` 3`, and so on. A recording made before this version with a 2-channel microphone and no system audio is still read as mic and system. When diarization is enabled, the transcript is interleaved chronologically with `[You]` / `[Others]` speaker labels:
+Each transcript line is one recognised segment, prefixed with its start time from the beginning of the recording as `[hh:mm:ss]`. Set `transcript_timestamps: false` to leave the times out; the lines then run together as plain text, as they did before.
+
+System audio is always transcribed when it is captured. Each channel is transcribed separately and a silent channel is skipped. If a channel has audio but no speech is recognised, or part of a summary could not be generated, the CLI prints `Warning:` lines, the TUI shows them, and the note gets a `## Processing warnings` section listing them. A note never overwrites an earlier one: a second note with the same title and date is saved as `<title> (<date>) 2.md`, then ` 3`, and so on. A recording made before this version with a 2-channel microphone and no system audio is still read as mic and system. When diarization is enabled, the transcript is interleaved chronologically and each line also carries a `[You]` / `[Others]` speaker label after the time:
 
 ```
-[You] I think we should go with option A.
-[Others] That makes sense, let's proceed.
-[You] Great, I'll follow up with the team.
+[00:00:03] [You] I think we should go with option A.
+[00:00:07] [Others] That makes sense, let's proceed.
+[00:00:12] [You] Great, I'll follow up with the team.
 ```
+
+### Transcript clean-up
+
+Whisper sometimes writes text for silence, and the microphone can pick up the other side of a call from your speakers. Two filters remove such lines while the transcript is built, for both backends. Everything they remove is logged at INFO (run with `--verbose` to see it) with the reason, speaker, start time and text. Both are on by default.
+
+`hallucination_filter` works on each channel separately and removes:
+
+- **Caption credits**: a line that starts with "Subtitles by ...", "Captions provided by ...", "Transcribed by ..." or "Translated by ..." (up to 10 words), a line that is only "Thanks for watching" (optionally with "please subscribe"), a short line (up to 8 words) starting "Please subscribe", and any line containing amara.org. A sentence that merely mentions subtitles somewhere in the middle is kept.
+- **Stuck repeats**: when the same line comes five or more times in a row, the first is kept and the rest are removed.
+- **Stranded short repeats**: a line of five words or fewer that occurs at least three times on its channel is removed only when it sits alone in silence (no other line within 10 seconds on either side) AND the audio there is much quieter than the rest of the channel (under a quarter of the median level of that channel's lines). It is never removed without that audio evidence, so a run of genuine "Yeah." and "Okay." in a live conversation stays.
+
+What it can get wrong: a quiet, isolated "Thank you." that someone really said, three times, in a meeting with long pauses, can be removed. A real sentence that starts with "Subtitles by" or "Translated by" is removed too. Stuck repeats are removed even when the audio is loud, so five identical lines in a row are always reduced to one.
+
+`bleed_filter` applies to a stereo recording, where the microphone and system audio are transcribed separately. A sentence transcribed on both channels starting within three seconds of each other loses its quieter copy (measured on the audio of each channel, not the label); the microphone copy goes when the levels are equal. It only compares lines of at least 15 characters whose words overlap by half or more, so short agreement such as "Sounds good." said on both sides is kept.
+
+What it can get wrong: two people genuinely saying the same long sentence at the same moment lose one copy. Speech that bleeds in at a level close to the real signal may keep the wrong copy.
+
+Set `hallucination_filter: false` and/or `bleed_filter: false` in `config.yaml` to switch either off. The filters run when a recording is transcribed; a transcript already saved (see below) is not filtered again, so use `--retranscribe` after changing them.
+
+### Notes for the summary
+
+`--notes PATH` on `record`, `process` or `tui` reads a UTF-8 text file (an agenda, names, what you care about) and passes its contents to the LLM as information about the meeting, between `<notes>` tags, with an instruction to treat it as information and never as instructions. It is not copied into the note. A missing or unreadable file is an error before anything is recorded or processed.
+
+In the summary request the model is also told the meeting date (so "tomorrow" can be resolved), what `[You]` and `[Others]` mean when diarization is on (or, when it is off, not to guess who said what), that lines start with `[hh:mm:ss]` when timestamps are on, and to keep proposals, open points and decisions distinct. The generated title and tags are based on the summary, not the transcript.
+
+### Saved transcripts
+
+After transcribing, TinySteno writes the transcript as JSON beside the recording, as `Meeting.transcript.json` next to `Meeting.wav`. It holds the full text of the meeting with times and speakers, so treat it like the recording. With the default layout the recordings folder is inside your Obsidian vault (`<vault>/<output_folder>/audio`), so the file is inside the vault, and synced or shared with it; set `recordings_path` to keep recordings and transcripts elsewhere.
+
+It exists so that retrying after a failed summary, export or LLM outage does not transcribe again. `tinysteno process` and the TUI reuse it when it is newer than the WAV, readable and of the current format; if it is missing, older than the WAV (the recording was replaced), unreadable or from another version, the recording is transcribed afresh. Pass `--retranscribe` to `tinysteno process` to force a fresh transcription, or delete the file. Transcript options such as `transcript_timestamps` and `diarization` are applied when the note is rendered, so changing them does not need a new transcription; the filters and `whisper_*` settings do. If the file cannot be written TinySteno logs a warning and carries on.
+
+### Long transcripts
+
+A transcript longer than 60% of the model's context window (at 2 characters per token) is split on line boundaries into chunks, each summarized separately and the results merged in at most two rounds; a line longer than a chunk is split. If the model fails to merge, the partial summaries are combined locally with only exact duplicates removed, and the note gets a processing warning. Set `llm_context_tokens` to the context window your model is actually served with: chunks are sized from it, so a value above the real window makes chunks the model may not fit, and one far below it makes many needlessly small calls. For Ollama, that is the `num_ctx` it runs the model with, which is often smaller than the model's maximum.
 
 ## Requirements
 
