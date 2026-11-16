@@ -77,14 +77,14 @@ def test_create_transcriber_maps_filter_switches_for_both_backends():
 
 def test_default_config_includes_filter_switches(tmp_path):
     with patch.object(Path, "home", return_value=tmp_path):
-        with patch("tinysteno.main.seed_builtin_personas"):
+        with patch("tinysteno.config.seed_builtin_personas"):
             config = load_config()
     assert config["hallucination_filter"] is True and config["bleed_filter"] is True
 
 
 def test_default_config_includes_vad_and_prompt(tmp_path):
     with patch.object(Path, "home", return_value=tmp_path):
-        with patch("tinysteno.main.seed_builtin_personas"):
+        with patch("tinysteno.config.seed_builtin_personas"):
             config = load_config()
     assert config["whisper_vad"] is True and config["whisper_prompt"] == ""
 
@@ -94,7 +94,7 @@ def test_load_config_seeds_personas_when_dir_absent(tmp_path):
     # personas dir does NOT exist
 
     with patch.object(Path, "home", return_value=tmp_path):
-        with patch("tinysteno.main.seed_builtin_personas") as mock_seed:
+        with patch("tinysteno.config.seed_builtin_personas") as mock_seed:
             load_config()
 
     mock_seed.assert_called_once_with()
@@ -105,7 +105,7 @@ def test_load_config_does_not_seed_when_dir_exists(tmp_path):
     (tmp_path / ".tinysteno" / "personas").mkdir(parents=True)  # dir exists
 
     with patch.object(Path, "home", return_value=tmp_path):
-        with patch("tinysteno.main.seed_builtin_personas") as mock_seed:
+        with patch("tinysteno.config.seed_builtin_personas") as mock_seed:
             load_config()
 
     mock_seed.assert_not_called()
@@ -130,7 +130,7 @@ def test_cmd_setup_normal_seeds_interactively_after_config_write(monkeypatch):
 
     with patch("tinysteno.main.seed_builtin_personas") as mock_seed:
         mock_seed.return_value = {"copied": ["default", "rca"], "skipped": []}
-        with patch("tinysteno.main._write_config"):
+        with patch("tinysteno.main.update_config"):
             with patch("tinysteno.main.list_personas", return_value=["default"]):
                 cmd_setup(args)
 
@@ -369,9 +369,9 @@ def _setup_timeout(tmp_path, monkeypatch, typed: str, existing: dict | None = No
          patch("tinysteno.main.seed_builtin_personas",
                return_value={"copied": [], "skipped": []}), \
          patch("tinysteno.main.list_personas", return_value=["default"]), \
-         patch("tinysteno.main._write_config") as write:
+         patch("tinysteno.main.update_config") as write:
         cmd_setup(argparse.Namespace(reset_personas=False))
-    return write.call_args.args[1]["session_timeout_minutes"]
+    return write.call_args.args[0]["session_timeout_minutes"]
 
 
 @pytest.mark.parametrize("typed, saved", [
@@ -648,9 +648,9 @@ def _run_setup_capturing_prompts(tmp_path, monkeypatch, diarization: bool, exist
          patch("tinysteno.main.seed_builtin_personas",
                return_value={"copied": [], "skipped": []}), \
          patch("tinysteno.main.list_personas", return_value=["default"]), \
-         patch("tinysteno.main._write_config") as write:
+         patch("tinysteno.main.update_config") as write:
         cmd_setup(argparse.Namespace(reset_personas=False))
-    return seen, write.call_args.args[1]["channels"]
+    return seen, write.call_args.args[0]["channels"]
 
 
 def test_setup_diarization_hint_does_not_ask_for_two_channels(tmp_path, monkeypatch):
@@ -756,7 +756,7 @@ def test_speakers_flag_sets_max_speakers_for_the_run_only():
 
 def test_speaker_split_is_off_in_the_default_config(tmp_path):
     with patch.object(Path, "home", return_value=tmp_path):
-        with patch("tinysteno.main.seed_builtin_personas"):
+        with patch("tinysteno.config.seed_builtin_personas"):
             config = load_config()
     assert config["speaker_split"] is False and "max_speakers" not in config
 

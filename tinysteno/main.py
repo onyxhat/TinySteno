@@ -23,6 +23,12 @@ from tinysteno.session import (
 from tinysteno.pipeline import PipelineError, Stage, run_pipeline
 from tinysteno.log_file import log_to_file
 from tinysteno.signals import deferred_exit_signals
+from tinysteno.config import (
+    config_path as _config_path, load_config, recordings_dir as _recordings_dir,
+    validate_config as _validate_config, update_config, write_config as _write_config,
+    is_timeout_minutes as _is_timeout_minutes, is_positive_number as _is_positive_number,
+    is_speaker_count as _is_speaker_count,
+)
 from tinysteno.personas import (
     load_persona, list_personas, seed_builtin_personas,
     PersonaNotFoundError, PersonaInvalidError, Persona,
@@ -33,121 +39,6 @@ def setup_logging(verbose: bool = False):
     """Configure logging level."""
     level = logging.DEBUG if verbose else logging.WARNING
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
-
-
-def load_config() -> dict:
-    """Load configuration from ~/.tinysteno/config.yaml."""
-    import yaml
-
-    config_path = Path.home() / ".tinysteno" / "config.yaml"
-
-    if not config_path.exists():
-        default_config = {
-            "obsidian_vault": str(Path.home() / "Obsidian" / "Vault"),
-            "api_key": "ollama",
-            "base_url": "http://localhost:11434/v1",
-            "model": "llama3.2:3b",
-            "llm_context_tokens": 8192,
-            "whisper_model": "small",
-            "transcription_backend": "local",
-            "whisper_device": "auto",
-            "whisper_compute_type": "auto",
-            "whisper_api_key": "",
-            "whisper_base_url": "",
-            "whisper_api_model": "whisper-1",
-            "whisper_api_diarize": False,
-            "whisper_api_timeout": 600,
-            "whisper_vad": True,
-            "whisper_prompt": "",
-            "hallucination_filter": True,
-            "bleed_filter": True,
-            "diarization": False,
-            "speaker_split": False,
-            "transcript_timestamps": True,
-            "auto_title": True,
-            "auto_tags": True,
-            "output_folder": "meetings",
-            "sample_rate": 44100,
-            "channels": 1,
-            "persona": "default",
-            "session_timeout_minutes": DEFAULT_SESSION_TIMEOUT_MINUTES,
-        }
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(yaml.dump(default_config, default_flow_style=False))
-
-    # Seed built-in personas on first run (silent; only when dir absent)
-    personas_dir = config_path.parent / "personas"
-    if not personas_dir.exists():
-        seed_builtin_personas()
-
-    config = yaml.safe_load(config_path.read_text())
-    if not isinstance(config, dict):
-        raise ValueError(f"Config file is malformed: {config_path}")
-    _validate_config(config)
-    for key in ("obsidian_vault", "recordings_path"):
-        if config.get(key):
-            config[key] = str(Path(config[key]).expanduser())
-    return config
-
-
-def _recordings_dir(config: dict) -> Path:
-    """Return the effective recordings directory from config."""
-    if config.get("recordings_path"):
-        return Path(config["recordings_path"]).expanduser()
-    vault = config.get("obsidian_vault", str(Path.home() / "Obsidian" / "Vault"))
-    folder = config.get("output_folder", "meetings")
-    return Path(vault) / folder / "audio"
-
-
-def _validate_config(config: dict) -> None:
-    """Raise ValueError if required config fields have wrong types."""
-    int_fields = {"sample_rate": int, "channels": int}
-    for field, expected_type in int_fields.items():
-        if field in config and not isinstance(config[field], expected_type):
-            raise ValueError(
-                f"Config field '{field}' must be {expected_type.__name__}, "
-                f"got {type(config[field]).__name__}"
-            )
-    if "llm_context_tokens" in config and (
-        isinstance(config["llm_context_tokens"], bool)
-        or not isinstance(config["llm_context_tokens"], int)
-    ):
-        raise ValueError(
-            "Config field 'llm_context_tokens' must be int, "
-            f"got {type(config['llm_context_tokens']).__name__}"
-        )
-    if "channels" in config and config["channels"] not in (1, 2):
-        raise ValueError("Config field 'channels' must be 1 or 2")
-    if "max_speakers" in config and not _is_speaker_count(config["max_speakers"]):
-        raise ValueError("Config field 'max_speakers' must be a whole number >= 1")
-    if "whisper_api_timeout" in config and not _is_positive_number(config["whisper_api_timeout"]):
-        raise ValueError("Config field 'whisper_api_timeout' must be a positive number of seconds")
-    if "session_timeout_minutes" in config:
-        if not _is_timeout_minutes(config["session_timeout_minutes"]):
-            raise ValueError(
-                "Config field 'session_timeout_minutes' must be a number >= 0 (0 disables)"
-            )
-
-
-def _is_timeout_minutes(value) -> bool:
-    """True for a finite int/float >= 0 that is not a bool."""
-    return (
-        isinstance(value, (int, float)) and not isinstance(value, bool)
-        and math.isfinite(value) and value >= 0
-    )
-
-
-def _is_positive_number(value) -> bool:
-    """True for a finite int/float > 0 that is not a bool."""
-    return (
-        isinstance(value, (int, float)) and not isinstance(value, bool)
-        and math.isfinite(value) and value > 0
-    )
-
-
-def _is_speaker_count(value) -> bool:
-    """True for an int >= 1 that is not a bool."""
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
 
 
 def _speaker_count(value: str) -> int:
@@ -613,13 +504,6 @@ def _print_seed_summary(console, result: dict) -> None:
         console.print(f"  Skipped (kept yours): {', '.join(result['skipped'])}")
 
 
-def _write_config(config_path: Path, config: dict) -> None:
-    """Persist config dict to YAML file."""
-    import yaml  # pylint: disable=import-outside-toplevel
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(yaml.dump(config, default_flow_style=False), encoding="utf-8")
-
-
 def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # large interactive CLI setup function
     """Interactively create or update ~/.tinysteno/config.yaml."""
     import yaml
@@ -634,11 +518,11 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         _print_seed_summary(console, result)
         return
 
-    config_path = Path.home() / ".tinysteno" / "config.yaml"
+    cfg_path = _config_path()
 
     # Load existing values as defaults, or fall back to built-in defaults.
-    if config_path.exists():
-        existing = yaml.safe_load(config_path.read_text()) or {}
+    if cfg_path.exists():
+        existing = yaml.safe_load(cfg_path.read_text()) or {}
         action = "Updating"
     else:
         existing = {}
@@ -650,7 +534,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
     console.print()
     console.print(Rule("[bold]TinySteno Setup[/bold]"))
     console.print()
-    console.print(f"{action} [bold]{config_path}[/bold]")
+    console.print(f"{action} [bold]{cfg_path}[/bold]")
     console.print("Press Enter to keep the current value.\n")
 
     # --- Obsidian ---
@@ -794,24 +678,26 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         )
 
     # --- Write ---
-    config = {
-        "obsidian_vault": obsidian_vault,
-        "output_folder": output_folder,
-        **( {"recordings_path": recordings_path} if recordings_path else {} ),
-        "api_key": api_key,
-        "base_url": base_url,
-        "model": model,
-        "auto_title": auto_title,
-        "auto_tags": auto_tags,
-        "whisper_model": whisper_model,
-        "diarization": diarization,
-        "channels": channels,
-        "sample_rate": sample_rate,
-        "persona": persona_slug,
-        "session_timeout_minutes": session_timeout_minutes,
-    }
-
-    _write_config(config_path, config)
+    try:
+        update_config({
+            "obsidian_vault": obsidian_vault,
+            "output_folder": output_folder,
+            "recordings_path": recordings_path or None,
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": model,
+            "auto_title": auto_title,
+            "auto_tags": auto_tags,
+            "whisper_model": whisper_model,
+            "diarization": diarization,
+            "channels": channels,
+            "sample_rate": sample_rate,
+            "persona": persona_slug,
+            "session_timeout_minutes": session_timeout_minutes,
+        })
+    except (ValueError, OSError) as exc:
+        console.print(f"[red]✗ Could not save config: {exc}[/red]")
+        sys.exit(1)
 
     # Seed built-in personas, prompting on conflicts
     seed_result = seed_builtin_personas(interactive=True)
@@ -819,7 +705,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
 
     console.print()
     console.print(Rule())
-    console.print(f"[green]✓[/green] Config written to [bold]{config_path}[/bold]")
+    console.print(f"[green]✓[/green] Config written to [bold]{cfg_path}[/bold]")
     console.print()
     console.print("Run [bold]tinysteno setup[/bold] again any time to update settings.")
     console.print("Run [bold]tinysteno test[/bold] to verify your setup.")
