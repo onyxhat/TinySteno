@@ -18,6 +18,26 @@ except Exception:  # pragma: no cover
     sd = None  # type: ignore  # pylint: disable=invalid-name
 
 
+# A channel whose peak is below this is converted at unit gain, not amplified into noise.
+NORMALISE_FLOOR = 0.003
+
+
+def _to_int16(audio: np.ndarray) -> np.ndarray:
+    """Convert float audio [n, channels] to int16, scaling each column to its own peak.
+
+    A column whose peak is below ``NORMALISE_FLOOR`` (including all zeros) is converted at
+    unit gain so a near-silent channel is not boosted into audible noise.
+    """
+    audio = np.asarray(audio, dtype=np.float32)
+    out = np.empty(audio.shape, dtype=np.int16)
+    for i in range(audio.shape[1]):
+        column = audio[:, i]
+        peak = float(np.max(np.abs(column))) if column.size else 0.0
+        gain = 32767.0 / peak if peak >= NORMALISE_FLOOR else 32767.0
+        out[:, i] = np.clip(column * gain, -32767, 32767).astype(np.int16)
+    return out
+
+
 def _rms_level(frame) -> float:
     """RMS over all samples of a frame, clamped to 0.0..1.0 (0.0 for an empty frame)."""
     samples = np.asarray(frame, dtype=np.float32)
@@ -369,14 +389,10 @@ class AudioRecorder:
             mic_data = raw.reshape(-1, ch) if ch > 1 else raw.reshape(-1, 1)
 
             audio_data, out_channels = self._build_audio_data(
-                mic_data, ch, loopback_raw_bytes, loopback_sr
+                mic_data, loopback_raw_bytes, loopback_sr
             )
 
-            max_val = np.max(np.abs(audio_data))
-            if max_val > 0:
-                audio_data = np.int16(audio_data / max_val * 32767)
-            else:
-                audio_data = np.zeros_like(audio_data, dtype=np.int16)
+            audio_data = _to_int16(audio_data)
 
             with wave.open(str(self.output_path), "w") as wav_file:
                 wav_file.setnchannels(out_channels)  # pylint: disable=no-member
@@ -447,13 +463,15 @@ class AudioRecorder:
     def _build_audio_data(
         self,
         mic_data: np.ndarray,
-        mic_ch: int,
         loopback_raw_bytes: bytes,
         loopback_sr: Optional[int],
     ) -> tuple[np.ndarray, int]:
         """Mix mic and loopback raw bytes into final audio array."""
         if not (self._has_loopback and loopback_raw_bytes):
-            return mic_data, mic_ch
+            # No system audio: a 2-channel file would be read as mic + system, so write mono.
+            if mic_data.ndim > 1 and mic_data.shape[1] > 1:
+                return mic_data.mean(axis=1, keepdims=True), 1
+            return mic_data, 1
 
         from scipy.signal import resample as scipy_resample  # pylint: disable=import-outside-toplevel
 

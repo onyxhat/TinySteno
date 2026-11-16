@@ -631,7 +631,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         console,
         "Enable speaker diarization ([You]/[Others] labels)?",
         get("diarization", False),
-        "requires stereo recording (channels = 2)",
+        "labels come from recording system audio; no microphone setting is needed",
     )
 
     # --- Audio ---
@@ -646,17 +646,16 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         f"leave blank to use default: {computed_recordings}",
     )
 
-    channels_fallback = "2" if diarization else "1"
     channels_input = _prompt(
         console,
         "Channels",
-        str(get("channels", channels_fallback)),
-        "1 = mono, 2 = stereo (required for diarization)",
+        str(get("channels", 1)),
+        "microphone input channels (1 is right for almost every microphone)",
     )
     try:
         channels = int(channels_input)
     except ValueError:
-        channels = 2 if diarization else 1
+        channels = 1
 
     sample_rate_input = _prompt(console, "Sample rate", str(get("sample_rate", 44100)), "Hz")
     try:

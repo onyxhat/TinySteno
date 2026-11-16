@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+import soundfile as sf
 
 from tinysteno.recorder import AudioRecorder
 
@@ -129,3 +130,42 @@ def test_stop_after_a_failed_save_does_not_claim_an_empty_recording(rec, sd):
     assert rec.raw_paths == kept             # and the kept audio is still there
     rec.discard()                            # an explicit discard is what removes it
     assert not any(p.exists() for p in kept)
+
+
+def test_each_channel_is_normalised_on_its_own(rec, sd):
+    rec.start()
+    rec._has_loopback = True
+    rec._write_mic_frame(np.full((1024, 1), 0.02, dtype=np.float32))       # quiet me
+    rec._write_loopback_frame(np.full((1024, 1), 0.8, dtype=np.float32))   # loud them
+    rec.stop()
+    data, _ = sf.read(str(rec.output_path))
+    assert abs(data[:, 0]).max() > 0.99 and abs(data[:, 1]).max() > 0.99
+
+
+def test_a_near_silent_channel_is_not_amplified(rec, sd):
+    rec.start()
+    rec._has_loopback = True
+    rec._write_mic_frame(np.full((1024, 1), 0.5, dtype=np.float32))
+    rec._write_loopback_frame(np.full((1024, 1), 0.0005, dtype=np.float32))
+    rec.stop()
+    data, _ = sf.read(str(rec.output_path))
+    assert abs(data[:, 1]).max() < 0.001
+
+
+def test_two_channel_mic_without_system_audio_is_written_mono(tmp_path, sd):
+    rec = AudioRecorder(sample_rate=44100, channels=2, recordings_dir=tmp_path / "out")
+    sd.query_devices.return_value = {"index": 0, "max_input_channels": 2}
+    rec.start()
+    rec._write_mic_frame(np.full((1024, 2), 0.25, dtype=np.float32))
+    rec.stop()
+    assert sf.info(str(rec.output_path)).channels == 1
+
+
+def test_an_all_zero_channel_stays_zero_and_the_file_is_still_written(rec, sd):
+    rec.start()
+    rec._has_loopback = True
+    rec._write_mic_frame(np.full((1024, 1), 0.5, dtype=np.float32))
+    rec._write_loopback_frame(np.zeros((1024, 1), dtype=np.float32))
+    rec.stop()
+    data, _ = sf.read(str(rec.output_path))
+    assert abs(data[:, 0]).max() > 0.99 and abs(data[:, 1]).max() == 0

@@ -528,3 +528,52 @@ def test_cmd_record_saves_and_does_not_process_when_killed(tmp_path, capsys):
     process.assert_not_called()
     out = capsys.readouterr().out
     assert "Saved recording: /tmp/x.wav" in out and "tinysteno process /tmp/x.wav" in out
+
+
+def _run_setup_capturing_prompts(tmp_path, monkeypatch, diarization: bool, existing=None):
+    """Run the wizard; return (diarization hint, channels default/hint, saved channels)."""
+    if existing is not None:
+        (tmp_path / ".tinysteno").mkdir()
+        (tmp_path / ".tinysteno" / "config.yaml").write_text(yaml.dump(existing))
+    seen = {}
+
+    def answer(_console, label, default, hint=""):
+        if label == "Channels":
+            seen["channels"] = (default, hint)
+        return default
+
+    def answer_bool(_console, label, default, hint=""):
+        if label.startswith("Enable speaker diarization"):
+            seen["diarization_hint"] = hint
+            return diarization
+        return default
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+    with patch.object(Path, "home", return_value=tmp_path), \
+         patch("tinysteno.main._prompt", side_effect=answer), \
+         patch("tinysteno.main._prompt_bool", side_effect=answer_bool), \
+         patch("tinysteno.main.seed_builtin_personas",
+               return_value={"copied": [], "skipped": []}), \
+         patch("tinysteno.main.list_personas", return_value=["default"]), \
+         patch("tinysteno.main._write_config") as write:
+        cmd_setup(argparse.Namespace(reset_personas=False))
+    return seen, write.call_args.args[1]["channels"]
+
+
+def test_setup_diarization_hint_does_not_ask_for_two_channels(tmp_path, monkeypatch):
+    seen, _ = _run_setup_capturing_prompts(tmp_path, monkeypatch, diarization=False)
+    assert "channels = 2" not in seen["diarization_hint"]
+    assert "recording system audio" in seen["diarization_hint"]
+
+
+def test_setup_diarization_yes_keeps_the_channels_default_at_one(tmp_path, monkeypatch):
+    seen, saved = _run_setup_capturing_prompts(tmp_path, monkeypatch, diarization=True)
+    assert seen["channels"][0] == "1" and saved == 1
+    assert "1 is right for almost every microphone" in seen["channels"][1]
+
+
+def test_setup_still_offers_an_existing_channels_value(tmp_path, monkeypatch):
+    seen, saved = _run_setup_capturing_prompts(
+        tmp_path, monkeypatch, diarization=True, existing={"channels": 2}
+    )
+    assert seen["channels"][0] == "2" and saved == 2
