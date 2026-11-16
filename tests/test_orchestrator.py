@@ -27,6 +27,22 @@ def _make_orchestrator() -> Orchestrator:
     return s
 
 
+SUMMARY_FAILED = "The summary could not be generated; this note contains the transcript only."
+PERSONA = _make_persona({
+    "summary": {"type": "string", "description": "x"},
+    "items": {"type": "list", "description": "x"},
+})
+
+
+def _scripted(responses: list) -> Orchestrator:
+    """Orchestrator whose LLM returns/raises the given items in order (dicts become JSON)."""
+    s = _make_orchestrator()
+    s._client.chat.completions.create.side_effect = [
+        r if isinstance(r, Exception) else _llm_response(r) for r in responses
+    ]
+    return s
+
+
 # --- _build_user_message ---
 
 def test_build_user_message_includes_field_names():
@@ -132,6 +148,8 @@ def test_summarize_returns_defaults_on_llm_exception():
     s._client.chat.completions.create.side_effect = Exception("timeout")
     result = s.summarize("t", persona)
     assert result == {"overview": "", "items": []}
+    assert s._client.chat.completions.create.call_count == 2
+    assert s.warnings == [SUMMARY_FAILED]
 
 
 def test_summarize_uses_persona_system_prompt():
@@ -360,3 +378,88 @@ def test_summarize_all_chunks_fail_returns_defaults():
     s._client.chat.completions.create.side_effect = Exception("API down")
     result = s.summarize(long_transcript, persona)
     assert result == {"overview": "", "items": []}
+    assert s._client.chat.completions.create.call_count == 4
+    assert s.warnings == [SUMMARY_FAILED]
+
+
+# --- retries, partial results and warnings ---
+
+def test_empty_response_is_retried_once():
+    orch = _scripted([{}, {"summary": "ok", "items": []}])
+    assert orch.summarize("short", PERSONA)["summary"] == "ok"
+    assert not orch.warnings
+    assert orch._client.chat.completions.create.call_count == 2
+
+
+def test_failed_summary_warns_and_returns_defaults():
+    orch = _scripted([Exception("down"), Exception("down")])
+    assert orch.summarize("short", PERSONA) == {"summary": "", "items": []}
+    assert orch.warnings == [SUMMARY_FAILED]
+
+
+def test_failed_chunks_are_counted_in_a_warning():
+    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
+    transcript = "d" * (2 * _CHUNK_SIZE_CHARS)  # three chunks
+    good = {"summary": "part", "items": ["a"]}
+    orch = _scripted([good, Exception("x"), Exception("x"), good, {"summary": "all", "items": []}])
+    result = orch.summarize(transcript, PERSONA)
+    assert result["summary"] == "all"
+    assert orch.warnings == [
+        "1 of 3 transcript sections could not be summarized; the summary is incomplete."
+    ]
+
+
+def test_single_surviving_chunk_is_returned_without_a_merge_call():
+    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
+    transcript = "d" * (_CHUNK_SIZE_CHARS + 1000)
+    good = {"summary": "part", "items": ["a"]}
+    orch = _scripted([good, {}, {}])
+    assert orch.summarize(transcript, PERSONA) == good
+    assert orch._client.chat.completions.create.call_count == 3
+    assert orch.warnings == [
+        "1 of 2 transcript sections could not be summarized; the summary is incomplete."
+    ]
+
+
+def test_failed_merge_keeps_the_partials():
+    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
+    transcript = "e" * (_CHUNK_SIZE_CHARS + 1000)
+    orch = _scripted([
+        {"summary": "one", "items": ["a", "b"]},
+        {"summary": "two", "items": ["b", "c"]},
+        {},
+        {},
+    ])
+    result = orch.summarize(transcript, PERSONA)
+    assert result == {"summary": "one\n\ntwo", "items": ["a", "b", "c"]}
+    assert orch.warnings == [
+        "The section summaries could not be merged by the model; "
+        "they were combined without de-duplication."
+    ]
+
+
+def test_string_for_a_list_field_becomes_one_item():
+    orch = _make_orchestrator()
+    assert orch._validate({"items": "just one thing"}, PERSONA)["items"] == ["just one thing"]
+
+
+def test_blank_string_for_a_list_field_becomes_empty_list():
+    orch = _make_orchestrator()
+    assert orch._validate({"items": "  "}, PERSONA)["items"] == []
+
+
+def test_merge_locally_skips_empty_strings_and_keeps_first_duplicate():
+    orch = _make_orchestrator()
+    partials = [
+        {"summary": "", "items": ["b", "a"]},
+        {"summary": "two", "items": ["a", "B"]},
+    ]
+    assert orch._merge_locally(partials, PERSONA) == {"summary": "two", "items": ["b", "a", "B"]}
+
+
+def test_warnings_reset_between_calls():
+    orch = _scripted([Exception("x"), Exception("x"), {"summary": "ok", "items": []}])
+    orch.summarize("short", PERSONA)
+    assert orch.warnings == [SUMMARY_FAILED]
+    orch.summarize("short", PERSONA)
+    assert not orch.warnings

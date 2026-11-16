@@ -20,12 +20,23 @@ _TITLE_MAX_OVERVIEW_CHARS = 500
 _TAG_MAX_OVERVIEW_CHARS = 500
 _LLM_TIMEOUT_SECONDS = 120.0
 
+_WARN_SUMMARY_FAILED = "The summary could not be generated; this note contains the transcript only."
+_WARN_CHUNKS_FAILED = (
+    "{failed} of {total} transcript sections could not be summarized; "
+    "the summary is incomplete."
+)
+_WARN_MERGE_FAILED = (
+    "The section summaries could not be merged by the model; "
+    "they were combined without de-duplication."
+)
+
 
 class Orchestrator:
     """Orchestrate LLM calls for transcript extraction and title generation."""
 
     def __init__(self, api_key: str, base_url: str, model: str):
         self.model = model
+        self.warnings: list[str] = []
         self._client = OpenAI(
             api_key=api_key,
             base_url=base_url,
@@ -41,10 +52,15 @@ class Orchestrator:
         Returns a dict with all schema field names as keys.
         Missing/invalid fields from the LLM default to "" (string) or [] (list).
         """
+        self.warnings = []
         chunks = self._chunk_transcript(transcript)
 
         if len(chunks) == 1:
-            return self._extract(self._build_user_message(transcript, persona), persona)
+            result = self._extract(self._build_user_message(transcript, persona), persona)
+            if self._is_empty(result):
+                logger.error("Summary could not be generated; returning defaults.")
+                self.warnings.append(_WARN_SUMMARY_FAILED)
+            return result
 
         logger.info(
             "Transcript split into %d chunks (%d total chars) for summarization.",
@@ -56,18 +72,48 @@ class Orchestrator:
         for i, chunk in enumerate(chunks):
             logger.debug("Summarizing chunk %d/%d", i + 1, len(chunks))
             result = self._extract(self._build_user_message(chunk, persona), persona)
-            if any(v for v in result.values()):
+            if not self._is_empty(result):
                 partials.append(result)
 
         if not partials:
             logger.error("All chunk summarizations failed; returning defaults.")
+            self.warnings.append(_WARN_SUMMARY_FAILED)
             return self._defaults(persona)
+
+        failed = len(chunks) - len(partials)
+        if failed:
+            logger.warning("%d of %d chunks could not be summarized.", failed, len(chunks))
+            self.warnings.append(_WARN_CHUNKS_FAILED.format(failed=failed, total=len(chunks)))
 
         if len(partials) == 1:
             return partials[0]
 
         logger.debug("Merging %d partial summaries.", len(partials))
-        return self._extract(self._build_merge_message(partials, persona), persona)
+        merged = self._extract(self._build_merge_message(partials, persona), persona)
+        if self._is_empty(merged):
+            logger.warning("Merge call returned nothing; combining partial summaries locally.")
+            self.warnings.append(_WARN_MERGE_FAILED)
+            return self._merge_locally(partials, persona)
+        return merged
+
+    @staticmethod
+    def _is_empty(result: dict) -> bool:
+        """True when every field of a validated result is empty."""
+        return not any(result.values())
+
+    def _merge_locally(self, partials: list[dict], persona: "Persona") -> dict:
+        """Combine partial results without the LLM.
+
+        String fields join the non-empty values with a blank line; list fields
+        concatenate with exact duplicates removed, keeping the first occurrence.
+        """
+        merged: dict = {}
+        for name, defn in persona.schema.items():
+            if defn["type"] == "string":
+                merged[name] = "\n\n".join(p[name] for p in partials if p[name])
+            else:
+                merged[name] = list(dict.fromkeys(item for p in partials for item in p[name]))
+        return merged
 
     def generate_title(self, field_value: str) -> Optional[str]:
         """Generate a short title from a field value string.
@@ -197,7 +243,21 @@ class Orchestrator:
         )
 
     def _extract(self, user_message: str, persona: "Persona") -> dict:
-        """Call the LLM and validate/normalize the response against the persona schema."""
+        """Call the LLM, retrying once if it raises or returns nothing useful.
+
+        Returns the validated result; every field is empty if both attempts failed.
+        """
+        result = self._defaults(persona)
+        for attempt in (1, 2):
+            result = self._extract_once(user_message, persona)
+            if not self._is_empty(result):
+                break
+            if attempt == 1:
+                logger.warning("LLM returned no usable fields; retrying once.")
+        return result
+
+    def _extract_once(self, user_message: str, persona: "Persona") -> dict:
+        """Make one LLM call and validate the response against the persona schema."""
         parsed: dict = {}
         try:
             response = self._client.chat.completions.create(
@@ -213,6 +273,8 @@ class Orchestrator:
             parsed = self._parse_json(raw_json)
         except Exception as e:
             logger.error("LLM call failed: %s", e)
+        if not isinstance(parsed, dict):
+            parsed = {}
         return self._validate(parsed, persona)
 
     def _validate(self, parsed: dict, persona: "Persona") -> dict:
@@ -232,6 +294,8 @@ class Orchestrator:
                         )
                     result[field_name] = ""
             else:  # list
+                if isinstance(value, str) and value.strip():
+                    value = [value]
                 if isinstance(value, list):
                     items = [self._clean_list_item(str(item)) for item in value]
                     result[field_name] = [item for item in items if item]
