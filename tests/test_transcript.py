@@ -12,6 +12,7 @@ from tinysteno.transcript import (
     is_silent,
     labelled_text,
     plain_text,
+    render_transcript,
 )
 
 LOUD = np.full(32000, 0.1, dtype=np.float32)
@@ -137,3 +138,35 @@ def test_assemble_drops_a_relabelled_system_copy_when_the_microphone_is_louder()
                 OTHERS: [Segment(1.0, 3.0, text, "Speaker 2")]}
     result = assemble(channels, _bleed_audio(0.2, 0.01), diarize=True, language="en")
     assert [(s.speaker, s.text) for s in result["segments"]] == [(YOU, text)]
+
+
+_RENDER_SEGS = [Segment(3.0, 4.0, "hi", "You"), Segment(3725.0, 3726.0, "bye", "Others")]
+
+
+def test_render_with_labels_and_timestamps():
+    assert render_transcript(_RENDER_SEGS, labels=True, timestamps=True) \
+        == "[00:00:03] [You] hi\n[01:02:05] [Others] bye"
+
+
+def test_render_timestamps_only():
+    assert render_transcript(_RENDER_SEGS, labels=False, timestamps=True) \
+        == "[00:00:03] hi\n[01:02:05] bye"
+
+
+def test_render_labels_only():
+    assert render_transcript(_RENDER_SEGS, labels=True, timestamps=False) \
+        == labelled_text(_RENDER_SEGS)
+
+
+def test_render_plain():
+    assert render_transcript(_RENDER_SEGS, labels=False, timestamps=False) == "hi bye"
+
+
+def test_render_mono_segment_has_no_speaker_prefix():
+    assert render_transcript([Segment(3.9, 5.0, "hi")], labels=True, timestamps=True) \
+        == "[00:00:03] hi"
+
+
+def test_render_hours_are_not_truncated():
+    assert render_transcript([Segment(360000.0, 360001.0, "x")], labels=False, timestamps=True) \
+        == "[100:00:00] x"

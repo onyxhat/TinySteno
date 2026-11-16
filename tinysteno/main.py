@@ -59,6 +59,7 @@ def load_config() -> dict:
             "hallucination_filter": True,
             "bleed_filter": True,
             "diarization": False,
+            "transcript_timestamps": True,
             "auto_title": True,
             "auto_tags": True,
             "output_folder": "meetings",

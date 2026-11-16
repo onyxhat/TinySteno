@@ -11,6 +11,7 @@ from typing import Iterator, Optional, Protocol
 
 from tinysteno.personas import Persona
 from tinysteno.transcriber import Transcriber
+from tinysteno.transcript import render_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,15 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
     logger.debug("Duration: %.0fs", duration_seconds)
 
     transcriber_warnings = _string_list(result.get("warnings"))
-    transcript = result["diarised_text"] or result["text"]
+    segments = result.get("segments")
+    if isinstance(segments, list):
+        transcript = render_transcript(
+            segments,
+            labels=config.get("diarization", False),
+            timestamps=config.get("transcript_timestamps", True),
+        )
+    else:
+        transcript = result["diarised_text"] or result["text"]
     if not transcript.strip():
         for stage in (Stage.SUMMARIZE, Stage.METADATA, Stage.EXPORT):
             reporter.stage_skipped(stage)

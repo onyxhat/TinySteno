@@ -9,6 +9,7 @@ import pytest
 from tinysteno.personas import Persona
 from tinysteno.pipeline import (
     PipelineError, PipelineResult, Stage, _extract_summary_text, run_pipeline)
+from tinysteno.transcript import Segment
 
 
 def _persona() -> Persona:
@@ -46,9 +47,10 @@ class RecordingReporter:
 class FakeTranscriber:
     """Transcriber returning canned text after one progress callback."""
 
-    def __init__(self, text, warnings=None):
+    def __init__(self, text, warnings=None, segments=None):
         self.text = text
         self.warnings = warnings
+        self.segments = segments
 
     def transcribe(self, path, diarize=False, on_progress=None):
         if on_progress:
@@ -59,6 +61,7 @@ class FakeTranscriber:
             "duration_seconds": 61.0,
             "detected_language": "en",
             **({"warnings": self.warnings} if self.warnings is not None else {}),
+            **({"segments": self.segments} if self.segments is not None else {}),
         }
 
 
@@ -78,7 +81,8 @@ def _exporter_cls():
 
 def _run(  # pylint: disable=too-many-arguments
         tmp_path, *, name=None, text="hello there", config_overrides=None,
-         reporter=None, orchestrator_cls=None, exporter_cls=None, warnings=None):
+         reporter=None, orchestrator_cls=None, exporter_cls=None, warnings=None,
+         segments=None):
     config = {
         "api_key": "k", "base_url": "u", "model": "m", "auto_title": True,
         "auto_tags": True, "obsidian_vault": str(tmp_path),
@@ -87,7 +91,7 @@ def _run(  # pylint: disable=too-many-arguments
     config.update(config_overrides or {})
     return run_pipeline(
         "x.wav", name, config, _persona(), datetime(2024, 1, 1),
-        transcriber=FakeTranscriber(text, warnings),
+        transcriber=FakeTranscriber(text, warnings, segments),
         orchestrator_cls=orchestrator_cls or _orchestrator_cls(),
         exporter_cls=exporter_cls or _exporter_cls(),
         reporter=reporter,
@@ -199,3 +203,46 @@ def test_summary_text_ties_go_to_the_earlier_field():
     persona.schema = {"a": {"type": "string", "description": "x"},
                       "b": {"type": "string", "description": "x"}}
     assert _extract_summary_text(persona, {"a": " one ", "b": "two"}) == "one"
+
+
+def _segment_run(tmp_path, segments, config_overrides=None):
+    orchestrator_cls, exporter_cls = _orchestrator_cls(), _exporter_cls()
+    result = _run(
+        tmp_path, segments=segments, config_overrides=config_overrides,
+        orchestrator_cls=orchestrator_cls, exporter_cls=exporter_cls)
+    summarize = orchestrator_cls.return_value.summarize
+    export = exporter_cls.return_value.export
+    return result, summarize.call_args.args[0], export.call_args.args[2]["transcript"]
+
+
+def test_pipeline_renders_transcript_from_segments(tmp_path):
+    segs = [Segment(3.0, 4.0, "hello there", "You")]
+    _, summarized, exported = _segment_run(tmp_path, segs, {"diarization": True})
+    assert summarized == "[00:00:03] [You] hello there"
+    assert exported == "[00:00:03] [You] hello there"
+
+
+def test_pipeline_omits_labels_when_diarization_is_off(tmp_path):
+    segs = [Segment(3.0, 4.0, "hello there", "You")]
+    _, summarized, exported = _segment_run(tmp_path, segs)
+    assert summarized == exported == "[00:00:03] hello there"
+
+
+def test_pipeline_can_turn_timestamps_off(tmp_path):
+    segs = [Segment(3.0, 4.0, "hello", "You"), Segment(5.0, 6.0, "again", "Others")]
+    _, summarized, _ = _segment_run(
+        tmp_path, segs, {"diarization": True, "transcript_timestamps": False})
+    assert summarized == "[You] hello\n[Others] again"
+
+
+def test_pipeline_empty_segments_is_no_speech(tmp_path):
+    orchestrator_cls = _orchestrator_cls()
+    result = _run(tmp_path, text="stale", segments=[], orchestrator_cls=orchestrator_cls)
+    assert result.no_speech is True
+    orchestrator_cls.return_value.summarize.assert_not_called()
+
+
+def test_pipeline_non_list_segments_use_the_legacy_text(tmp_path):
+    orchestrator_cls = _orchestrator_cls()
+    _run(tmp_path, text="legacy words", segments="oops", orchestrator_cls=orchestrator_cls)
+    assert orchestrator_cls.return_value.summarize.call_args.args[0] == "legacy words"

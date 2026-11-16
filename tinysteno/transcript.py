@@ -64,6 +64,32 @@ def labelled_text(segments: Iterable[Segment]) -> str | None:
     return "\n".join(f"[{seg.speaker}] {seg.text}" for seg in segs)
 
 
+def _clock(seconds: float) -> str:
+    """Zero-padded hh:mm:ss from whole seconds (floored); hours are never truncated."""
+    hours, rest = divmod(int(seconds), 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def render_transcript(segments: Iterable[Segment], *, labels: bool, timestamps: bool) -> str:
+    """One `[hh:mm:ss] [Speaker] text` line per segment, each prefix only when enabled.
+
+    The speaker prefix is also left out for a segment with no speaker. When no prefix
+    applies at all the result is `plain_text`.
+    """
+    segs = list(segments)
+    show_speakers = labels and any(seg.speaker for seg in segs)
+    if not timestamps and not show_speakers:
+        return plain_text(segs)
+    lines = []
+    for seg in segs:
+        prefix = f"[{_clock(seg.start)}] " if timestamps else ""
+        if labels and seg.speaker:
+            prefix += f"[{seg.speaker}] "
+        lines.append(prefix + seg.text)
+    return "\n".join(lines)
+
+
 def _level_over(audio: dict[str, np.ndarray], label: str, start: float, end: float) -> float:
     """RMS of one channel between two times in seconds (0.0 for an empty range)."""
     samples = audio[label][max(0, int(start * SAMPLE_RATE)):max(0, int(end * SAMPLE_RATE))]
