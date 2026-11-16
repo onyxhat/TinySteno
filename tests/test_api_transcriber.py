@@ -297,3 +297,45 @@ def test_request_has_only_model_file_and_format(mock_openai, tmp_path):
     kwargs = client.audio.transcriptions.create.call_args.kwargs
     assert set(kwargs) == {"model", "file", "response_format"}
     assert kwargs["response_format"] == "verbose_json"
+
+
+def test_malformed_start_falls_back_to_one_segment(mock_openai, tmp_path):
+    """A non-numeric start makes the channel untimed; its text is still kept."""
+    _, client = mock_openai
+    bad = [{"start": "00:01.5", "end": 2.0, "text": "hello"}]
+    result = _run(client, tmp_path, _response("hello there", bad))
+    assert result["text"] == "hello there"
+    assert [(s.start, s.end) for s in result["segments"]] == [(0.0, 2.0)]
+
+
+def test_malformed_start_with_empty_text_joins_segment_texts(mock_openai, tmp_path):
+    """With no top-level text, the usable segment texts are joined."""
+    _, client = mock_openai
+    bad = [
+        {"start": "n/a", "end": 1.0, "text": "one"},
+        {"start": 1.0, "end": 2.0, "text": "two"},
+    ]
+    result = _run(client, tmp_path, _response("", bad))
+    assert result["text"] == "one two"
+
+
+def test_numeric_string_times_and_missing_end_are_parsed(mock_openai, tmp_path):
+    """Numeric strings parse; an unreadable end uses start; end is never below start."""
+    _, client = mock_openai
+    segs = [
+        {"start": "1.5", "end": None, "text": "a"},
+        {"start": 3.0, "end": 2.0, "text": "b"},
+        {"start": 4.0, "end": "later", "text": "c"},
+    ]
+    result = _run(client, tmp_path, _response("a b c", segs))
+    got = [(s.start, s.end) for s in result["segments"]]
+    assert got == [(1.5, 1.5), (3.0, 3.0), (4.0, 4.0)]
+
+
+def test_one_channel_malformed_other_still_interleaved(mock_openai, tmp_path):
+    """Malformed times on one channel do not affect the other channel's segments."""
+    _, client = mock_openai
+    bad = _response("mine", [{"start": "x", "end": 1.0, "text": "mine"}])
+    good = _response("theirs", [_seg(1.0, "theirs"), _seg(9.0, "later")])
+    result = _run(client, tmp_path, bad, good)
+    assert result["diarised_text"] == "[You] mine\n[Others] theirs\n[Others] later"

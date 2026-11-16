@@ -9,6 +9,7 @@ Privacy note: audio files are uploaded to the configured API server.
 
 from __future__ import annotations
 
+import math
 import tempfile
 from pathlib import Path
 from typing import Callable
@@ -91,19 +92,24 @@ class ApiTranscriber:
         finally:
             Path(tmp_path).unlink(missing_ok=True)
 
-        segments = []
+        texts: list[str] = []
+        segments: list[Segment] = []
+        timed = True
         for raw in getattr(response, "segments", None) or []:
-            text = (_field(raw, "text") or "").strip()
-            if text:
-                segments.append(
-                    Segment(
-                        start=float(_field(raw, "start") or 0.0),
-                        end=float(_field(raw, "end") or 0.0),
-                        text=text,
-                    )
-                )
+            text = str(_field(raw, "text") or "").strip()
+            if not text:
+                continue
+            texts.append(text)
+            start = _number(_field(raw, "start"))
+            if start is None:
+                timed = False
+                continue
+            end = _number(_field(raw, "end"))
+            segments.append(Segment(start, start if end is None else max(end, start), text))
+        if not timed:
+            segments = []
         if not segments:
-            text = (getattr(response, "text", None) or "").strip()
+            text = str(getattr(response, "text", None) or "").strip() or " ".join(texts)
             if text:
                 segments = [Segment(0.0, duration, text)]
         language = getattr(response, "language", None) or "en"
@@ -115,3 +121,12 @@ def _field(item: object, name: str):
     if isinstance(item, dict):
         return item.get(name)
     return getattr(item, name, None)
+
+
+def _number(value: object) -> float | None:
+    """A finite float from a number or numeric string, else None."""
+    try:
+        result = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
