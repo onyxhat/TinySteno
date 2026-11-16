@@ -9,6 +9,14 @@ def seg(start, text):
     return Segment(start, start + 1.5, text, "Others")
 
 
+def level_by_text(quiet_texts, loud=0.2, quiet=0.004):
+    """An rms stub: quiet over the given texts, loud elsewhere, keyed by segment start."""
+    def make(segments):
+        quiet_starts = {s.start for s in segments if s.text in quiet_texts}
+        return lambda start, end: quiet if start in quiet_starts else loud
+    return make
+
+
 def test_caption_credits_are_removed():
     kept = drop_hallucinations([seg(0, "Let's begin."),
                                 seg(4, "Subtitles by the Amara.org community"),
@@ -16,10 +24,20 @@ def test_caption_credits_are_removed():
     assert [s.text for s in kept] == ["Let's begin."]
 
 
-def test_each_caption_credit_pattern_matches():
+def test_each_caption_credit_form_is_removed():
     texts = ["Captions provided by X", "Transcribed by someone", "Translated by Y",
-             "Please subscribe", "see amara.org", "Thank you for watching"]
+             "Please subscribe to my channel", "see amara.org", "Thank you for watching.",
+             "Thanks so much for watching! Please subscribe.",
+             "Thank you very much for watching and please subscribe"]
     assert not drop_hallucinations([seg(i * 3, t) for i, t in enumerate(texts)])
+
+
+def test_real_sentences_that_mention_credit_words_are_kept():
+    talk = [seg(0, "Thanks for watching the demo, any questions?"),
+            seg(3, "It was transcribed by hand last year."),
+            seg(6, "Please subscribe the team to the alerts channel before Friday, thanks."),
+            seg(9, "Subtitles by hand are slow because we check every single line twice.")]
+    assert drop_hallucinations(talk) == talk
 
 
 def test_a_stuck_run_collapses_to_one():
@@ -33,11 +51,60 @@ def test_four_identical_in_a_row_are_left_alone():
     assert drop_hallucinations(talk) == talk
 
 
-def test_short_repeats_stranded_in_silence_are_removed():
-    kept = drop_hallucinations([seg(0, "Thank you."), seg(60, "Thank you."),
-                                seg(120, "Thank you."), seg(200, "Okay, let's start."),
-                                seg(202, "First item.")])
-    assert [s.text for s in kept] == ["Okay, let's start.", "First item."]
+THANKS = "Thank you."
+
+
+def stranded_thanks():
+    return [seg(0, THANKS), seg(60, THANKS), seg(120, THANKS), seg(200, "Okay, let's start."),
+            seg(202, "First item."),
+            seg(204, "Second item."), seg(206, "Third item.")]
+
+
+def test_quiet_short_repeats_stranded_in_silence_are_removed():
+    talk = stranded_thanks()
+    kept = drop_hallucinations(talk, level_by_text({THANKS})(talk))
+    assert [s.text for s in kept] == ["Okay, let's start.", "First item.", "Second item.",
+                                  "Third item."]
+
+
+def test_stranded_repeats_are_kept_without_audio_evidence():
+    talk = stranded_thanks()
+    assert drop_hallucinations(talk) == talk
+
+
+def test_stranded_repeats_are_kept_when_the_median_level_is_zero():
+    talk = stranded_thanks()
+    assert drop_hallucinations(talk, lambda start, end: 0.0) == talk
+
+
+def test_loud_stranded_answers_from_a_listener_are_kept():
+    talk = [seg(0, "Yes."), seg(60, "Yes."), seg(120, "Yes.")]
+    assert drop_hallucinations(talk, lambda start, end: 0.2) == talk
+
+
+def test_a_gap_of_exactly_ten_seconds_counts_as_stranded():
+    talk = [Segment(0.0, 1.0, THANKS, "Others"), Segment(11.0, 12.0, THANKS, "Others"),
+            Segment(22.0, 23.0, THANKS, "Others"), Segment(33.0, 34.0, "Real talk.", "Others"),
+            Segment(35.0, 36.0, "More talk.", "Others"),
+            Segment(37.0, 38.0, "Even more.", "Others")]
+    kept = drop_hallucinations(talk, level_by_text({THANKS})(talk))
+    assert [s.text for s in kept] == ["Real talk.", "More talk.", "Even more."]
+
+
+def test_only_the_stranded_quiet_occurrences_are_removed():
+    talk = [seg(0, THANKS), seg(60, THANKS), seg(120, "Right."), seg(122, THANKS),
+            seg(124, "Next point."), seg(126, "Done.")]
+    quiet = {s.start for s in talk if s.text == THANKS}
+    kept = drop_hallucinations(talk, lambda start, end: 0.004 if start in quiet else 0.2)
+    assert [(s.start, s.text) for s in kept] == [(120, "Right."), (122, THANKS),
+                                                 (124, "Next point."), (126, "Done.")]
+
+
+def test_first_and_last_segments_can_be_stranded():
+    talk = [seg(0, THANKS), seg(50, "Real talk here."), seg(52, "More real talk."),
+            seg(54, "And more."), seg(100, THANKS), seg(150, THANKS)]
+    kept = drop_hallucinations(talk, level_by_text({THANKS})(talk))
+    assert [s.text for s in kept] == ["Real talk here.", "More real talk.", "And more."]
 
 
 def test_short_replies_inside_a_conversation_are_kept():
