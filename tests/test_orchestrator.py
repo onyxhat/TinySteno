@@ -261,42 +261,66 @@ def test_chunk_transcript_short_returns_single_chunk():
 
 
 def test_chunk_transcript_exactly_chunk_size_returns_single_chunk():
-    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
     s = _make_orchestrator()
-    transcript = "x" * _CHUNK_SIZE_CHARS
+    transcript = "x" * s._chunk_chars
     assert s._chunk_transcript(transcript) == [transcript]
 
 
 def test_chunk_transcript_long_creates_multiple_chunks():
-    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
     s = _make_orchestrator()
-    transcript = "x" * (_CHUNK_SIZE_CHARS * 2 + 1)
-    chunks = s._chunk_transcript(transcript)
+    chunks = s._chunk_transcript("x" * (s._chunk_chars * 2 + 1))
+    assert len(chunks) > 1 and all(len(c) <= s._chunk_chars for c in chunks)
+
+
+def _sized(chars: int) -> Orchestrator:
+    orch = _make_orchestrator()
+    orch._chunk_chars = chars
+    return orch
+
+
+def test_chunks_break_on_line_boundaries():
+    orch = _sized(120)
+    lines = [f"[00:00:{i:02d}] [You] line number {i} of the meeting" for i in range(12)]
+    chunks = orch._chunk_transcript("\n".join(lines))
+    assert len(chunks) > 1 and all(len(c) <= 120 for c in chunks)
+    assert "\n".join(chunks).split("\n") == lines  # nothing lost, nothing duplicated
+
+
+def test_a_line_longer_than_a_chunk_is_split_not_lost():
+    orch = _sized(120)
+    text = " ".join(["word"] * 200)
+    chunks = orch._chunk_transcript(text)
     assert len(chunks) > 1
+    assert all(0 < len(c) <= 120 for c in chunks)
+    assert " ".join(chunks).split() == text.split()
 
 
-def test_chunk_transcript_all_content_covered():
-    """Every character of the transcript appears in at least one chunk."""
-    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS, _CHUNK_OVERLAP_CHARS
-    s = _make_orchestrator()
-    # Build a transcript with unique characters at known positions
-    transcript = "".join(str(i % 10) for i in range(_CHUNK_SIZE_CHARS * 3))
-    chunks = s._chunk_transcript(transcript)
-    # Reconstruct: non-overlapping portions should cover the whole transcript
-    reconstructed = chunks[0]
-    for chunk in chunks[1:]:
-        reconstructed += chunk[_CHUNK_OVERLAP_CHARS:]
-    assert reconstructed == transcript
+def test_a_long_line_between_short_ones_keeps_order():
+    orch = _sized(60)
+    long_line = " ".join(f"w{i}" for i in range(60))
+    text = f"first line\n{long_line}\nlast line"
+    chunks = orch._chunk_transcript(text)
+    assert all(0 < len(c) <= 60 for c in chunks)
+    assert " ".join(chunks).split() == text.split()
+    assert not any(c.startswith("\n") or c.endswith("\n") for c in chunks)
 
 
-def test_chunk_transcript_chunks_have_overlap():
-    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS, _CHUNK_OVERLAP_CHARS
-    s = _make_orchestrator()
-    transcript = "x" * (_CHUNK_SIZE_CHARS + _CHUNK_OVERLAP_CHARS + 100)
-    chunks = s._chunk_transcript(transcript)
-    assert len(chunks) == 2
-    # The tail of chunk 0 should match the head of chunk 1
-    assert chunks[0][-_CHUNK_OVERLAP_CHARS:] == chunks[1][:_CHUNK_OVERLAP_CHARS]
+def test_a_run_with_no_space_is_split_hard_at_the_limit():
+    orch = _sized(50)
+    chunks = orch._chunk_transcript("y" * 130)
+    assert [len(c) for c in chunks] == [50, 50, 30]
+
+
+def test_default_budget_is_sized_for_an_8192_token_window():
+    assert _make_orchestrator()._chunk_chars == 9830
+
+
+def test_context_window_sets_the_budget_and_tiny_values_are_raised():
+    with patch("tinysteno.orchestrator.OpenAI"):
+        big = Orchestrator("k", "http://x", "m", context_tokens=32768)
+        tiny = Orchestrator("k", "http://x", "m", context_tokens=10)
+    assert big._chunk_chars == 39321
+    assert tiny._chunk_chars == 600
 
 
 # --- _build_merge_message ---
@@ -337,11 +361,10 @@ def test_summarize_single_chunk_makes_one_llm_call():
 
 
 def test_summarize_long_transcript_makes_chunk_plus_merge_calls():
-    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
     persona = _make_persona({"overview": {"type": "string", "description": "x"}})
     s = _make_orchestrator()
     # Two chunks → 2 extract calls + 1 merge call = 3 total
-    long_transcript = "a" * (_CHUNK_SIZE_CHARS + 1000)
+    long_transcript = "a" * (s._chunk_chars + 1000)
     s._client.chat.completions.create.return_value = _llm_response({"overview": "merged"})
     result = s.summarize(long_transcript, persona)
     assert s._client.chat.completions.create.call_count == 3
@@ -349,10 +372,9 @@ def test_summarize_long_transcript_makes_chunk_plus_merge_calls():
 
 
 def test_summarize_merge_call_receives_partial_results():
-    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
     persona = _make_persona({"overview": {"type": "string", "description": "x"}})
     s = _make_orchestrator()
-    long_transcript = "b" * (_CHUNK_SIZE_CHARS + 1000)
+    long_transcript = "b" * (s._chunk_chars + 1000)
 
     chunk_response = _llm_response({"overview": "chunk summary"})
     merge_response = _llm_response({"overview": "final merged"})
@@ -369,13 +391,12 @@ def test_summarize_merge_call_receives_partial_results():
 
 
 def test_summarize_all_chunks_fail_returns_defaults():
-    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
     persona = _make_persona({
         "overview": {"type": "string", "description": "x"},
         "items": {"type": "list", "description": "x"},
     })
     s = _make_orchestrator()
-    long_transcript = "c" * (_CHUNK_SIZE_CHARS + 1000)
+    long_transcript = "c" * (s._chunk_chars + 1000)
     s._client.chat.completions.create.side_effect = Exception("API down")
     result = s.summarize(long_transcript, persona)
     assert result == {"overview": "", "items": []}
@@ -399,10 +420,9 @@ def test_failed_summary_warns_and_returns_defaults():
 
 
 def test_failed_chunks_are_counted_in_a_warning():
-    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
-    transcript = "d" * (2 * _CHUNK_SIZE_CHARS)  # three chunks
-    good = {"summary": "part", "items": ["a"]}
-    orch = _scripted([good, Exception("x"), Exception("x"), good, {"summary": "all", "items": []}])
+    orch = _scripted([good_ := {"summary": "part", "items": ["a"]}, Exception("x"), Exception("x"),
+                      good_, {"summary": "all", "items": []}])
+    transcript = "d" * (2 * orch._chunk_chars + 1000)  # three chunks
     result = orch.summarize(transcript, PERSONA)
     assert result["summary"] == "all"
     assert orch.warnings == [
@@ -411,10 +431,9 @@ def test_failed_chunks_are_counted_in_a_warning():
 
 
 def test_single_surviving_chunk_is_returned_without_a_merge_call():
-    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
-    transcript = "d" * (_CHUNK_SIZE_CHARS + 1000)
     good = {"summary": "part", "items": ["a"]}
     orch = _scripted([good, {}, {}])
+    transcript = "d" * (orch._chunk_chars + 1000)
     assert orch.summarize(transcript, PERSONA) == good
     assert orch._client.chat.completions.create.call_count == 3
     assert orch.warnings == [
@@ -423,20 +442,101 @@ def test_single_surviving_chunk_is_returned_without_a_merge_call():
 
 
 def test_failed_merge_keeps_the_partials():
-    from tinysteno.orchestrator import _CHUNK_SIZE_CHARS
-    transcript = "e" * (_CHUNK_SIZE_CHARS + 1000)
     orch = _scripted([
         {"summary": "one", "items": ["a", "b"]},
         {"summary": "two", "items": ["b", "c"]},
         {},
         {},
     ])
+    transcript = "e" * (orch._chunk_chars + 1000)
     result = orch.summarize(transcript, PERSONA)
     assert result == {"summary": "one\n\ntwo", "items": ["a", "b", "c"]}
     assert orch.warnings == [
         "The section summaries could not be merged by the model; "
         "they were combined without de-duplication."
     ]
+
+
+def _user_messages(orch: Orchestrator) -> list[str]:
+    calls = orch._client.chat.completions.create.call_args_list
+    return [next(m["content"] for m in c[1]["messages"] if m["role"] == "user") for c in calls]
+
+
+def test_each_chunk_is_told_its_position():
+    orch = _sized(100)
+    ok = {"summary": "s", "items": []}
+    orch._client.chat.completions.create.side_effect = [_llm_response(ok)] * 4
+    lines = [f"[00:00:{i:02d}] [You] line {i} of the talk" for i in range(6)]
+    orch.summarize("\n".join(lines), PERSONA)
+    messages = _user_messages(orch)
+    chunk_messages = [m for m in messages if "Transcript:" in m]
+    total = len(chunk_messages)
+    assert total >= 3
+    for n, message in enumerate(chunk_messages, start=1):
+        assert f"This is part {n} of {total} of one transcript." in message
+
+
+def _many_partials(orch: Orchestrator, count: int, responses_after: list) -> None:
+    part = {"summary": "p" * 40, "items": ["i"]}
+    orch._client.chat.completions.create.side_effect = [
+        _llm_response(part) for _ in range(count)
+    ] + [r if isinstance(r, Exception) else _llm_response(r) for r in responses_after]
+
+
+def test_merge_is_grouped_so_each_group_fits_the_budget():
+    orch = _sized(300)
+    chunks = 6
+    group_merge = {"summary": "g", "items": ["i"]}
+    _many_partials(orch, chunks, [group_merge] * 10)
+    result = orch.summarize("x" * 300 * chunks + "y" * 40, PERSONA)
+    merge_messages = [m for m in _user_messages(orch) if "Partial summaries:" in m]
+    assert len(merge_messages) >= 2
+    for message in merge_messages:
+        data = message.split("Partial summaries:\n", 1)[1]
+        assert len(data) <= 300
+    assert result["summary"] == "g" or orch.warnings
+
+
+def test_reduce_gives_up_after_two_rounds_and_combines_locally():
+    orch = _sized(120)  # a group holds a single partial's worth: nothing can be merged
+    orch._client.chat.completions.create.side_effect = [
+        _llm_response({"summary": "s" * 100, "items": [f"i{n}"]}) for n in range(3)
+    ]
+    result = orch.summarize("z" * 120 * 2 + "w" * 20, PERSONA)
+    assert orch._client.chat.completions.create.call_count == 3  # no merge call
+    assert result["items"] == ["i0", "i1", "i2"]
+    assert orch.warnings == [
+        "The summary was too long to merge in one pass; "
+        "sections were combined without de-duplication."
+    ]
+
+
+def test_reduce_stops_after_two_rounds_with_several_results_left():
+    orch = _sized(300)
+    part = {"summary": "p" * 60, "items": ["a"]}
+    merged = {"summary": "m" * 60, "items": ["b"]}
+    orch._client.chat.completions.create.side_effect = (
+        [_llm_response(part)] * 9 + [_llm_response(merged)] * 20
+    )
+    result = orch.summarize("q" * 300 * 8 + "r" * 40, PERSONA)
+    calls = orch._client.chat.completions.create.call_count
+    assert calls == 9 + 4 + 2  # nine chunks, four pair merges, then two more; three remain
+    assert orch.warnings == [
+        "The summary was too long to merge in one pass; "
+        "sections were combined without de-duplication."
+    ]
+    assert result["items"] == ["b", "a"]  # the odd chunk passed through both rounds unmerged
+
+
+def test_failed_group_merge_warns_once():
+    orch = _sized(300)
+    part = {"summary": "p" * 40, "items": ["a"]}
+    orch._client.chat.completions.create.side_effect = (
+        [_llm_response(part)] * 6 + [_llm_response({})] * 20
+    )
+    orch.summarize("x" * 300 * 5 + "y" * 40, PERSONA)
+    failed = [w for w in orch.warnings if w.startswith("The section summaries could not")]
+    assert len(failed) == 1
 
 
 def test_string_for_a_list_field_becomes_one_item():

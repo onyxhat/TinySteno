@@ -47,6 +47,7 @@ def load_config() -> dict:
             "api_key": "ollama",
             "base_url": "http://localhost:11434/v1",
             "model": "llama3.2:3b",
+            "llm_context_tokens": 8192,
             "whisper_model": "small",
             "transcription_backend": "local",
             "whisper_device": "auto",
@@ -104,6 +105,14 @@ def _validate_config(config: dict) -> None:
                 f"Config field '{field}' must be {expected_type.__name__}, "
                 f"got {type(config[field]).__name__}"
             )
+    if "llm_context_tokens" in config and (
+        isinstance(config["llm_context_tokens"], bool)
+        or not isinstance(config["llm_context_tokens"], int)
+    ):
+        raise ValueError(
+            "Config field 'llm_context_tokens' must be int, "
+            f"got {type(config['llm_context_tokens']).__name__}"
+        )
     if "channels" in config and config["channels"] not in (1, 2):
         raise ValueError("Config field 'channels' must be 1 or 2")
     if "session_timeout_minutes" in config:

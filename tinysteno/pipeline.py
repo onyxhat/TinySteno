@@ -181,10 +181,14 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
     orchestrator = None
     if config.get("api_key"):
         with _stage(reporter, Stage.SUMMARIZE):
+            extra = {}
+            if "llm_context_tokens" in config:
+                extra["context_tokens"] = config["llm_context_tokens"]
             orchestrator = orchestrator_cls(
                 api_key=config["api_key"],
                 base_url=config["base_url"],
                 model=config["model"],
+                **extra,
             )
             data = orchestrator.summarize(
                 transcript,

@@ -281,3 +281,13 @@ def test_pipeline_context_timestamps_follow_the_config_key(tmp_path):
 def test_pipeline_context_for_legacy_text_has_no_timestamps(tmp_path):
     ctx = _context_for(tmp_path, None)
     assert ctx.has_timestamps is False and ctx.has_speaker_labels is False
+
+
+def test_context_window_is_passed_to_the_orchestrator_only_when_configured(tmp_path):
+    orchestrator_cls = _orchestrator_cls()
+    _run(tmp_path, orchestrator_cls=orchestrator_cls)
+    assert "context_tokens" not in orchestrator_cls.call_args.kwargs
+    orchestrator_cls = _orchestrator_cls()
+    _run(tmp_path, orchestrator_cls=orchestrator_cls,
+         config_overrides={"llm_context_tokens": 4096})
+    assert orchestrator_cls.call_args.kwargs["context_tokens"] == 4096

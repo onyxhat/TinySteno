@@ -691,3 +691,13 @@ def test_tui_reads_notes_before_the_app_starts(tmp_path, capsys):
     assert exit_info.value.code == 1
     assert "cannot read notes file" in capsys.readouterr().err
     run_tui.assert_not_called()
+
+
+@pytest.mark.parametrize("bad", ["8192", 8192.5, True, None])
+def test_validate_config_rejects_bad_llm_context_tokens(bad):
+    with pytest.raises(ValueError, match="llm_context_tokens"):
+        _validate_config({"llm_context_tokens": bad})
+
+
+def test_validate_config_accepts_llm_context_tokens():
+    _validate_config({"llm_context_tokens": 4096})

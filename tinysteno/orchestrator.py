@@ -15,8 +15,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CHUNK_SIZE_CHARS = 12000
-_CHUNK_OVERLAP_CHARS = 500
+_CHARS_PER_TOKEN = 2
+_CHUNK_CONTEXT_SHARE = 0.6
+_MIN_CONTEXT_TOKENS = 500
+_REDUCE_ROUNDS = 2
 _TITLE_MAX_WORDS = 6
 _TITLE_MAX_OVERVIEW_CHARS = 500
 _TAG_MAX_OVERVIEW_CHARS = 500
@@ -30,6 +32,10 @@ _WARN_CHUNKS_FAILED = (
 _WARN_MERGE_FAILED = (
     "The section summaries could not be merged by the model; "
     "they were combined without de-duplication."
+)
+_WARN_TOO_LONG_TO_MERGE = (
+    "The summary was too long to merge in one pass; "
+    "sections were combined without de-duplication."
 )
 
 _DAY_NAMES = (
@@ -83,8 +89,11 @@ def _english_date(when: datetime) -> str:
 class Orchestrator:
     """Orchestrate LLM calls for transcript extraction and title generation."""
 
-    def __init__(self, api_key: str, base_url: str, model: str):
+    def __init__(self, api_key: str, base_url: str, model: str, context_tokens: int = 8192):
         self.model = model
+        self._chunk_chars = int(
+            max(int(context_tokens), _MIN_CONTEXT_TOKENS) * _CHARS_PER_TOKEN * _CHUNK_CONTEXT_SHARE
+        )
         self.warnings: list[str] = []
         self._client = OpenAI(
             api_key=api_key,
@@ -97,9 +106,9 @@ class Orchestrator:
     ) -> dict:
         """Generate summary from transcript using persona's prompt and schema.
 
-        Splits long transcripts into overlapping chunks, summarizes each chunk,
-        then asks the model to merge the partial results (falling back to a local merge
-        that removes only exact duplicates).
+        Splits long transcripts into line-aligned chunks sized to the model's context window,
+        summarizes each chunk, then merges the partial results in bounded rounds (falling
+        back to a local merge that removes only exact duplicates).
 
         Returns a dict with all schema field names as keys.
         Missing/invalid fields from the LLM default to "" (string) or [] (list).
@@ -143,13 +152,49 @@ class Orchestrator:
         if len(partials) == 1:
             return partials[0]
 
-        logger.debug("Merging %d partial summaries.", len(partials))
-        merged = self._extract(self._build_merge_message(partials, persona), persona)
-        if self._is_empty(merged):
-            logger.warning("Merge call returned nothing; combining partial summaries locally.")
+        return self._reduce(partials, persona)
+
+    def _group_partials(self, partials: list[dict]) -> list[list[dict]]:
+        """Pack partials, in order, into groups whose merge prompt data fits one chunk."""
+        groups: list[list[dict]] = []
+        for partial in partials:
+            if groups and len(json.dumps(groups[-1] + [partial], indent=2)) <= self._chunk_chars:
+                groups[-1].append(partial)
+            else:
+                groups.append([partial])
+        return groups
+
+    def _reduce(self, partials: list[dict], persona: "Persona") -> dict:
+        """Merge partial results in at most _REDUCE_ROUNDS bounded rounds."""
+        merge_failed = False
+        for _ in range(_REDUCE_ROUNDS):
+            groups = self._group_partials(partials)
+            if len(groups) == len(partials):
+                break  # nothing fits together; another round cannot help
+            results = []
+            for group in groups:
+                if len(group) == 1:
+                    results.append(group[0])
+                    continue
+                logger.debug("Merging %d partial summaries.", len(group))
+                merged = self._extract(self._build_merge_message(group, persona), persona)
+                if self._is_empty(merged):
+                    logger.warning(
+                        "Merge call returned nothing; combining partial summaries locally.")
+                    merge_failed = True
+                    merged = self._merge_locally(group, persona)
+                results.append(merged)
+            partials = results
+            if len(partials) == 1:
+                break
+        if merge_failed:
             self.warnings.append(_WARN_MERGE_FAILED)
-            return self._merge_locally(partials, persona)
-        return merged
+        if len(partials) == 1:
+            return partials[0]
+        logger.warning("%d partial summaries remain after merging; combining locally.",
+                       len(partials))
+        self.warnings.append(_WARN_TOO_LONG_TO_MERGE)
+        return self._merge_locally(partials, persona)
 
     @staticmethod
     def _is_empty(result: dict) -> bool:
@@ -228,23 +273,42 @@ class Orchestrator:
             return []
 
     def _chunk_transcript(self, transcript: str) -> list[str]:
-        """Split transcript into overlapping chunks of _CHUNK_SIZE_CHARS.
+        """Split a transcript into chunks of at most _chunk_chars, on line boundaries.
 
-        Overlap preserves context at chunk boundaries. Returns a single-element
-        list if the transcript fits within one chunk.
+        Whole lines are packed together with no overlap. A line longer than a chunk is
+        split at the last space within the limit (hard at the limit if it has none).
+        A transcript that fits returns one chunk.
         """
-        if len(transcript) <= _CHUNK_SIZE_CHARS:
+        if len(transcript) <= self._chunk_chars:
             return [transcript]
 
-        chunks = []
-        start = 0
-        while start < len(transcript):
-            end = start + _CHUNK_SIZE_CHARS
-            chunks.append(transcript[start:end])
-            if end >= len(transcript):
-                break
-            start = end - _CHUNK_OVERLAP_CHARS
+        chunks: list[str] = []
+        current = ""
+        for line in self._lines_within_limit(transcript):
+            if current and len(current) + 1 + len(line) > self._chunk_chars:
+                chunks.append(current)
+                current = line
+            else:
+                current = f"{current}\n{line}" if current else line
+        if current:
+            chunks.append(current)
         return chunks
+
+    def _lines_within_limit(self, transcript: str) -> list[str]:
+        """Non-blank lines, with any line over _chunk_chars split into shorter pieces."""
+        limit = self._chunk_chars
+        lines: list[str] = []
+        for line in transcript.split("\n"):
+            while len(line) > limit:
+                cut = line.rfind(" ", 0, limit + 1)
+                if cut <= 0:
+                    cut = limit
+                piece, line = line[:cut].rstrip(), line[cut:].lstrip()
+                if piece:
+                    lines.append(piece)
+            if line.strip():
+                lines.append(line)
+        return lines
 
     @staticmethod
     def _context_block(context: PromptContext, part: tuple[int, int] | None) -> str:
