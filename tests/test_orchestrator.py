@@ -628,3 +628,24 @@ def test_summarize_passes_the_context_into_the_prompt():
     orch.summarize("t", PERSONA, PromptContext(notes="jotted"))
     sent = orch._client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
     assert "<notes>\njotted\n</notes>" in sent
+
+
+_NUMBERED = (
+    "Speaker 2, Speaker 3 and so on are further voices separated automatically. "
+    "The separation is approximate: do not assign an action to a numbered speaker "
+    "unless the transcript names them."
+)
+
+
+def test_numbered_speakers_line_follows_the_speaker_labels_line():
+    ctx = PromptContext(has_speaker_labels=True, has_numbered_speakers=True, has_timestamps=True)
+    msg = _orch()._build_user_message("[You] hi", PERSONA, ctx)
+    assert _NUMBERED in msg
+    assert msg.index("Speaker labels:") < msg.index(_NUMBERED) < msg.index("Each line starts")
+
+
+def test_numbered_speakers_line_is_absent_by_default_and_without_labels():
+    assert _NUMBERED not in _orch()._build_user_message(
+        "t", PERSONA, PromptContext(has_speaker_labels=True))
+    assert _NUMBERED not in _orch()._build_user_message(
+        "t", PERSONA, PromptContext(has_numbered_speakers=True))

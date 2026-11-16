@@ -59,6 +59,11 @@ _CTX_DATE = (
     "The meeting took place on {date}. "
     'Resolve relative dates such as "tomorrow" or "next Friday" against that date.'
 )
+_CTX_NUMBERED = (
+    "Speaker 2, Speaker 3 and so on are further voices separated automatically. "
+    "The separation is approximate: do not assign an action to a numbered speaker "
+    "unless the transcript names them."
+)
 _CTX_FIDELITY = (
     "Keep what was proposed, what is not yet agreed and what was decided distinct; "
     "do not present a proposal as a decision."
@@ -76,6 +81,7 @@ class PromptContext:
 
     meeting_date: datetime | None = None
     has_speaker_labels: bool = False
+    has_numbered_speakers: bool = False
     has_timestamps: bool = False
     notes: str = ""
 
@@ -314,6 +320,8 @@ class Orchestrator:
     def _context_block(context: PromptContext, part: tuple[int, int] | None) -> str:
         """The `Context:` lines that apply, in a fixed order."""
         lines = [_CTX_LABELS if context.has_speaker_labels else _CTX_NO_LABELS]
+        if context.has_speaker_labels and context.has_numbered_speakers:
+            lines.append(_CTX_NUMBERED)
         if context.has_timestamps:
             lines.append(_CTX_TIMESTAMPS)
         if context.meeting_date is not None:

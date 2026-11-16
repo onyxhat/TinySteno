@@ -1,10 +1,14 @@
 """Tests for transcript segments and the shared assembly path."""
 import json
 import os
+import subprocess
+import sys
 
 import numpy as np
 import pytest
 
+from tinysteno.sherpa_diarizer import DiarizerUnavailable
+from tinysteno.speaker_split import Turn
 from tinysteno.transcript import (
     OTHERS,
     YOU,
@@ -317,3 +321,196 @@ def test_unserialisable_value_logs_a_warning_and_leaves_no_temp_file(tmp_path, c
     save_transcript(str(wav), {**RESULT, "warnings": [object()]}, FP)
     assert "Could not save the transcript" in caplog.text
     assert [p.name for p in tmp_path.iterdir()] == ["Meeting-1.wav"]
+
+
+# --- speaker split -------------------------------------------------------------------------
+
+LONG = np.full(16000 * 120, 0.1, dtype=np.float32)
+SILENT_LONG = np.zeros(16000 * 120, dtype=np.float32)
+LONG_BOTH = {YOU: LONG, OTHERS: LONG}
+SPLIT_CHANNELS = {YOU: [S(5, "mine")], OTHERS: [S(1, "first voice"), S(40, "second voice")]}
+ON = TranscriptOptions(speaker_split=True)
+TWO_VOICES = [Turn(0, 30, 0), Turn(30, 90, 1)]
+UNAVAILABLE = 'Speaker separation needs the optional extra: pip install "tinysteno[diarize]"'
+
+
+def _must_not_be_called(_label, _audio):
+    raise AssertionError("the diarizer must not run")
+
+
+def _speakers(result):
+    return [seg.speaker for seg in result["segments"]]
+
+
+def test_split_relabels_the_remote_channel_only():
+    calls = []
+
+    def turns_for(label, audio):
+        calls.append((label, len(audio)))
+        return TWO_VOICES
+
+    result = assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en", options=ON,
+                      turns_for=turns_for)
+    assert _speakers(result) == ["Speaker 2", "You", "Others"]  # 2nd voice spoke most
+    assert calls == [(OTHERS, len(LONG))]
+    assert result["warnings"] == []
+
+
+def test_off_by_default_never_calls_the_diarizer():
+    result = assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en",
+                      turns_for=_must_not_be_called)
+    assert set(_speakers(result)) == {YOU, OTHERS}
+
+
+def test_split_is_skipped_when_labels_are_not_shown():
+    result = assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=False, language="en", options=ON,
+                      turns_for=_must_not_be_called)
+    assert set(_speakers(result)) == {YOU, OTHERS}
+
+
+def test_in_person_meeting_splits_the_microphone():
+    channels = {YOU: [S(1, "host"), S(70, "guest")], OTHERS: []}
+    seen = []
+
+    def turns_for(label, _audio):
+        seen.append(label)
+        return [Turn(0, 60, 0), Turn(60, 90, 1)]
+
+    result = assemble(channels, {YOU: LONG, OTHERS: SILENT_LONG}, diarize=True, language="en",
+                      options=ON, turns_for=turns_for)
+    assert _speakers(result) == ["You", "Speaker 2"] and seen == [YOU]
+
+
+def test_mono_file_is_labelled_you_and_split():
+    result = assemble({"": [S(1, "host"), S(70, "guest")]}, {"": LONG}, diarize=True,
+                      language="en", options=ON,
+                      turns_for=lambda _label, _audio: [Turn(0, 60, 0), Turn(60, 90, 1)])
+    assert _speakers(result) == ["You", "Speaker 2"]
+
+
+def test_mono_file_keeps_empty_speakers_when_off_or_failed():
+    off = assemble({"": [S(1, "a")]}, {"": LONG}, diarize=True, language="en")
+    assert _speakers(off) == [""]
+
+    def boom(_label, _audio):
+        raise RuntimeError("x")
+
+    failed = assemble({"": [S(1, "a")]}, {"": LONG}, diarize=True, language="en",
+                      options=ON, turns_for=boom)
+    assert _speakers(failed) == [""]
+
+
+def test_microphone_of_a_call_with_remote_speech_is_never_split():
+    channels = {YOU: [S(1, "a"), S(50, "b")], OTHERS: [S(2, "c")]}
+    labels = []
+
+    def turns_for(label, _audio):
+        labels.append(label)
+        return [Turn(0, 60, 0), Turn(60, 90, 1)]
+
+    result = assemble(channels, LONG_BOTH, diarize=True, language="en", options=ON,
+                      turns_for=turns_for)
+    assert labels == [OTHERS]
+    assert [s.speaker for s in result["segments"] if s.text in ("a", "b")] == [YOU, YOU]
+
+
+def test_missing_extra_keeps_labels_and_says_what_to_install():
+    def unavailable(_label, _audio):
+        raise DiarizerUnavailable(UNAVAILABLE)
+
+    result = assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en", options=ON,
+                      turns_for=unavailable)
+    assert set(_speakers(result)) == {YOU, OTHERS}
+    assert result["warnings"] == [UNAVAILABLE]
+
+
+def test_default_diarizer_reports_the_missing_extra(monkeypatch):
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", None)  # makes `import sherpa_onnx` fail
+    result = assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en", options=ON)
+    assert set(_speakers(result)) == {YOU, OTHERS}
+    assert len(result["warnings"]) == 1 and "tinysteno[diarize]" in result["warnings"][0]
+
+
+def test_default_turns_come_from_the_diarizer_with_progress(monkeypatch):
+    seen = []
+
+    def fake_diarize(audio, *, on_progress=None, **_kwargs):
+        assert len(audio) == len(LONG)
+        on_progress(0.5)
+        return TWO_VOICES
+
+    monkeypatch.setattr("tinysteno.sherpa_diarizer.diarize", fake_diarize)
+    result = assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en", options=ON,
+                      on_progress=seen.append)
+    assert _speakers(result) == ["Speaker 2", "You", "Others"] and seen == [0.5]
+
+
+def test_any_other_failure_keeps_labels_with_a_generic_warning(caplog):
+    def boom(_label, _audio):
+        raise ValueError("model exploded")
+
+    with caplog.at_level("WARNING"):
+        result = assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en", options=ON,
+                          turns_for=boom)
+    assert set(_speakers(result)) == {YOU, OTHERS}
+    assert result["warnings"] == ["Speaker separation failed; channel labels were used."]
+    assert any(r.exc_info and "model exploded" in str(r.exc_info[1]) for r in caplog.records)
+
+
+def test_policy_collapse_is_silent():
+    result = assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en", options=ON,
+                      turns_for=lambda _label, _audio: [Turn(0, 90, 0)])
+    assert set(_speakers(result)) == {YOU, OTHERS} and result["warnings"] == []
+
+
+def test_short_audio_is_not_split():
+    short = np.full(16000 * 20, 0.1, dtype=np.float32)
+    result = assemble(SPLIT_CHANNELS, {YOU: short, OTHERS: short}, diarize=True, language="en",
+                      options=ON, turns_for=_must_not_be_called)
+    assert set(_speakers(result)) == {YOU, OTHERS} and result["warnings"] == []
+
+
+def test_a_cap_of_one_speaker_skips_the_split():
+    result = assemble(SPLIT_CHANNELS, LONG_BOTH, diarize=True, language="en",
+                      options=TranscriptOptions(speaker_split=True, max_speakers=1),
+                      turns_for=_must_not_be_called)
+    assert set(_speakers(result)) == {YOU, OTHERS}
+
+
+def test_max_speakers_caps_the_split():
+    turns = [Turn(0, 30, 0), Turn(30, 60, 1), Turn(60, 85, 2), Turn(85, 120, 0)]
+    channels = {OTHERS: [S(1, "a"), S(35, "b"), S(65, "c")]}
+    result = assemble(channels, {OTHERS: LONG}, diarize=True, language="en",
+                      options=TranscriptOptions(speaker_split=True, max_speakers=2),
+                      turns_for=lambda _label, _audio: turns)
+    assert len(set(_speakers(result))) <= 2
+
+
+def test_split_runs_after_the_filters():
+    channels = {OTHERS: [S(1, "real words"), S(40, "Thanks for watching!")]}
+    seen = []
+
+    def turns_for(label, _audio):
+        seen.append(label)
+        return TWO_VOICES
+
+    result = assemble(channels, {OTHERS: LONG}, diarize=True, language="en", options=ON,
+                      turns_for=turns_for)
+    assert [s.text for s in result["segments"]] == ["real words"] and seen == [OTHERS]
+
+
+def test_saved_numbered_speakers_load_unchanged(tmp_path):
+    wav = _wav(tmp_path)
+    result = {**RESULT, "segments": [Segment(0.0, 1.0, "hi", "Speaker 2")]}
+    save_transcript(str(wav), result, FP)
+    assert load_transcript(str(wav), FP)["segments"][0].speaker == "Speaker 2"
+
+
+def test_importing_the_pipeline_does_not_import_sherpa():
+    check = (
+        "import sys, tinysteno.main, tinysteno.transcript, tinysteno.transcriber, "
+        "tinysteno.api_transcriber; "
+        "assert 'sherpa_onnx' not in sys.modules and "
+        "'tinysteno.sherpa_diarizer' not in sys.modules"
+    )
+    subprocess.run([sys.executable, "-c", check], check=True)

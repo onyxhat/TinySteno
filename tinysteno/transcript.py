@@ -10,6 +10,8 @@ from typing import Callable, Iterable
 
 import numpy as np
 
+from tinysteno.speaker_split import MIN_AUDIO_SECONDS, Turn, apply_policy, label_segments
+
 logger = logging.getLogger(__name__)
 
 YOU = "You"
@@ -19,6 +21,9 @@ SAMPLE_RATE = 16000
 SIDECAR_VERSION = 2
 
 _CHANNEL_NAMES = {YOU: "Microphone", OTHERS: "System"}
+_WARN_SPLIT_FAILED = "Speaker separation failed; channel labels were used."
+# Share of a transcriber's progress spent decoding when a speaker split follows.
+SPLIT_DECODE_SHARE = 0.7
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,22 @@ class TranscriptOptions:
 
     drop_hallucinations: bool = True
     suppress_bleed: bool = True
+    speaker_split: bool = False
+    max_speakers: int | None = None
+
+
+def split_enabled(options: TranscriptOptions | None, diarize: bool) -> bool:
+    """True when a speaker split will run: it is on, and the labels it affects are shown."""
+    return bool(options and options.speaker_split and diarize)
+
+
+def scale_progress(
+    on_progress: Callable[[float], None] | None, low: float, high: float
+) -> Callable[[float], None] | None:
+    """Map a 0-1 fraction onto the `low`-`high` part of the job's progress."""
+    if on_progress is None:
+        return None
+    return lambda value: on_progress(low + (high - low) * value)
 
 
 def is_silent(samples: np.ndarray) -> bool:
@@ -107,15 +128,69 @@ def _level_over(audio: dict[str, np.ndarray], label: str, start: float, end: flo
     return float(np.sqrt(np.mean(np.square(samples.astype(np.float64)))))
 
 
-def assemble(
+def _default_turns(on_progress: Callable[[float], None] | None):
+    """A `turns_for` that runs the optional sherpa-onnx diarizer (imported only when used)."""
+    def turns_for(_label: str, samples: np.ndarray) -> list[Turn]:
+        from tinysteno.sherpa_diarizer import diarize as run_diarizer
+        return run_diarizer(samples, on_progress=on_progress)
+    return turns_for
+
+
+def _split_target(stamped: dict[str, list[Segment]]) -> str | None:
+    """The channel to split: the remote side, else the microphone, else a mono file."""
+    for label in (OTHERS, YOU, ""):
+        if stamped.get(label):
+            return label
+    return None
+
+
+def _split_speakers(
+    stamped: dict[str, list[Segment]],
+    audio: dict[str, np.ndarray],
+    options: TranscriptOptions,
+    turns_for: Callable[[str, np.ndarray], list[Turn]],
+    warnings: list[str],
+) -> None:
+    """Relabel one channel's segments by speaker, in place; keep them as they are on failure."""
+    key = _split_target(stamped)
+    if key is None or key not in audio or options.max_speakers == 1:
+        return
+    if len(audio[key]) / SAMPLE_RATE < MIN_AUDIO_SECONDS:
+        return
+    base = key or YOU
+    from tinysteno.sherpa_diarizer import DiarizerUnavailable
+    try:
+        turns = apply_policy(turns_for(base, audio[key]), max_speakers=options.max_speakers)
+    except DiarizerUnavailable as err:
+        warnings.append(str(err))
+        return
+    except Exception:
+        logger.warning("Speaker separation failed", exc_info=True)
+        warnings.append(_WARN_SPLIT_FAILED)
+        return
+    if turns is None:
+        return
+    segments = [seg if seg.speaker else replace(seg, speaker=base) for seg in stamped[key]]
+    stamped[key] = label_segments(segments, turns, base)
+
+
+def assemble(  # pylint: disable=too-many-arguments
     channels: dict[str, list[Segment]],
     audio: dict[str, np.ndarray],
     *,
     diarize: bool,
     language: str,
     options: TranscriptOptions | None = None,
+    turns_for: Callable[[str, np.ndarray], list[Turn]] | None = None,
+    on_progress: Callable[[float], None] | None = None,
 ) -> dict:
-    """Build the transcriber result from per-channel segments and 16 kHz mono audio."""
+    """Build the transcriber result from per-channel segments and 16 kHz mono audio.
+
+    With `options.speaker_split` and `diarize` on, the remote channel (else the microphone) is
+    split into speakers after the filters; any failure keeps the plain channel labels.
+    `turns_for(label, audio)` supplies the raw turns; `on_progress` receives the diarizer's
+    0-1 fraction.
+    """
     from tinysteno.hygiene import drop_hallucinations, suppress_bleed
 
     options = options or TranscriptOptions()
@@ -147,6 +222,10 @@ def assemble(
     if options.suppress_bleed and YOU in stamped and OTHERS in stamped:
         stamped[YOU], stamped[OTHERS] = suppress_bleed(
             stamped[YOU], stamped[OTHERS], channel_level(YOU), channel_level(OTHERS))
+
+    if split_enabled(options, diarize):
+        _split_speakers(stamped, audio, options, turns_for or _default_turns(on_progress),
+                        warnings)
 
     segments = interleave(seg for segs in stamped.values() for seg in segs)
     longest = max((len(arr) for arr in audio.values()), default=0)

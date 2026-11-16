@@ -20,7 +20,8 @@ from openai import OpenAI
 
 from tinysteno.transcriber import split_channels
 from tinysteno.transcript import (
-    OTHERS, SAMPLE_RATE, YOU, Segment, TranscriptOptions, assemble, is_silent)
+    OTHERS, SAMPLE_RATE, SPLIT_DECODE_SHARE, YOU, Segment, TranscriptOptions, assemble,
+    is_silent, scale_progress, split_enabled)
 
 
 class ApiTranscriber:
@@ -43,7 +44,7 @@ class ApiTranscriber:
             kwargs["base_url"] = base_url
         self._client = OpenAI(**kwargs)
 
-    def transcribe(
+    def transcribe(  # pylint: disable=too-many-locals
         self,
         audio_path: str,
         diarize: bool = False,
@@ -62,23 +63,29 @@ class ApiTranscriber:
         audio = split_channels(data, sr)
         to_decode = [label for label, samples in audio.items() if not is_silent(samples)]
 
+        splitting = split_enabled(self.options, diarize)
+        decode_share = SPLIT_DECODE_SHARE if splitting else 1.0
         if on_progress:
             on_progress(0.0)
         channels: dict[str, list[Segment]] = {label: [] for label in audio}
         languages: dict[str, str] = {}
         for index, label in enumerate(to_decode):
             if index and on_progress:
-                on_progress(index / len(to_decode))
+                on_progress(decode_share * index / len(to_decode))
             channels[label], languages[label] = self._decode(audio[label])
         if on_progress:
-            on_progress(1.0)
+            on_progress(decode_share)
 
         language = next(
             (languages[label] for label in (YOU, "", OTHERS) if channels.get(label)),
             "en",
         )
-        return assemble(channels, audio, diarize=diarize, language=language,
-                        options=self.options)
+        result = assemble(
+            channels, audio, diarize=diarize, language=language, options=self.options,
+            on_progress=scale_progress(on_progress, SPLIT_DECODE_SHARE, 1.0))
+        if splitting and on_progress:
+            on_progress(1.0)
+        return result
 
     def _decode(  # pylint: disable=too-many-locals
             self, audio: np.ndarray) -> tuple[list[Segment], str]:

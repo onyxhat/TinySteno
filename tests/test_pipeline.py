@@ -392,7 +392,8 @@ def test_fingerprint_keys_follow_the_backend(tmp_path):
     local = transcript_fingerprint(wav, config)
     assert local == {
         "size": 4, "backend": "local", "model": "small", "prompt": "", "vad": True,
-        "hallucination_filter": True, "bleed_filter": True}
+        "hallucination_filter": True, "bleed_filter": True, "speaker_split": False,
+        "max_speakers": None}
     assert transcript_fingerprint(wav, {**config, "transcription_backend": "api"})["model"] == "w-1"
 
 
@@ -400,3 +401,29 @@ def test_fake_recording_path_writes_nothing(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _run(tmp_path / "vault", transcriber=CountingTranscriber())
     assert not [p for p in tmp_path.iterdir() if p.name != "vault"]
+
+
+def _numbered_context(tmp_path, speaker, config_overrides):
+    segs = [Segment(3.0, 4.0, "hello there", speaker)]
+    orchestrator_cls = _orchestrator_cls()
+    _run(tmp_path, segments=segs, config_overrides=config_overrides,
+         orchestrator_cls=orchestrator_cls)
+    return orchestrator_cls.return_value.summarize.call_args.args[2]
+
+
+def test_pipeline_flags_numbered_speakers_for_the_prompt(tmp_path):
+    ctx = _numbered_context(tmp_path, "Speaker 2", {"diarization": True})
+    assert ctx.has_speaker_labels and ctx.has_numbered_speakers
+
+
+def test_pipeline_does_not_flag_numbered_speakers_without_them_or_labels(tmp_path):
+    assert not _numbered_context(tmp_path, "Others", {"diarization": True}).has_numbered_speakers
+    assert not _numbered_context(tmp_path, "Speaker 2", {}).has_numbered_speakers
+
+
+def test_fingerprint_changes_with_the_split_settings(tmp_path):
+    wav = _real_wav(tmp_path)
+    base = transcript_fingerprint(wav, {})
+    assert base["speaker_split"] is False and base["max_speakers"] is None
+    assert transcript_fingerprint(wav, {"speaker_split": True}) != base
+    assert transcript_fingerprint(wav, {"max_speakers": 2}) != base

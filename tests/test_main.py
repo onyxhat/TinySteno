@@ -14,7 +14,7 @@ import yaml
 
 from tinysteno.main import (
     cmd_process, cmd_record, cmd_setup, create_transcriber, load_config, main,
-    _process_audio, _validate_config,
+    _apply_cli_overrides, _process_audio, _validate_config,
 )
 from tinysteno.main import cmd_tui as run_cmd_tui
 from tinysteno.personas import Persona
@@ -724,3 +724,62 @@ def test_validate_config_rejects_bad_llm_context_tokens(bad):
 
 def test_validate_config_accepts_llm_context_tokens():
     _validate_config({"llm_context_tokens": 4096})
+
+
+@pytest.mark.parametrize("command", ["record", "tui", "process"])
+@pytest.mark.parametrize("value", ["0", "-2", "two", "1.5"])
+def test_speakers_flag_rejects_zero_and_non_integers(command, value, capsys):
+    argv = ["tinysteno", command, f"--speakers={value}"]
+    if command == "process":
+        argv.insert(2, "x.wav")
+    with patch.object(sys, "argv", argv), \
+         patch("tinysteno.main.load_config", return_value={}), \
+         patch("tinysteno.main.cmd_record") as record, \
+         patch("tinysteno.main.cmd_tui") as tui, \
+         patch("tinysteno.main.cmd_process") as process:
+        with pytest.raises(SystemExit):
+            main()
+    assert "must be a whole number of at least 1" in capsys.readouterr().err
+    record.assert_not_called()
+    tui.assert_not_called()
+    process.assert_not_called()
+
+
+def test_speakers_flag_sets_max_speakers_for_the_run_only():
+    config = {}
+    _apply_cli_overrides(config, argparse.Namespace(speakers=3))
+    assert config == {"max_speakers": 3}
+    untouched = {}
+    _apply_cli_overrides(untouched, argparse.Namespace(speakers=None))
+    assert not untouched
+
+
+def test_speaker_split_is_off_in_the_default_config(tmp_path):
+    with patch.object(Path, "home", return_value=tmp_path):
+        with patch("tinysteno.main.seed_builtin_personas"):
+            config = load_config()
+    assert config["speaker_split"] is False and "max_speakers" not in config
+
+
+@pytest.mark.parametrize("bad", [0, -1, 1.5, "2", True, None])
+def test_validate_config_rejects_bad_max_speakers(bad):
+    with pytest.raises(ValueError, match="max_speakers"):
+        _validate_config({"max_speakers": bad})
+
+
+def test_validate_config_accepts_max_speakers():
+    _validate_config({"max_speakers": 4})
+
+
+def test_create_transcriber_passes_split_options():
+    with patch("tinysteno.main.WhisperTranscriber") as cls:
+        create_transcriber({"speaker_split": True, "max_speakers": 3})
+        assert cls.call_args.kwargs["options"].speaker_split is True
+        assert cls.call_args.kwargs["options"].max_speakers == 3
+        create_transcriber({})
+        assert cls.call_args.kwargs["options"].speaker_split is False
+        assert cls.call_args.kwargs["options"].max_speakers is None
+    with patch("tinysteno.main.ApiTranscriber") as cls:
+        create_transcriber({"transcription_backend": "api", "api_key": "k",
+                            "speaker_split": True})
+        assert cls.call_args.kwargs["options"].speaker_split is True

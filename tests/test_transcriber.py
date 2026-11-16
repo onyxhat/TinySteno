@@ -306,3 +306,34 @@ def test_detect_device_survives_a_failing_cuda_probe():
     from tinysteno.transcriber import _detect_device
     with patch("ctranslate2.get_cuda_device_count", side_effect=RuntimeError("no driver")):
         assert _detect_device()[0] != "cuda"
+
+
+def _split_progress(tmp_path):
+    import tinysteno.transcriber as mod
+    from tinysteno.transcript import TranscriptOptions
+
+    data = np.full((16000 * _SECONDS, 2), _LEFT_LEVEL, dtype=np.float32)
+    wav_path = tmp_path / "t.wav"
+    sf.write(str(wav_path), data, 16000, subtype="FLOAT")
+    seen = []
+
+    def fake_assemble(*_args, on_progress=None, **_kwargs):
+        on_progress(0.5)
+        return {}
+
+    mod._MODEL_CACHE.clear()
+    with patch("tinysteno.transcriber.WhisperModel") as mock_wm, \
+         patch("tinysteno.transcriber.assemble", side_effect=fake_assemble):
+        mock_wm.return_value.transcribe.side_effect = (
+            lambda *_a, **_k: (iter(_segments("a")), MagicMock(language="en")))
+        mod.WhisperTranscriber(options=TranscriptOptions(speaker_split=True)).transcribe(
+            str(wav_path), diarize=True, on_progress=seen.append)
+    return seen
+
+
+def test_split_progress_decodes_in_the_first_70_percent_then_the_diarizer_fills_the_rest(
+        tmp_path):
+    seen = _split_progress(tmp_path)
+    assert seen == sorted(seen) and seen[-1] == 1.0
+    assert 0.7 in seen and 0.85 in seen
+    assert max(v for v in seen[: seen.index(0.7) + 1]) == 0.7

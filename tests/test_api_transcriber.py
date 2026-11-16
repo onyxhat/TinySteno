@@ -354,3 +354,27 @@ def test_one_channel_malformed_other_still_interleaved(mock_openai, tmp_path):
     good = _response("theirs", [_seg(1.0, "theirs"), _seg(9.0, "later")])
     result = _run(client, tmp_path, bad, good)
     assert result["diarised_text"] == "[You] mine\n[Others] theirs\n[Others] later"
+
+
+def test_split_progress_decodes_in_the_first_70_percent(mock_openai, tmp_path):
+    from tinysteno.transcript import TranscriptOptions
+
+    _, client = mock_openai
+    client.audio.transcriptions.create.side_effect = [
+        _response("a", [_seg(0.0, "a")]), _response("b", [_seg(1.0, "b")])]
+    seen = []
+    ApiTranscriber(api_key="k", options=TranscriptOptions(speaker_split=True)).transcribe(
+        _write(tmp_path, stereo=True), diarize=True, on_progress=seen.append)
+    assert seen == [0.0, 0.35, 0.7, 1.0]
+
+
+def test_split_progress_is_untouched_when_labels_are_not_shown(mock_openai, tmp_path):
+    from tinysteno.transcript import TranscriptOptions
+
+    _, client = mock_openai
+    client.audio.transcriptions.create.side_effect = [
+        _response("a", [_seg(0.0, "a")]), _response("b", [_seg(1.0, "b")])]
+    seen = []
+    ApiTranscriber(api_key="k", options=TranscriptOptions(speaker_split=True)).transcribe(
+        _write(tmp_path, stereo=True), diarize=False, on_progress=seen.append)
+    assert seen == [0.0, 0.5, 1.0]

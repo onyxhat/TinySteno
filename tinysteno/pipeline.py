@@ -142,6 +142,8 @@ def transcript_fingerprint(wav_path: str, config: dict) -> dict:
         "vad": bool(config.get("whisper_vad", True)),
         "hallucination_filter": bool(config.get("hallucination_filter", True)),
         "bleed_filter": bool(config.get("bleed_filter", True)),
+        "speaker_split": bool(config.get("speaker_split", False)),
+        "max_speakers": config.get("max_speakers"),
     }
 
 
@@ -207,10 +209,12 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
         transcript = render_transcript(segments, labels=diarization, timestamps=timestamps)
         has_labels = bool(diarization) and any(seg.speaker for seg in segments)
         has_timestamps = bool(timestamps)
+        has_numbered = has_labels and any(seg.speaker.startswith("Speaker ") for seg in segments)
     else:
         transcript = result["diarised_text"] or result["text"]
         has_labels = bool(result["diarised_text"])
         has_timestamps = False
+        has_numbered = False
     if not transcript.strip():
         for stage in (Stage.SUMMARIZE, Stage.METADATA, Stage.EXPORT):
             reporter.stage_skipped(stage)
@@ -238,6 +242,7 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
                 PromptContext(
                     meeting_date=timestamp,
                     has_speaker_labels=has_labels,
+                    has_numbered_speakers=has_numbered,
                     has_timestamps=has_timestamps,
                     notes=notes,
                 ),

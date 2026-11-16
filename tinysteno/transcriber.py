@@ -13,7 +13,8 @@ from faster_whisper import WhisperModel
 from scipy.signal import resample as scipy_resample
 
 from tinysteno.transcript import (
-    OTHERS, SAMPLE_RATE, YOU, Segment, TranscriptOptions, assemble, is_silent)
+    OTHERS, SAMPLE_RATE, SPLIT_DECODE_SHARE, YOU, Segment, TranscriptOptions, assemble,
+    is_silent, scale_progress, split_enabled)
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ class WhisperTranscriber:
             )
         self._model = _MODEL_CACHE[cache_key]
 
-    def transcribe(
+    def transcribe(  # pylint: disable=too-many-locals
         self,
         audio_path: str,
         diarize: bool = False,
@@ -187,22 +188,29 @@ class WhisperTranscriber:
         audio = split_channels(data, sr)
         to_decode = [label for label, samples in audio.items() if not is_silent(samples)]
 
+        splitting = split_enabled(self.options, diarize)
+        decode_share = SPLIT_DECODE_SHARE if splitting else 1.0
+        decode_progress = scale_progress(on_progress, 0.0, decode_share)
         channels: dict[str, list[Segment]] = {label: [] for label in audio}
         languages: dict[str, str] = {}
         for index, label in enumerate(to_decode):
             channels[label], languages[label] = self._decode(
                 audio[label],
-                _scaled_progress(on_progress, index, len(to_decode)),
+                _scaled_progress(decode_progress, index, len(to_decode)),
             )
         if on_progress is not None:
-            on_progress(1.0)
+            on_progress(decode_share)
 
         language = next(
             (languages[label] for label in (YOU, "", OTHERS) if channels.get(label)),
             "en",
         )
-        return assemble(channels, audio, diarize=diarize, language=language,
-                        options=self.options)
+        result = assemble(
+            channels, audio, diarize=diarize, language=language, options=self.options,
+            on_progress=scale_progress(on_progress, SPLIT_DECODE_SHARE, 1.0))
+        if splitting and on_progress is not None:
+            on_progress(1.0)
+        return result
 
     def _decode(
         self,

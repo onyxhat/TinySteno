@@ -60,6 +60,7 @@ def load_config() -> dict:
             "hallucination_filter": True,
             "bleed_filter": True,
             "diarization": False,
+            "speaker_split": False,
             "transcript_timestamps": True,
             "auto_title": True,
             "auto_tags": True,
@@ -115,6 +116,8 @@ def _validate_config(config: dict) -> None:
         )
     if "channels" in config and config["channels"] not in (1, 2):
         raise ValueError("Config field 'channels' must be 1 or 2")
+    if "max_speakers" in config and not _is_speaker_count(config["max_speakers"]):
+        raise ValueError("Config field 'max_speakers' must be a whole number >= 1")
     if "session_timeout_minutes" in config:
         if not _is_timeout_minutes(config["session_timeout_minutes"]):
             raise ValueError(
@@ -128,6 +131,22 @@ def _is_timeout_minutes(value) -> bool:
         isinstance(value, (int, float)) and not isinstance(value, bool)
         and math.isfinite(value) and value >= 0
     )
+
+
+def _is_speaker_count(value) -> bool:
+    """True for an int >= 1 that is not a bool."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def _speaker_count(value: str) -> int:
+    """argparse type: a whole number of at least 1."""
+    try:
+        count = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a whole number of at least 1") from None
+    if count < 1:
+        raise argparse.ArgumentTypeError("must be a whole number of at least 1")
+    return count
 
 
 def _non_negative_minutes(value: str) -> float:
@@ -150,6 +169,9 @@ def create_transcriber(config: dict) -> Transcriber:
     options = TranscriptOptions(
         drop_hallucinations=bool(config.get("hallucination_filter", True)),
         suppress_bleed=bool(config.get("bleed_filter", True)),
+        speaker_split=bool(config.get("speaker_split", False)),
+        max_speakers=(config["max_speakers"]
+                      if _is_speaker_count(config.get("max_speakers")) else None),
     )
     if backend == "api":
         return ApiTranscriber(
@@ -177,6 +199,7 @@ def _apply_cli_overrides(config: dict, args: argparse.Namespace) -> None:
         "whisper_compute_type": "whisper_compute_type",
         "whisper_api_key": "whisper_api_key",
         "whisper_api_model": "whisper_api_model",
+        "speakers": "max_speakers",
     }
     for cli_key, config_key in cli_to_config.items():
         val = getattr(args, cli_key, None)
@@ -810,6 +833,10 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     )
     record_parser.add_argument("--whisper-api-key", help="API key for API backend")
     record_parser.add_argument("--whisper-api-model", help="Model name for API backend")
+    record_parser.add_argument(
+        "--speakers", type=_speaker_count, metavar="N",
+        help="Most voices to expect when splitting the remote side by speaker (this run only)",
+    )
 
     tui_parser = subparsers.add_parser("tui", help="Interactive terminal interface")
     tui_parser.add_argument("--now", action="store_true", help="Start recording immediately")
@@ -830,6 +857,10 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     )
     tui_parser.add_argument("--whisper-api-key", help="API key for API backend")
     tui_parser.add_argument("--whisper-api-model", help="Model name for API backend")
+    tui_parser.add_argument(
+        "--speakers", type=_speaker_count, metavar="N",
+        help="Most voices to expect when splitting the remote side by speaker (this run only)",
+    )
 
     process_parser = subparsers.add_parser("process", help="Process existing audio")
     process_parser.add_argument("audio", help="Audio file path")
@@ -849,6 +880,10 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     )
     process_parser.add_argument("--whisper-api-key", help="API key for API backend")
     process_parser.add_argument("--whisper-api-model", help="Model name for API backend")
+    process_parser.add_argument(
+        "--speakers", type=_speaker_count, metavar="N",
+        help="Most voices to expect when splitting the remote side by speaker (this run only)",
+    )
 
     list_parser = subparsers.add_parser("list", help="List meetings")
     list_parser.add_argument("--vault", default="", help="Vault path")
