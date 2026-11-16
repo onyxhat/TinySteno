@@ -4,6 +4,7 @@ from pathlib import Path
 
 from tinysteno.personas import Persona
 from tinysteno.pipeline import PipelineResult
+from tinysteno.recordings import delete_recording
 from tinysteno.tui.deps import TuiDeps
 
 NOTE_TEXT = "---\ntitle: Sync\n---\n# Sync\n\nWe met.\n"
@@ -86,14 +87,39 @@ def _persona(slug: str, timeout: float | None) -> Persona:
 def make_deps(tmp_path: Path, **overrides) -> TuiDeps:
     """Build TuiDeps backed by fakes; any TuiDeps field can be overridden."""
     persona_timeouts = overrides.pop("persona_timeouts", {})
+    settings = overrides.pop("settings", {})
+    save_error = overrides.pop("save_error", None)
+    checks = overrides.pop("checks", [])
+    seed_result = overrides.pop("seed_result", {"copied": [], "skipped": []})
+    seed_error = overrides.pop("seed_error", None)
+    saved: list[dict] = []
+    retranscribes: list[bool] = []
     note = tmp_path / "Sync.md"
     note.write_text(NOTE_TEXT)
 
-    def fake_pipeline(wav_path, name, persona, timestamp, reporter):  # pylint: disable=unused-argument
+    def fake_pipeline(  # pylint: disable=unused-argument,too-many-arguments,too-many-positional-arguments
+        wav_path, name, persona, timestamp, reporter, *, retranscribe=False
+    ):
+        retranscribes.append(retranscribe)
         return PipelineResult(
             wav_path=wav_path, note_path=str(note), title="Sync",
             duration_seconds=61.0, no_speech=False,
         )
+
+    def fake_save(changes):
+        if save_error is not None:
+            raise save_error
+        saved.append(dict(changes))
+        for key, value in changes.items():
+            if value is None:
+                settings.pop(key, None)
+            else:
+                settings[key] = value
+
+    def fake_seed():
+        if seed_error is not None:
+            raise seed_error
+        return seed_result
 
     fields = {
         "make_recorder": lambda: FakeRecorder(tmp_path),
@@ -104,6 +130,15 @@ def make_deps(tmp_path: Path, **overrides) -> TuiDeps:
         "clock": FakeClock(),
         # Tests drive RecordingScreen.tick() by hand; a real-time interval would race them.
         "live_updates": False,
+        "load_settings": lambda: dict(settings),
+        "save_settings": fake_save,
+        "run_checks": lambda: list(checks),
+        "seed_personas": fake_seed,
+        "delete_recording": lambda wav: delete_recording(tmp_path, wav),
+        "first_run": False,
     }
     fields.update(overrides)
-    return TuiDeps(**fields)
+    deps = TuiDeps(**fields)
+    deps.saved = saved  # type: ignore[attr-defined]
+    deps.retranscribes = retranscribes  # type: ignore[attr-defined]
+    return deps

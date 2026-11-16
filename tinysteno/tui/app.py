@@ -143,7 +143,9 @@ class TinyStenoApp(App):
             RecordingScreen, ProcessingScreen(wav_path, name, persona_slug, started_at)
         )
 
-    def process_file(self, wav_path: str, persona_slug: str) -> None:
+    def process_file(
+        self, wav_path: str, persona_slug: str, *, retranscribe: bool = False
+    ) -> None:
         """Process an existing recording."""
         self.events.append(("process", wav_path, persona_slug))
         try:
@@ -153,7 +155,8 @@ class TinyStenoApp(App):
                         markup=False)
             return
         self.ledger.saved(wav_path)
-        self.push_screen(ProcessingScreen(wav_path, None, persona_slug, started_at))
+        self.push_screen(
+            ProcessingScreen(wav_path, None, persona_slug, started_at, retranscribe))
 
     def show_result(self, result: PipelineResult) -> None:
         """Show the finished note."""

@@ -21,6 +21,8 @@ from tinysteno.session import (
     DEFAULT_SESSION_TIMEOUT_MINUTES, SessionTimer, resolve_timeout_seconds, saved_message,
 )
 from tinysteno.pipeline import PipelineError, Stage, run_pipeline
+from tinysteno.doctor import run_checks
+from tinysteno.recordings import delete_recording
 from tinysteno.log_file import log_to_file
 from tinysteno.signals import deferred_exit_signals
 from tinysteno.config import (
@@ -290,7 +292,7 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def cmd_tui(args, config):
+def cmd_tui(args, config, *, first_run: bool = False):
     """Launch the Textual interface."""
     from tinysteno.tui import run_tui
     from tinysteno.tui.deps import TuiDeps
@@ -299,25 +301,46 @@ def cmd_tui(args, config):
     _apply_cli_overrides(config, args)
 
     def make_recorder():
+        # Reads the live config at call time, so saved settings apply to the next recording.
         return AudioRecorder(
             sample_rate=config.get("sample_rate", 44100),
             channels=config.get("channels", 1),
             recordings_dir=_recordings_dir(config),
         )
 
-    deps = TuiDeps(
-        make_recorder=make_recorder,
-        run_pipeline=lambda wav_path, name, persona, timestamp, reporter: run_pipeline(
+    def pipeline(  # pylint: disable=too-many-arguments
+        wav_path, name, persona, timestamp, reporter, *, retranscribe=False
+    ):
+        return run_pipeline(
             wav_path, name, config, persona, timestamp,
             transcriber=create_transcriber(config),
             orchestrator_cls=Orchestrator,
             exporter_cls=ObsidianExporter,
             reporter=reporter,
             notes=notes,
-        ),
+            retranscribe=retranscribe,
+        )
+
+    def save_settings(changes: dict) -> None:
+        update_config(changes)  # raises before anything in memory changes
+        fresh = load_config()
+        _apply_cli_overrides(fresh, args)  # a CLI flag wins for this session, never the file
+        config.clear()
+        config.update(fresh)
+        deps.recordings_dir = _recordings_dir(config)
+
+    deps = TuiDeps(
+        make_recorder=make_recorder,
+        run_pipeline=pipeline,
         list_personas=list_personas,
         load_persona=load_persona,
         recordings_dir=_recordings_dir(config),
+        load_settings=read_stored,
+        save_settings=save_settings,
+        run_checks=lambda: run_checks(config),
+        seed_personas=lambda: seed_builtin_personas(force=True),
+        delete_recording=lambda wav: delete_recording(deps.recordings_dir, wav),
+        first_run=first_run,
     )
     log_path = _config_dir() / "tui.log"
     with log_to_file(log_path, getattr(args, "verbose", False)) as log:
@@ -393,7 +416,6 @@ def _check_line(check) -> str:
 def cmd_test(_args):
     """Verify setup before first use."""
     from rich.console import Console
-    from tinysteno.doctor import run_checks
 
     console = Console()
     console.print("\n[TinySteno Setup Test]")
@@ -827,10 +849,11 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
         args = parser.parse_args(["tui"])
 
     setup_logging(getattr(args, "verbose", False))
+    first_run = not _config_path().exists()
     config = load_config()
 
     if args.command == "tui":
-        cmd_tui(args, config)
+        cmd_tui(args, config, first_run=first_run)
     elif args.command == "record":
         cmd_record(args, config)
     elif args.command == "process":
