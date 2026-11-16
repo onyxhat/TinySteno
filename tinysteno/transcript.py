@@ -1,6 +1,7 @@
 """Transcript segments and the single assembly path shared by both backends."""
 import json
 import logging
+import math
 import os
 import tempfile
 from dataclasses import dataclass, replace
@@ -15,7 +16,7 @@ YOU = "You"
 OTHERS = "Others"
 SILENCE_RMS = 0.001
 SAMPLE_RATE = 16000
-SIDECAR_VERSION = 1
+SIDECAR_VERSION = 2
 
 _CHANNEL_NAMES = {YOU: "Microphone", OTHERS: "System"}
 
@@ -160,74 +161,106 @@ def assemble(
 
 
 def sidecar_path(wav_path: str) -> Path:
-    """Where the saved transcript of a recording lives: `Meeting-1.transcript.json`."""
-    return Path(wav_path).with_suffix(".transcript.json")
+    """Where the saved transcript of a recording lives: `Meeting-1.wav.transcript.json`."""
+    return Path(str(wav_path) + ".transcript.json")
 
 
-def save_transcript(wav_path: str, result: dict) -> None:
+def save_transcript(wav_path: str, result: dict, fingerprint: dict) -> None:
     """Write the transcriber result beside the recording, atomically.
 
-    A result without a segment list is not saved. A failure to write is logged and ignored.
+    Nothing is saved for a result without a segment list or a recording that does not exist.
+    Any failure is logged and ignored: saving never fails the run.
     """
-    segments = result.get("segments")
-    if not isinstance(segments, list):
-        return
-    payload = {
-        "version": SIDECAR_VERSION,
-        "detected_language": result.get("detected_language", ""),
-        "duration_seconds": result.get("duration_seconds", 0.0),
-        "warnings": list(result.get("warnings") or []),
-        "segments": [
-            {"start": seg.start, "end": seg.end, "text": seg.text, "speaker": seg.speaker}
-            for seg in segments
-        ],
-    }
     target = sidecar_path(wav_path)
     temp_name = None
     try:
+        segments = result.get("segments")
+        if not isinstance(segments, list) or not Path(wav_path).is_file():
+            return
+        payload = {
+            "version": SIDECAR_VERSION,
+            "fingerprint": fingerprint,
+            "detected_language": result.get("detected_language", ""),
+            "duration_seconds": result.get("duration_seconds", 0.0),
+            "warnings": list(result.get("warnings") or []),
+            "segments": [
+                {"start": seg.start, "end": seg.end, "text": seg.text, "speaker": seg.speaker}
+                for seg in segments
+            ],
+        }
         with tempfile.NamedTemporaryFile(
             "w", encoding="utf-8", dir=target.parent, prefix=target.name + ".",
             suffix=".tmp", delete=False,
         ) as handle:
             temp_name = handle.name
-            json.dump(payload, handle, ensure_ascii=False)
+            json.dump(payload, handle, ensure_ascii=False, allow_nan=False)
         os.replace(temp_name, target)
-    except OSError as err:
+    except Exception as err:
         logger.warning("Could not save the transcript to %s: %s", target, err)
-        if temp_name:
+    finally:
+        if temp_name and os.path.exists(temp_name):
             try:
                 os.unlink(temp_name)
             except OSError:
                 pass
 
 
-def load_transcript(wav_path: str) -> dict | None:
+def _is_number(value: object) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
+
+
+def _segment_from(item: object) -> Segment:
+    """A Segment from one saved entry; ValueError when it is not well formed."""
+    if not isinstance(item, dict):
+        raise ValueError("segment is not an object")
+    start, end = item.get("start"), item.get("end")
+    text, speaker = item.get("text"), item.get("speaker")
+    if not (_is_number(start) and _is_number(end) and 0 <= start <= end):
+        raise ValueError("bad segment times")
+    if not isinstance(text, str) or not isinstance(speaker, str):
+        raise ValueError("bad segment text or speaker")
+    return Segment(float(start), float(end), text, speaker)
+
+
+def _parse_sidecar(data: object, fingerprint: dict) -> dict | None:
+    """The result a saved sidecar holds, None for a stale one; ValueError if malformed."""
+    if not isinstance(data, dict) or data.get("version") != SIDECAR_VERSION:
+        return None
+    if data.get("fingerprint") != fingerprint:
+        return None
+    raw_segments, warnings = data.get("segments"), data.get("warnings")
+    language, duration = data.get("detected_language"), data.get("duration_seconds")
+    if not isinstance(raw_segments, list):
+        raise ValueError("segments is not a list")
+    if not isinstance(warnings, list) or not all(isinstance(w, str) for w in warnings):
+        raise ValueError("warnings is not a list of strings")
+    if not isinstance(language, str) or not _is_number(duration) or duration < 0:
+        raise ValueError("bad language or duration")
+    segments = [_segment_from(item) for item in raw_segments]
+    return {
+        "text": plain_text(segments),
+        "diarised_text": labelled_text(segments),
+        "duration_seconds": float(duration),
+        "detected_language": language,
+        "segments": segments,
+        "warnings": list(warnings),
+    }
+
+
+def load_transcript(wav_path: str, fingerprint: dict) -> dict | None:
     """The saved transcriber result for a recording, or None when it cannot be trusted.
 
-    None when the sidecar is missing, older than the WAV, of another version or unreadable,
-    and when the WAV itself is missing (there is nothing to compare against).
+    None when the recording or sidecar is missing, the sidecar is older than the recording,
+    of another version, made under a different fingerprint, or malformed.
     """
     path = sidecar_path(wav_path)
     try:
         if path.stat().st_mtime < Path(wav_path).stat().st_mtime:
             return None
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if data["version"] != SIDECAR_VERSION:
-            return None
-        segments = [
-            Segment(float(item["start"]), float(item["end"]), str(item["text"]),
-                    str(item.get("speaker", "")))
-            for item in data["segments"]
-        ]
-        return {
-            "text": plain_text(segments),
-            "diarised_text": labelled_text(segments),
-            "duration_seconds": float(data["duration_seconds"]),
-            "detected_language": str(data["detected_language"]),
-            "segments": segments,
-            "warnings": [str(text) for text in data["warnings"]],
-        }
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as err:
-        if not isinstance(err, FileNotFoundError):
-            logger.info("Ignoring saved transcript %s: %s", path, err)
+        return _parse_sidecar(json.loads(path.read_text(encoding="utf-8")), fingerprint)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as err:
+        logger.info("Ignoring saved transcript %s: %s", path, err)
         return None

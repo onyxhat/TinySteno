@@ -114,3 +114,18 @@ async def test_each_warning_becomes_a_warning_notification(tmp_path):
         await _settle(app, pilot)
         shown = [(n.message, n.severity) for n in app._notifications]  # pylint: disable=protected-access
     assert shown == [("first [bold]problem[/]", "warning"), ("second problem", "warning")]
+
+
+async def test_reused_transcript_gets_an_information_notification(tmp_path):
+    note = tmp_path / "Sync.md"
+    note.write_text(NOTE_TEXT)
+    result = PipelineResult(
+        wav_path="a.wav", note_path=str(note), title="Sync", duration_seconds=61.0,
+        no_speech=False, reused_transcript=True,
+    )
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
+    async with app.run_test(notifications=True) as pilot:
+        await app.push_screen(ResultScreen(result))
+        await _settle(app, pilot)
+        shown = [(n.message, n.severity) for n in app._notifications]  # pylint: disable=protected-access
+    assert shown == [("Used the saved transcript for this recording.", "information")]

@@ -18,7 +18,7 @@ from tinysteno.main import (
 )
 from tinysteno.main import cmd_tui as run_cmd_tui
 from tinysteno.personas import Persona
-from tinysteno.transcript import TranscriptOptions
+from tinysteno.transcript import Segment, TranscriptOptions
 
 
 def _write_config(path: Path) -> None:
@@ -433,6 +433,29 @@ def test_process_audio_prints_warnings_before_the_meeting_line(tmp_path, capsys)
     out = capsys.readouterr().out
     assert out.index("Warning: one channel silent\n") < out.index("Warning: summary incomplete\n")
     assert out.index("Warning: summary incomplete") < out.index("Meeting:")
+
+
+def test_process_audio_says_when_it_reused_the_saved_transcript(tmp_path, capsys):
+    (tmp_path / "a.wav").write_bytes(b"RIFF")
+    extra = {"segments": [Segment(0.0, 1.0, "hello", "You")]}
+    for _ in range(2):
+        _run_process_audio(tmp_path, transcript_extra=extra)
+    out = capsys.readouterr().out
+    assert out.count("Using the saved transcript for this recording") == 1
+    assert "(--retranscribe to transcribe again)." in out
+    assert out.index("Using the saved") < out.index("Meeting:")
+
+
+@pytest.mark.parametrize("flag, expected", [(["--retranscribe"], True), ([], False)])
+def test_process_passes_retranscribe_through(tmp_path, flag, expected):
+    audio = tmp_path / "a.wav"
+    audio.write_bytes(b"x")
+    with patch("tinysteno.main._process_audio") as process, \
+         patch("tinysteno.main.load_persona"), patch("tinysteno.main.setup_logging"), \
+         patch("tinysteno.main.load_config", return_value={}), \
+         patch.object(sys, "argv", ["tinysteno", "process", str(audio), *flag]):
+        main()
+    assert process.call_args.kwargs["retranscribe"] is expected
 
 
 def test_process_audio_prints_warnings_before_the_no_speech_message(tmp_path, capsys):

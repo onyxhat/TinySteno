@@ -69,6 +69,8 @@ class ResultScreen(Screen):
         self._fade = self.app.deps.live_updates and self.app.animation_level != "none"
         if self._fade:
             self.styles.opacity = 0.0
+        if self.result.reused_transcript:
+            self.app.notify("Used the saved transcript for this recording.", markup=False)
         for text in self.result.warnings:
             self.app.notify(text, severity="warning", timeout=WARNING_SECONDS, markup=False)
         self._read_note(self.app, self.result.note_path)

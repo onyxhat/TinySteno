@@ -194,62 +194,110 @@ def _wav(tmp_path):
     return wav
 
 
-def test_sidecar_sits_beside_the_wav(tmp_path):
-    assert sidecar_path(str(tmp_path / "Meeting-1.wav")) == tmp_path / "Meeting-1.transcript.json"
+FP = {"size": 4, "prompt": "", "bleed_filter": True}
+
+
+def _sidecar_json(wav):
+    return json.loads(sidecar_path(str(wav)).read_text(encoding="utf-8"))
+
+
+def _write_sidecar(wav, **changes):
+    data = {**_sidecar_json(wav), **changes}
+    sidecar_path(str(wav)).write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_sidecar_name_keeps_the_audio_extension(tmp_path):
+    assert str(sidecar_path("m/Meeting-1.wav")).endswith("Meeting-1.wav.transcript.json")
+    assert sidecar_path(str(tmp_path / "a.wav")) != sidecar_path(str(tmp_path / "a.mp3"))
 
 
 def test_save_then_load_round_trips(tmp_path):
     wav = _wav(tmp_path)
-    save_transcript(str(wav), RESULT)
-    loaded = load_transcript(str(wav))
+    save_transcript(str(wav), RESULT, FP)
+    loaded = load_transcript(str(wav), FP)
     assert loaded["segments"] == RESULT["segments"]
     assert loaded["warnings"] == RESULT["warnings"]
     assert loaded["duration_seconds"] == 12.5 and loaded["detected_language"] == "en"
     assert loaded["text"] == "hello there"
     assert loaded["diarised_text"] == "[You] hello\n[Others] there"
-    assert json.loads(sidecar_path(str(wav)).read_text(encoding="utf-8"))["version"] == 1
-    assert [p.name for p in tmp_path.iterdir()] == ["Meeting-1.transcript.json", "Meeting-1.wav"]
+    assert _sidecar_json(wav)["version"] == 2
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "Meeting-1.wav", "Meeting-1.wav.transcript.json"]
+
+
+@pytest.mark.parametrize("other", [
+    {**FP, "size": 5}, {**FP, "prompt": "Acme"}, {**FP, "bleed_filter": False}, {}])
+def test_different_fingerprint_is_a_miss(tmp_path, other):
+    wav = _wav(tmp_path)
+    save_transcript(str(wav), RESULT, FP)
+    assert load_transcript(str(wav), other) is None
 
 
 def test_sidecar_older_than_the_wav_is_ignored(tmp_path):
     wav = _wav(tmp_path)
-    save_transcript(str(wav), RESULT)
+    save_transcript(str(wav), RESULT, FP)
     os.utime(sidecar_path(str(wav)), (1, 1))
-    assert load_transcript(str(wav)) is None
+    assert load_transcript(str(wav), FP) is None
 
 
 def test_corrupt_sidecar_is_ignored(tmp_path):
     wav = _wav(tmp_path)
     sidecar_path(str(wav)).write_text("{not json", encoding="utf-8")
-    assert load_transcript(str(wav)) is None
+    assert load_transcript(str(wav), FP) is None
 
 
-def test_unknown_version_is_ignored(tmp_path):
+@pytest.mark.parametrize("version", [1, 3, None])
+def test_other_versions_are_ignored(tmp_path, version):
     wav = _wav(tmp_path)
-    save_transcript(str(wav), RESULT)
-    path = sidecar_path(str(wav))
-    data = json.loads(path.read_text(encoding="utf-8"))
-    data["version"] = 2
-    path.write_text(json.dumps(data), encoding="utf-8")
-    assert load_transcript(str(wav)) is None
+    save_transcript(str(wav), RESULT, FP)
+    _write_sidecar(wav, version=version)
+    assert load_transcript(str(wav), FP) is None
 
 
-def test_malformed_segments_are_ignored(tmp_path):
+GOOD = {"start": 0.0, "end": 1.0, "text": "hi", "speaker": "You"}
+
+
+@pytest.mark.parametrize("changes", [
+    {"segments": [{**GOOD, "text": None}]},
+    {"segments": [{**GOOD, "speaker": None}]},
+    {"segments": [{**GOOD, "start": "0"}]},
+    {"segments": [{**GOOD, "start": True}]},
+    {"segments": [{**GOOD, "start": -1.0}]},
+    {"segments": [{**GOOD, "start": 2.0, "end": 1.0}]},
+    {"segments": [{**GOOD, "end": float("inf")}]},
+    {"segments": [{**GOOD, "end": float("nan")}]},
+    {"segments": ["x"]},
+    {"segments": "abc"},
+    {"warnings": "abc"},
+    {"warnings": [1]},
+    {"detected_language": None},
+    {"duration_seconds": -1},
+    {"duration_seconds": "3"},
+    {"duration_seconds": float("inf")},
+])
+def test_wrong_shapes_are_a_miss(tmp_path, changes):
     wav = _wav(tmp_path)
-    sidecar_path(str(wav)).write_text(
-        json.dumps({"version": 1, "segments": [{"start": "x"}]}), encoding="utf-8")
-    assert load_transcript(str(wav)) is None
+    save_transcript(str(wav), RESULT, FP)
+    _write_sidecar(wav, **changes)
+    assert load_transcript(str(wav), FP) is None
 
 
-def test_missing_wav_or_sidecar_loads_nothing(tmp_path):
-    assert load_transcript(str(tmp_path / "none.wav")) is None
-    save_transcript(str(tmp_path / "none.wav"), RESULT)
-    assert load_transcript(str(tmp_path / "none.wav")) is None
+def test_non_object_top_level_is_a_miss(tmp_path):
+    wav = _wav(tmp_path)
+    sidecar_path(str(wav)).write_text("[]", encoding="utf-8")
+    assert load_transcript(str(wav), FP) is None
+
+
+def test_missing_wav_or_sidecar_loads_and_saves_nothing(tmp_path):
+    assert load_transcript(str(tmp_path / "none.wav"), FP) is None
+    save_transcript(str(tmp_path / "none.wav"), RESULT, FP)
+    assert not list(tmp_path.iterdir())
+    assert load_transcript(str(_wav(tmp_path)), FP) is None
 
 
 def test_result_without_segments_is_not_saved(tmp_path):
     wav = _wav(tmp_path)
-    save_transcript(str(wav), {"text": "x"})
+    save_transcript(str(wav), {"text": "x"}, FP)
     assert not sidecar_path(str(wav)).exists()
 
 
@@ -260,5 +308,12 @@ def test_save_failure_is_ignored_and_leaves_no_temp_file(tmp_path, monkeypatch):
         raise OSError("disk full")
 
     monkeypatch.setattr(os, "replace", boom)
-    save_transcript(str(wav), RESULT)
+    save_transcript(str(wav), RESULT, FP)
+    assert [p.name for p in tmp_path.iterdir()] == ["Meeting-1.wav"]
+
+
+def test_unserialisable_value_logs_a_warning_and_leaves_no_temp_file(tmp_path, caplog):
+    wav = _wav(tmp_path)
+    save_transcript(str(wav), {**RESULT, "warnings": [object()]}, FP)
+    assert "Could not save the transcript" in caplog.text
     assert [p.name for p in tmp_path.iterdir()] == ["Meeting-1.wav"]

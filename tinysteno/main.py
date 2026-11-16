@@ -266,6 +266,9 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
             raise cause from None  # pylint: disable=raising-non-exception
 
     logger.debug(f"Duration: {result.duration_seconds:.0f}s")
+    if result.reused_transcript:
+        print("Using the saved transcript for this recording "
+              "(--retranscribe to transcribe again).")
     for text in result.warnings:
         print(f"Warning: {text}")
     if result.no_speech:

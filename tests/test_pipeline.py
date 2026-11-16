@@ -1,5 +1,6 @@
 """Tests for tinysteno.pipeline."""
 # pylint: disable=unused-argument
+import os
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -8,7 +9,7 @@ import pytest
 
 from tinysteno.personas import Persona
 from tinysteno.pipeline import (
-    PipelineError, PipelineResult, Stage, run_pipeline, summary_digest)
+    PipelineError, PipelineResult, Stage, run_pipeline, summary_digest, transcript_fingerprint)
 from tinysteno.transcript import Segment
 
 
@@ -358,3 +359,44 @@ def test_context_window_is_passed_to_the_orchestrator_only_when_configured(tmp_p
     _run(tmp_path, orchestrator_cls=orchestrator_cls,
          config_overrides={"llm_context_tokens": 4096})
     assert orchestrator_cls.call_args.kwargs["context_tokens"] == 4096
+
+
+def test_reused_flag_is_false_then_true(tmp_path):
+    transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
+    assert not _run(tmp_path, transcriber=transcriber, wav_path=wav).reused_transcript
+    assert _run(tmp_path, transcriber=transcriber, wav_path=wav).reused_transcript
+
+
+@pytest.mark.parametrize("override", [
+    {"whisper_prompt": "Acme"}, {"hallucination_filter": False}, {"bleed_filter": False},
+    {"whisper_vad": False}, {"whisper_model": "large"}, {"transcription_backend": "api"}])
+def test_changed_settings_transcribe_again(tmp_path, override):
+    transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav, config_overrides=override)
+    assert transcriber.calls == 2
+
+
+def test_a_different_recording_with_an_old_timestamp_transcribes_again(tmp_path):
+    transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav)
+    Path(wav).write_bytes(b"RIFF-different-recording")
+    os.utime(wav, (1, 1))
+    _run(tmp_path, transcriber=transcriber, wav_path=wav)
+    assert transcriber.calls == 2
+
+
+def test_fingerprint_keys_follow_the_backend(tmp_path):
+    wav = _real_wav(tmp_path)
+    config = {"whisper_model": "small", "whisper_api_model": "w-1", "whisper_prompt": 5}
+    local = transcript_fingerprint(wav, config)
+    assert local == {
+        "size": 4, "backend": "local", "model": "small", "prompt": "", "vad": True,
+        "hallucination_filter": True, "bleed_filter": True}
+    assert transcript_fingerprint(wav, {**config, "transcription_backend": "api"})["model"] == "w-1"
+
+
+def test_fake_recording_path_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _run(tmp_path / "vault", transcriber=CountingTranscriber())
+    assert not [p for p in tmp_path.iterdir() if p.name != "vault"]

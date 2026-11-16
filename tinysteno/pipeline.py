@@ -76,6 +76,7 @@ class PipelineResult:
     duration_seconds: float
     no_speech: bool
     warnings: tuple[str, ...] = ()
+    reused_transcript: bool = False
 
 
 def _format_duration(duration_seconds: float) -> str:
@@ -128,23 +129,48 @@ def _stage(reporter: PipelineReporter, stage: Stage) -> Iterator[None]:
     reporter.stage_finished(stage)
 
 
+def transcript_fingerprint(wav_path: str, config: dict) -> dict:
+    """What a saved transcript depends on: the recording's size and the transcription settings."""
+    backend = config.get("transcription_backend", "local")
+    prompt = config.get("whisper_prompt", "")
+    return {
+        "size": Path(wav_path).stat().st_size,
+        "backend": backend,
+        "model": (config.get("whisper_api_model", "whisper-1") if backend == "api"
+                  else config.get("whisper_model", "small")),
+        "prompt": prompt if isinstance(prompt, str) else "",
+        "vad": bool(config.get("whisper_vad", True)),
+        "hallucination_filter": bool(config.get("hallucination_filter", True)),
+        "bleed_filter": bool(config.get("bleed_filter", True)),
+    }
+
+
 def _transcript_result(
     wav_path: str, config: dict, transcriber: Transcriber, reporter: PipelineReporter,
     retranscribe: bool,
-) -> dict:
-    """The saved transcript when one is usable, else a fresh transcription (which is saved)."""
-    result = None if retranscribe else load_transcript(wav_path)
-    if result is not None:
-        logger.info("Reusing the saved transcript for %s", wav_path)
-        reporter.stage_progress(Stage.TRANSCRIBE, 1.0)
-        return result
+) -> tuple[dict, bool]:
+    """The saved transcript when one is usable, else a fresh transcription (which is saved).
+
+    The flag says whether a saved transcript was used.
+    """
+    try:
+        fingerprint = transcript_fingerprint(wav_path, config)
+    except OSError:
+        fingerprint = None  # no recording on disk: nothing to reuse, nothing to save
+    if fingerprint is not None and not retranscribe:
+        result = load_transcript(wav_path, fingerprint)
+        if result is not None:
+            logger.info("Reusing the saved transcript for %s", wav_path)
+            reporter.stage_progress(Stage.TRANSCRIBE, 1.0)
+            return result, True
     result = transcriber.transcribe(
         wav_path,
         diarize=config.get("diarization", False),
         on_progress=lambda fraction: reporter.stage_progress(Stage.TRANSCRIBE, fraction),
     )
-    save_transcript(wav_path, result)
-    return result
+    if fingerprint is not None:
+        save_transcript(wav_path, result, fingerprint)
+    return result, False
 
 
 def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
@@ -168,7 +194,7 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
     reporter = reporter or NullReporter()
 
     with _stage(reporter, Stage.TRANSCRIBE):
-        result = _transcript_result(wav_path, config, transcriber, reporter, retranscribe)
+        result, reused = _transcript_result(wav_path, config, transcriber, reporter, retranscribe)
     duration_seconds = result.get("duration_seconds", 0.0)
     logger.debug("Detected language: %s", result.get("detected_language"))
     logger.debug("Duration: %.0fs", duration_seconds)
@@ -190,7 +216,7 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
             reporter.stage_skipped(stage)
         return PipelineResult(
             wav_path, None, None, duration_seconds, no_speech=True,
-            warnings=_merge_warnings(transcriber_warnings),
+            warnings=_merge_warnings(transcriber_warnings), reused_transcript=reused,
         )
 
     data: dict = {}
@@ -263,4 +289,5 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
         note_path = str(exporter.export(data, persona, metadata))
 
     return PipelineResult(
-        wav_path, note_path, title, duration_seconds, no_speech=False, warnings=warnings)
+        wav_path, note_path, title, duration_seconds, no_speech=False, warnings=warnings,
+        reused_transcript=reused)
