@@ -342,7 +342,8 @@ def test_setup_timeout_prompt_keeps_a_valid_existing_value_else_the_default(
     assert value == (30 if existing == 30 else 75)
 
 
-def _run_process_audio(tmp_path, *, orchestrator_setup=None, exporter_setup=None):
+def _run_process_audio(tmp_path, *, orchestrator_setup=None, exporter_setup=None,
+                       transcript_extra=None):
     """Call _process_audio with mocked backends, letting callers set side effects."""
     config = {
         "api_key": "ollama", "base_url": "http://localhost", "model": "test",
@@ -351,7 +352,7 @@ def _run_process_audio(tmp_path, *, orchestrator_setup=None, exporter_setup=None
     }
     transcript = {
         "text": "hello", "diarised_text": "", "detected_language": "en",
-        "duration_seconds": 5.0,
+        "duration_seconds": 5.0, **(transcript_extra or {}),
     }
     persona = Persona(
         slug="default", name="Default", description="desc",
@@ -370,6 +371,24 @@ def _run_process_audio(tmp_path, *, orchestrator_setup=None, exporter_setup=None
             exporter_setup(exporter_cls.return_value)
         _process_audio(str(tmp_path / "a.wav"), None, config, MagicMock(), persona,
                        datetime(2024, 1, 1))
+
+
+def test_process_audio_prints_warnings_before_the_meeting_line(tmp_path, capsys):
+    def setup(orchestrator):
+        orchestrator.warnings = ["summary incomplete"]
+        orchestrator.summarize.return_value = {"summary": "We met."}
+    _run_process_audio(tmp_path, orchestrator_setup=setup,
+                       transcript_extra={"warnings": ["one channel silent"]})
+    out = capsys.readouterr().out
+    assert out.index("Warning: one channel silent\n") < out.index("Warning: summary incomplete\n")
+    assert out.index("Warning: summary incomplete") < out.index("Meeting:")
+
+
+def test_process_audio_prints_warnings_before_the_no_speech_message(tmp_path, capsys):
+    _run_process_audio(tmp_path, transcript_extra={
+        "text": " ", "warnings": ["both channels silent"]})
+    out = capsys.readouterr().out
+    assert out.index("Warning: both channels silent") < out.index("No speech detected")
 
 
 def test_process_audio_reports_template_error_and_returns(tmp_path, capsys):

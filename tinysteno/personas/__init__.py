@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 
 BUILTIN_ORDER = ["default", "1on1", "rca", "irm", "sprint", "kickoff", "executive-summary"]
 
-_RESERVED_NAMES = frozenset({"title", "date", "duration", "transcript", "detected_language"})
+_RESERVED_NAMES = frozenset({
+    "title", "date", "duration", "transcript", "detected_language",
+    "generated_tags", "tags", "processing_warnings",
+})
 _VALID_TYPES = frozenset({"string", "list"})
 _REQUIRED_FILES = ("persona.yaml", "system_prompt.md", "template.md")
 

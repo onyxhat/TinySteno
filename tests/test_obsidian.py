@@ -184,3 +184,20 @@ def test_export_tags_no_generated_tags(tmp_path):
     path = exporter.export({}, persona, metadata)
     content = Path(path).read_text(encoding="utf-8")
     assert content == "sprint"
+
+
+def test_processing_warnings_are_appended_to_the_note(tmp_path):
+    path = _make_exporter(tmp_path).export(
+        {"summary": "s"}, _make_persona("{{ summary }}\n"),
+        {**_make_metadata(), "processing_warnings": ["lost a bit", "and more"]},
+    )
+    text = Path(path).read_text(encoding="utf-8")
+    assert text == "s\n\n## Processing warnings\n\n- lost a bit\n- and more\n"
+
+
+def test_no_warnings_section_without_warnings(tmp_path):
+    persona = _make_persona("{{ summary }}\n")
+    for extra in ({}, {"processing_warnings": []}):
+        path = _make_exporter(tmp_path).export(
+            {"summary": "s"}, persona, {**_make_metadata(), **extra})
+        assert Path(path).read_text(encoding="utf-8") == "s\n"

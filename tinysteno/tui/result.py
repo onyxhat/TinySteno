@@ -15,6 +15,7 @@ from tinysteno.pipeline import PipelineResult
 from tinysteno.session import format_clock
 
 FADE_SECONDS = 0.4
+WARNING_SECONDS = 20
 # A leading ``---`` line, any YAML, then a closing ``---`` line (LF or CRLF line endings).
 _FRONTMATTER = re.compile(r"\A---\r?\n(?:.*?\r?\n)?---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
 
@@ -68,6 +69,8 @@ class ResultScreen(Screen):
         self._fade = self.app.deps.live_updates and self.app.animation_level != "none"
         if self._fade:
             self.styles.opacity = 0.0
+        for text in self.result.warnings:
+            self.app.notify(text, severity="warning", timeout=WARNING_SECONDS, markup=False)
         self._read_note(self.app, self.result.note_path)
 
     @work(thread=True)

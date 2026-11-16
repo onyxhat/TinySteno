@@ -73,6 +73,7 @@ class PipelineResult:
     title: Optional[str]
     duration_seconds: float
     no_speech: bool
+    warnings: tuple[str, ...] = ()
 
 
 def _format_duration(duration_seconds: float) -> str:
@@ -83,6 +84,18 @@ def _format_duration(duration_seconds: float) -> str:
     if h > 99:
         return "99:59:59"
     return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _string_list(value: object) -> list[str]:
+    """The strings in a list or tuple; anything else (a missing or mock attribute) is none."""
+    if isinstance(value, (list, tuple)):
+        return [item for item in value if isinstance(item, str)]
+    return []
+
+
+def _merge_warnings(*groups: list[str]) -> tuple[str, ...]:
+    """Concatenate warning groups in order, keeping each distinct text once."""
+    return tuple(dict.fromkeys(text for group in groups for text in group))
 
 
 def _extract_summary_text(persona: Persona, data: dict) -> Optional[str]:
@@ -137,11 +150,15 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
     logger.debug("Detected language: %s", result.get("detected_language"))
     logger.debug("Duration: %.0fs", duration_seconds)
 
+    transcriber_warnings = _string_list(result.get("warnings"))
     transcript = result["diarised_text"] or result["text"]
     if not transcript.strip():
         for stage in (Stage.SUMMARIZE, Stage.METADATA, Stage.EXPORT):
             reporter.stage_skipped(stage)
-        return PipelineResult(wav_path, None, None, duration_seconds, no_speech=True)
+        return PipelineResult(
+            wav_path, None, None, duration_seconds, no_speech=True,
+            warnings=_merge_warnings(transcriber_warnings),
+        )
 
     data: dict = {}
     orchestrator = None
@@ -182,6 +199,8 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
         reporter.stage_skipped(Stage.METADATA)
 
     title = name or generated_title or Path(wav_path).stem
+    warnings = _merge_warnings(
+        transcriber_warnings, _string_list(getattr(orchestrator, "warnings", [])))
 
     with _stage(reporter, Stage.EXPORT):
         metadata = {
@@ -191,6 +210,7 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
             "transcript": transcript,
             "detected_language": result.get("detected_language", ""),
             "generated_tags": generated_tags,
+            "processing_warnings": list(warnings),
         }
         exporter = exporter_cls(
             vault_path=config["obsidian_vault"],
@@ -198,4 +218,5 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
         )
         note_path = str(exporter.export(data, persona, metadata))
 
-    return PipelineResult(wav_path, note_path, title, duration_seconds, no_speech=False)
+    return PipelineResult(
+        wav_path, note_path, title, duration_seconds, no_speech=False, warnings=warnings)

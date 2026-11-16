@@ -45,8 +45,9 @@ class RecordingReporter:
 class FakeTranscriber:
     """Transcriber returning canned text after one progress callback."""
 
-    def __init__(self, text):
+    def __init__(self, text, warnings=None):
         self.text = text
+        self.warnings = warnings
 
     def transcribe(self, path, diarize=False, on_progress=None):
         if on_progress:
@@ -56,6 +57,7 @@ class FakeTranscriber:
             "diarised_text": "",
             "duration_seconds": 61.0,
             "detected_language": "en",
+            **({"warnings": self.warnings} if self.warnings is not None else {}),
         }
 
 
@@ -75,7 +77,7 @@ def _exporter_cls():
 
 def _run(  # pylint: disable=too-many-arguments
         tmp_path, *, name=None, text="hello there", config_overrides=None,
-         reporter=None, orchestrator_cls=None, exporter_cls=None):
+         reporter=None, orchestrator_cls=None, exporter_cls=None, warnings=None):
     config = {
         "api_key": "k", "base_url": "u", "model": "m", "auto_title": True,
         "auto_tags": True, "obsidian_vault": str(tmp_path),
@@ -84,7 +86,7 @@ def _run(  # pylint: disable=too-many-arguments
     config.update(config_overrides or {})
     return run_pipeline(
         "x.wav", name, config, _persona(), datetime(2024, 1, 1),
-        transcriber=FakeTranscriber(text),
+        transcriber=FakeTranscriber(text, warnings),
         orchestrator_cls=orchestrator_cls or _orchestrator_cls(),
         exporter_cls=exporter_cls or _exporter_cls(),
         reporter=reporter,
@@ -145,3 +147,39 @@ def test_export_template_error_is_pipeline_error_at_export(tmp_path):
     with pytest.raises(PipelineError) as info:
         _run(tmp_path, exporter_cls=exporter_cls)
     assert info.value.stage is Stage.EXPORT
+
+
+TRANSCRIBER_WARNING = "System audio was present but no speech was recognised."
+ORCHESTRATOR_WARNING = (
+    "1 of 3 transcript sections could not be summarized; the summary is incomplete."
+)
+
+
+def test_warnings_from_transcriber_and_orchestrator_reach_result_and_note(tmp_path):
+    orchestrator_cls = _orchestrator_cls()
+    orchestrator_cls.return_value.warnings = [ORCHESTRATOR_WARNING]
+    exporter_cls = _exporter_cls()
+    result = _run(tmp_path, warnings=[TRANSCRIBER_WARNING], orchestrator_cls=orchestrator_cls,
+                  exporter_cls=exporter_cls)
+    assert result.warnings == (TRANSCRIBER_WARNING, ORCHESTRATOR_WARNING)
+    metadata = exporter_cls.return_value.export.call_args.args[2]
+    assert metadata["processing_warnings"] == [TRANSCRIBER_WARNING, ORCHESTRATOR_WARNING]
+
+
+def test_duplicate_warnings_are_kept_once(tmp_path):
+    orchestrator_cls = _orchestrator_cls()
+    orchestrator_cls.return_value.warnings = [TRANSCRIBER_WARNING, ORCHESTRATOR_WARNING]
+    result = _run(tmp_path, warnings=[TRANSCRIBER_WARNING], orchestrator_cls=orchestrator_cls)
+    assert result.warnings == (TRANSCRIBER_WARNING, ORCHESTRATOR_WARNING)
+
+
+def test_no_warnings_gives_empty_tuple_and_empty_metadata_list(tmp_path):
+    exporter_cls = _exporter_cls()
+    result = _run(tmp_path, exporter_cls=exporter_cls)  # mock .warnings is not a list
+    assert not result.warnings
+    assert exporter_cls.return_value.export.call_args.args[2]["processing_warnings"] == []
+
+
+def test_no_speech_result_carries_transcriber_warnings(tmp_path):
+    result = _run(tmp_path, text="  ", warnings=[TRANSCRIBER_WARNING])
+    assert result.no_speech and result.warnings == (TRANSCRIBER_WARNING,)

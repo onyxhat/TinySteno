@@ -222,6 +222,8 @@ def _process_audio(  # pylint: disable=too-many-arguments,too-many-positional-ar
             raise cause from None  # pylint: disable=raising-non-exception
 
     logger.debug(f"Duration: {result.duration_seconds:.0f}s")
+    for text in result.warnings:
+        print(f"Warning: {text}")
     if result.no_speech:
         print("No speech detected, skipping export.")
         return
