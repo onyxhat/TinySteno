@@ -180,7 +180,7 @@ def _split_speakers(
     return False
 
 
-def assemble(  # pylint: disable=too-many-arguments
+def assemble(  # pylint: disable=too-many-arguments,too-many-locals
     channels: dict[str, list[Segment]],
     audio: dict[str, np.ndarray],
     *,
