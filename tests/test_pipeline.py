@@ -425,5 +425,33 @@ def test_fingerprint_changes_with_the_split_settings(tmp_path):
     wav = _real_wav(tmp_path)
     base = transcript_fingerprint(wav, {})
     assert base["speaker_split"] is False and base["max_speakers"] is None
-    assert transcript_fingerprint(wav, {"speaker_split": True}) != base
-    assert transcript_fingerprint(wav, {"max_speakers": 2}) != base
+    assert transcript_fingerprint(wav, {"speaker_split": True, "diarization": True}) != base
+
+
+def test_fingerprint_records_the_effective_split_only(tmp_path):
+    wav = _real_wav(tmp_path)
+    off = transcript_fingerprint(wav, {"speaker_split": True, "diarization": False})
+    assert off["speaker_split"] is False and off["max_speakers"] is None
+    assert off == transcript_fingerprint(wav, {})
+    assert off == transcript_fingerprint(wav, {"max_speakers": 2})
+    assert off == transcript_fingerprint(wav, {"speaker_split": True, "max_speakers": 2})
+    on = transcript_fingerprint(
+        wav, {"speaker_split": True, "diarization": True, "max_speakers": 2})
+    assert on["speaker_split"] is True and on["max_speakers"] == 2
+    assert on != transcript_fingerprint(wav, {"speaker_split": True, "diarization": True})
+
+
+def test_enabling_labels_does_not_reuse_an_unsplit_transcript(tmp_path):
+    transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav,
+         config_overrides={"speaker_split": True, "diarization": False})
+    _run(tmp_path, transcriber=transcriber, wav_path=wav,
+         config_overrides={"speaker_split": True, "diarization": True})
+    assert transcriber.calls == 2
+
+
+def test_speakers_hint_with_the_split_off_reuses_the_transcript(tmp_path):
+    transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav)
+    _run(tmp_path, transcriber=transcriber, wav_path=wav, config_overrides={"max_speakers": 3})
+    assert transcriber.calls == 1

@@ -30,6 +30,10 @@ _DOMINANCE_SHARE = 0.93
 _NEAREST_TURN_SECONDS = 2.0
 
 
+class DiarizerUnavailable(RuntimeError):
+    """Speaker separation cannot run; the message is meant to be shown to the user."""
+
+
 @dataclass(frozen=True)
 class Turn:
     """One span of a single diarized speaker."""

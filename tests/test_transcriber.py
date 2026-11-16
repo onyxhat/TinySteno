@@ -337,3 +337,23 @@ def test_split_progress_decodes_in_the_first_70_percent_then_the_diarizer_fills_
     assert seen == sorted(seen) and seen[-1] == 1.0
     assert 0.7 in seen and 0.85 in seen
     assert max(v for v in seen[: seen.index(0.7) + 1]) == 0.7
+
+
+def test_split_switched_on_without_labels_leaves_progress_as_it_is(tmp_path):
+    import tinysteno.transcriber as mod
+    from tinysteno.transcript import TranscriptOptions
+
+    def run(options):
+        seen = []
+        mod._MODEL_CACHE.clear()
+        data = np.full((16000 * _SECONDS, 2), _LEFT_LEVEL, dtype=np.float32)
+        wav_path = tmp_path / "p.wav"
+        sf.write(str(wav_path), data, 16000, subtype="FLOAT")
+        with patch("tinysteno.transcriber.WhisperModel") as mock_wm:
+            mock_wm.return_value.transcribe.side_effect = (
+                lambda *_a, **_k: (iter(_segments("a")), MagicMock(language="en")))
+            mod.WhisperTranscriber(options=options).transcribe(
+                str(wav_path), diarize=False, on_progress=seen.append)
+        return seen
+
+    assert run(TranscriptOptions(speaker_split=True)) == run(None)

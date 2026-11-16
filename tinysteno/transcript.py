@@ -10,7 +10,8 @@ from typing import Callable, Iterable
 
 import numpy as np
 
-from tinysteno.speaker_split import MIN_AUDIO_SECONDS, Turn, apply_policy, label_segments
+from tinysteno.speaker_split import (
+    MIN_AUDIO_SECONDS, DiarizerUnavailable, Turn, apply_policy, label_segments)
 
 logger = logging.getLogger(__name__)
 
@@ -158,9 +159,12 @@ def _split_speakers(
     if len(audio[key]) / SAMPLE_RATE < MIN_AUDIO_SECONDS:
         return
     base = key or YOU
-    from tinysteno.sherpa_diarizer import DiarizerUnavailable
     try:
         turns = apply_policy(turns_for(base, audio[key]), max_speakers=options.max_speakers)
+        if turns is None:
+            return
+        segments = [seg if seg.speaker else replace(seg, speaker=base) for seg in stamped[key]]
+        relabelled = label_segments(segments, turns, base)
     except DiarizerUnavailable as err:
         warnings.append(str(err))
         return
@@ -168,10 +172,7 @@ def _split_speakers(
         logger.warning("Speaker separation failed", exc_info=True)
         warnings.append(_WARN_SPLIT_FAILED)
         return
-    if turns is None:
-        return
-    segments = [seg if seg.speaker else replace(seg, speaker=base) for seg in stamped[key]]
-    stamped[key] = label_segments(segments, turns, base)
+    stamped[key] = relabelled
 
 
 def assemble(  # pylint: disable=too-many-arguments

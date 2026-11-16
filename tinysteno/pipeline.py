@@ -133,6 +133,7 @@ def transcript_fingerprint(wav_path: str, config: dict) -> dict:
     """What a saved transcript depends on: the recording's size and the transcription settings."""
     backend = config.get("transcription_backend", "local")
     prompt = config.get("whisper_prompt", "")
+    split = bool(config.get("speaker_split", False)) and bool(config.get("diarization", False))
     return {
         "size": Path(wav_path).stat().st_size,
         "backend": backend,
@@ -142,8 +143,8 @@ def transcript_fingerprint(wav_path: str, config: dict) -> dict:
         "vad": bool(config.get("whisper_vad", True)),
         "hallucination_filter": bool(config.get("hallucination_filter", True)),
         "bleed_filter": bool(config.get("bleed_filter", True)),
-        "speaker_split": bool(config.get("speaker_split", False)),
-        "max_speakers": config.get("max_speakers"),
+        "speaker_split": split,
+        "max_speakers": config.get("max_speakers") if split else None,
     }
 
 

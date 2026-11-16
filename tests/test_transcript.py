@@ -483,20 +483,22 @@ def test_max_speakers_caps_the_split():
     result = assemble(channels, {OTHERS: LONG}, diarize=True, language="en",
                       options=TranscriptOptions(speaker_split=True, max_speakers=2),
                       turns_for=lambda _label, _audio: turns)
-    assert len(set(_speakers(result))) <= 2
+    assert _speakers(result) == ["Others", "Speaker 2", "Speaker 2"]
 
 
 def test_split_runs_after_the_filters():
-    channels = {OTHERS: [S(1, "real words"), S(40, "Thanks for watching!")]}
+    # Others holds only a hallucination; the filter empties it, so the split must go to You.
+    channels = {YOU: [S(1, "real words"), S(70, "more words")],
+                OTHERS: [S(2, "Thanks for watching!")]}
     seen = []
 
     def turns_for(label, _audio):
         seen.append(label)
-        return TWO_VOICES
+        return [Turn(0, 60, 0), Turn(60, 90, 1)]
 
-    result = assemble(channels, {OTHERS: LONG}, diarize=True, language="en", options=ON,
+    result = assemble(channels, LONG_BOTH, diarize=True, language="en", options=ON,
                       turns_for=turns_for)
-    assert [s.text for s in result["segments"]] == ["real words"] and seen == [OTHERS]
+    assert seen == [YOU] and _speakers(result) == ["You", "Speaker 2"]
 
 
 def test_saved_numbered_speakers_load_unchanged(tmp_path):
@@ -512,5 +514,37 @@ def test_importing_the_pipeline_does_not_import_sherpa():
         "tinysteno.api_transcriber; "
         "assert 'sherpa_onnx' not in sys.modules and "
         "'tinysteno.sherpa_diarizer' not in sys.modules"
+    )
+    subprocess.run([sys.executable, "-c", check], check=True)
+
+
+def test_a_failure_while_relabelling_keeps_the_segments(monkeypatch):
+    def boom(*_args):
+        raise ValueError("bad turns")
+
+    monkeypatch.setattr("tinysteno.transcript.label_segments", boom)
+    result = assemble({"": [S(1, "a"), S(70, "b")]}, {"": LONG}, diarize=True, language="en",
+                      options=ON, turns_for=lambda _label, _audio: TWO_VOICES)
+    assert _speakers(result) == ["", ""]
+    assert result["warnings"] == ["Speaker separation failed; channel labels were used."]
+
+
+def test_the_exception_type_lives_in_the_policy_module():
+    from tinysteno import sherpa_diarizer, speaker_split
+    assert sherpa_diarizer.DiarizerUnavailable is speaker_split.DiarizerUnavailable
+
+
+def test_lazy_import_holds_after_a_split_runs():
+    check = (
+        "import sys, numpy as np\n"
+        "from tinysteno.speaker_split import Turn\n"
+        "from tinysteno.transcript import assemble, Segment, TranscriptOptions\n"
+        "a = np.full(16000 * 120, 0.1, dtype=np.float32)\n"
+        "r = assemble({'Others': [Segment(1, 2, 'x'), Segment(70, 71, 'y')]}, {'Others': a},\n"
+        "             diarize=True, language='en', options=TranscriptOptions(speaker_split=True),\n"
+        "             turns_for=lambda l, x: [Turn(0, 60, 0), Turn(60, 90, 1)])\n"
+        "assert [s.speaker for s in r['segments']] == ['Others', 'Speaker 2']\n"
+        "assert 'sherpa_onnx' not in sys.modules\n"
+        "assert 'tinysteno.sherpa_diarizer' not in sys.modules\n"
     )
     subprocess.run([sys.executable, "-c", check], check=True)

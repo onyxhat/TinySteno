@@ -23,7 +23,7 @@ from typing import Callable
 
 import numpy as np
 
-from tinysteno.speaker_split import Turn, cluster_threshold
+from tinysteno.speaker_split import DiarizerUnavailable, Turn, cluster_threshold
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +51,6 @@ _DOWNLOAD_FAILED = "Could not download the speaker-separation models"
 _MISSING_EXTRA = 'Speaker separation needs the optional extra: pip install "tinysteno[diarize]"'
 
 
-class DiarizerUnavailable(RuntimeError):
-    """Speaker separation cannot run; the message is meant to be shown to the user."""
 
 
 def default_model_dir() -> Path:
