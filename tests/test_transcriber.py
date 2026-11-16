@@ -265,3 +265,21 @@ def test_split_channels_mono_and_stereo():
     assert list(mono) == [""]
     stereo = split_channels(np.ones((16000, 2), dtype=np.float32), 16000)
     assert list(stereo) == ["You", "Others"]
+
+
+def test_detect_device_uses_cuda_when_a_device_is_present():
+    from tinysteno.transcriber import _detect_device
+    with patch("ctranslate2.get_cuda_device_count", return_value=1):
+        assert _detect_device() == ("cuda", "float16")
+
+
+def test_detect_device_is_not_cuda_without_devices():
+    from tinysteno.transcriber import _detect_device
+    with patch("ctranslate2.get_cuda_device_count", return_value=0):
+        assert _detect_device()[0] != "cuda"
+
+
+def test_detect_device_survives_a_failing_cuda_probe():
+    from tinysteno.transcriber import _detect_device
+    with patch("ctranslate2.get_cuda_device_count", side_effect=RuntimeError("no driver")):
+        assert _detect_device()[0] != "cuda"

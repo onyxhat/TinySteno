@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import platform
 from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
@@ -12,6 +13,8 @@ from faster_whisper import WhisperModel
 from scipy.signal import resample as scipy_resample
 
 from tinysteno.transcript import OTHERS, SAMPLE_RATE, YOU, Segment, assemble, is_silent
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -106,15 +109,14 @@ def _detect_device() -> tuple[str, str]:
 
     Returns (device, compute_type) tuple.
     """
-    # CUDA — check through CTranslate2's own device enumeration
+    # CUDA — ask CTranslate2 how many CUDA devices it can see
     try:
-        from ctranslate2 import get_supported_devices
+        from ctranslate2 import get_cuda_device_count
 
-        devices = get_supported_devices()
-        if "cuda" in devices:
+        if get_cuda_device_count() > 0:
             return ("cuda", "float16")
-    except ImportError:
-        pass
+    except Exception:
+        logger.debug("CUDA detection failed; assuming no CUDA device.", exc_info=True)
 
     # Apple Silicon — CTranslate2 has no MPS backend; "auto" resolves to the CPU
     if platform.system() == "Darwin" and platform.machine() == "arm64":

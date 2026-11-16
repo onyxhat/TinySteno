@@ -79,7 +79,7 @@ Captures microphone audio via `sounddevice` (PortAudio) and, on macOS, system au
 
 **Class:** `WhisperTranscriber`
 
-Transcribes audio files using `faster-whisper` (CTranslate2-optimized Whisper). With `device=auto`, `_detect_device()` picks CUDA (float16) when CTranslate2 reports it, otherwise CPU with int8; on Apple Silicon it passes `auto` + `auto` to CTranslate2, which has no MPS support and so runs on the CPU.
+Transcribes audio files using `faster-whisper` (CTranslate2-optimized Whisper). With `device=auto`, `_detect_device()` picks CUDA (float16) when `ctranslate2.get_cuda_device_count()` is above zero (any error from that probe means no CUDA), otherwise CPU with int8; on Apple Silicon it passes `auto` + `auto` to CTranslate2, which has no MPS support and so runs on the CPU.
 
 **Key behaviors:**
 - `split_channels()` turns the file into 16kHz mono float32 channels keyed by speaker: one-channel audio gives a single unlabelled channel, two or more give `You` (left) and `Others` (right)
@@ -130,8 +130,7 @@ Renders meeting notes using Jinja2 templates and writes Markdown files to the Ob
 **Key behaviors:**
 - Renders the persona's `template.md` with merged context (metadata + schema fields)
 - Uses Jinja2 `StrictUndefined` -- template references to missing fields raise errors
-- Generates YAML frontmatter with title, date, duration, tags, detected_language
-- Frontmatter comes from the persona's template, not from the exporter
+- Frontmatter is whatever the persona's template renders (the exporter adds none itself)
 - Tag deduplication: persona static tags first, LLM-generated tags appended (`dict.fromkeys`, so duplicates are removed)
 - Names the file `<title> (<date>).md`, sanitising filenames (`: \ / * ? " | < >` become `-`, runs of `-` collapse, leading and trailing `-` are stripped; there is no length limit)
 - Never overwrites: if the name exists the note is written as `<title> (<date>) 2.md`, then ` 3`, and so on, taking the first free name
@@ -245,7 +244,7 @@ User runs: tinysteno record --persona rca
 5. Exporter (obsidian.py:ObsidianExporter)
    ├── Merge metadata + schema data into context
    ├── Render persona's Jinja2 template
-   ├── Generate YAML frontmatter
+   ├── (frontmatter comes from the template)
    ├── Append processing warnings, if any
    ├── Write .md file to Obsidian vault (never overwriting an existing note)
    └── Print file path to console

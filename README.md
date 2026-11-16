@@ -368,7 +368,7 @@ Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (CTranslate2) t
 
 **GPU auto-detection:** The first time a local transcriber is created with `device=auto`, TinySteno probes the hardware:
 
-- **CUDA** — detected via CTranslate2's `get_supported_devices()`; uses `cuda` + `float16`
+- **CUDA** — detected via CTranslate2's `get_cuda_device_count()`; uses `cuda` + `float16`
 - **Apple Silicon (M1+)** — detected via `platform.machine() == "arm64"`; uses `auto` + `auto`; CTranslate2 has no MPS backend, so faster-whisper runs on the CPU
 - **CPU fallback** — no GPU found; uses `cpu` + `int8`
 

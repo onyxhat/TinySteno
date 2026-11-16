@@ -47,7 +47,8 @@ class Orchestrator:
         """Generate summary from transcript using persona's prompt and schema.
 
         Splits long transcripts into overlapping chunks, summarizes each chunk,
-        then merges the partial results into a single deduplicated output.
+        then asks the model to merge the partial results (falling back to a local merge
+        that removes only exact duplicates).
 
         Returns a dict with all schema field names as keys.
         Missing/invalid fields from the LLM default to "" (string) or [] (list).
