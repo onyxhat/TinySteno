@@ -3,13 +3,14 @@
 import asyncio
 import os
 import signal
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 from textual.app import App, SystemCommand
 from textual.binding import Binding
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 
 from tinysteno.personas import Persona
 from tinysteno.session import resolve_timeout_seconds
@@ -18,9 +19,15 @@ from tinysteno.tui.guard import RecorderGuard
 from tinysteno.pipeline import PipelineResult
 from tinysteno.tui.home import HomeScreen
 from tinysteno.tui.ledger import SessionLedger
+from tinysteno.tui.menu import DESTINATION_ORDER, MenuScreen
 from tinysteno.tui.processing import ProcessingScreen
 from tinysteno.tui.recording import RecordingScreen
 from tinysteno.tui.result import ResultScreen
+from tinysteno.tui.settings import SettingsScreen
+
+# While one of these is open, a recording or a pipeline run is (or was just) in progress: the
+# Menu and its destinations stay closed, so settings never change under a running session.
+_BUSY_SCREENS = (RecordingScreen, ProcessingScreen, ResultScreen)
 
 
 class TinyStenoApp(App):
@@ -59,17 +66,25 @@ class TinyStenoApp(App):
         self.recorder_guard: RecorderGuard | None = None
         self.exit_signals: list[signal.Signals] = []  # signals routed to action_quit
         self._previous_signal_handlers: dict[signal.Signals, object] = {}
+        # Menu destinations: id -> (label, screen factory). The Menu and the command palette
+        # list them in DESTINATION_ORDER; each management screen registers itself here.
+        self.destinations: dict[str, tuple[str, Callable[[], Screen]]] = {
+            "settings": ("Settings", SettingsScreen),
+        }
 
     def on_mount(self) -> None:
         self._install_signal_handlers()
-        theme = self.config.get("tui_theme")
-        if theme in self.available_themes:
-            self.theme = theme
+        self.use_theme(self.config.get("tui_theme"))
         self.push_screen(HomeScreen(persona=self.initial_persona))
         if self.autostart:
             slug = self.initial_persona or self.config.get("persona", "default")
             # After Home has mounted, so a failed start can fall back to a ready Home screen.
             self.call_after_refresh(self.start_recording, self.initial_name, slug)
+
+    def use_theme(self, name: object) -> None:
+        """Switch to the named theme when it is one of the available themes."""
+        if isinstance(name, str) and name in self.available_themes:
+            self.theme = name
 
     def timeout_seconds_for(self, persona: Persona) -> float | None:
         """Auto-stop limit in seconds for a persona, or None for no limit."""
@@ -171,11 +186,55 @@ class TinyStenoApp(App):
             self.pop_screen()
         self.switch_screen(new_screen)
 
+    # ── the Menu ─────────────────────────────────────────────────────────────
+
+    def _menu_entries(self) -> list[tuple[str, str]]:
+        """(destination id, label) for each registered destination, in DESTINATION_ORDER."""
+        rank = {dest: i for i, dest in enumerate(DESTINATION_ORDER)}
+        ordered = sorted(self.destinations, key=lambda dest: rank.get(dest, len(rank)))
+        return [(dest, self.destinations[dest][0]) for dest in ordered]
+
+    def menu_available(self, screen: Screen | None = None) -> bool:
+        """True when ``screen`` (default: the current one) may open the Menu: Home, or a
+        management screen opened from Home; never a dialog, and never while a recording,
+        processing or result screen is open."""
+        screen = self.screen if screen is None else screen
+        stack = self.screen_stack
+        if isinstance(screen, ModalScreen) or any(isinstance(s, _BUSY_SCREENS) for s in stack):
+            return False
+        return any(isinstance(s, HomeScreen) for s in stack)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "open_menu":
+            return self.menu_available()
+        return True
+
+    def action_open_menu(self) -> None:
+        """Show the Menu (only where menu_available allows it)."""
+        if not self.menu_available():
+            return
+        self.push_screen(MenuScreen(self._menu_entries()), self._menu_chosen)
+
+    def _menu_chosen(self, dest: str | None) -> None:
+        if dest is not None:
+            self.open_destination(dest)
+
+    def open_destination(self, dest: str) -> None:
+        """Open a registered destination's screen; ignored where the Menu is unavailable."""
+        if dest not in self.destinations or not self.menu_available():
+            return
+        _, factory = self.destinations[dest]
+        self.push_screen(factory())
+
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
-        """Command palette entries: Textual's defaults minus Screenshot, plus the app's own."""
+        """Command palette entries: Textual's defaults minus Screenshot, plus the app's own:
+        one per Menu destination, where the Menu is available."""
         for command in super().get_system_commands(screen):
             if command.title != "Screenshot":
                 yield command
+        if self.menu_available(screen):
+            for dest, label in self._menu_entries():
+                yield SystemCommand(label, f"Open {label}", partial(self.open_destination, dest))
 
     def action_screenshot(self, filename: str | None = None, path: str | None = None) -> None:
         """Do nothing: screenshots are made by scripts/tui_screenshots.py, which calls

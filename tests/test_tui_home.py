@@ -116,7 +116,7 @@ async def test_no_personas_shows_a_hint_and_disables_record(tmp_path):
         screen = app.screen
         assert isinstance(screen, HomeScreen)
         hint = screen.query_one("#timeout-hint")
-        assert str(hint.content) == "No personas found. Run tinysteno setup."
+        assert str(hint.content) == "No personas found. Open the menu (m) and choose Personas."
         assert hint.has_class("error")
         assert screen.query_one("#record").disabled
         await pilot.press("r")

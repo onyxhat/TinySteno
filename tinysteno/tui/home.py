@@ -11,7 +11,7 @@ from textual.widgets.option_list import Option
 from tinysteno.personas import PersonaInvalidError, PersonaNotFoundError
 
 NO_RECORDINGS = "No recordings yet"
-NO_PERSONAS = "No personas found. Run tinysteno setup."
+NO_PERSONAS = "No personas found. Open the menu (m) and choose Personas."
 
 
 def recent_recordings(directory: Path, limit: int = 8) -> list[Path]:
@@ -25,13 +25,17 @@ def recent_recordings(directory: Path, limit: int = 8) -> list[Path]:
 class HomeScreen(Screen):
     """Landing screen."""
 
-    BINDINGS = [("r", "record", "Record")]
+    BINDINGS = [("r", "record", "Record"), ("m", "app.open_menu", "Menu")]
 
     def __init__(self, persona: str | None = None) -> None:
         super().__init__()
         self._persona_arg = persona
         self._personas: list[str] = []
         self._recent: list[Path] = []
+        # The persona Home itself put in the Select (the configured default); once the user
+        # picks another (or gave a valid --persona), a new default no longer replaces it.
+        self._default_shown: str | None = None
+        self._persona_picked = False
 
     def compose(self) -> ComposeResult:
         app = self.app
@@ -39,6 +43,8 @@ class HomeScreen(Screen):
         # --persona first, then the configured default, then the first persona there is.
         candidates = [self._persona_arg, app.config.get("persona"), *personas]
         initial = next((slug for slug in candidates if slug in personas), Select.NULL)
+        self._persona_picked = self._persona_arg in personas
+        self._default_shown = initial if isinstance(initial, str) else None
         self._recent = recent_recordings(app.deps.recordings_dir)
         yield Header()
         with Vertical(id="panel"):
@@ -75,14 +81,27 @@ class HomeScreen(Screen):
             )
 
     def on_screen_resume(self) -> None:
-        """Back from another screen: show recordings made meanwhile, Record ready."""
+        """Back from another screen: show recordings made meanwhile (from the recordings
+        folder, which a settings save may have changed), the new default persona unless the
+        user picked one, and Record ready."""
         recent = recent_recordings(self.app.deps.recordings_dir)
         if recent != self._recent:
             self._recent = recent
             listing = self.query_one("#recent", OptionList)
             listing.clear_options()
             listing.add_options(self._recent_options())
+        self._follow_default_persona()
+        self._update_hint()  # the time limit may have changed in Settings
         self.query_one("#record", Button).focus()
+
+    def _follow_default_persona(self) -> None:
+        default = self.app.config.get("persona")
+        if self._persona_picked or default not in self._personas:
+            return
+        select = self.query_one("#persona", Select)
+        if select.value != default:
+            self._default_shown = default
+            select.value = default
 
     def _slug(self) -> str:
         value = self.query_one("#persona", Select).value
@@ -125,6 +144,8 @@ class HomeScreen(Screen):
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "persona":
+            if isinstance(event.value, str) and event.value != self._default_shown:
+                self._persona_picked = True
             self._update_hint()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:

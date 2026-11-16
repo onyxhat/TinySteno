@@ -241,3 +241,91 @@ ResultScreen {
     padding: 0 2;
     color: $text-muted;
 }
+
+/* ── Menu ──────────────────────────────────────────────────────────────── */
+
+MenuScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+#menu-box {
+    width: 40;
+    max-width: 100%;
+    height: auto;
+    padding: 1 2;
+    border: round $accent;
+    background: $surface;
+}
+
+#menu-title {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#menu {
+    height: auto;
+    max-height: 12;
+}
+
+/* ── Confirmation (shares the box, title and buttons of the discard dialog) ── */
+
+ConfirmScreen {
+    align: center middle;
+    background: $background 60%;
+}
+
+/* ── Settings ──────────────────────────────────────────────────────────── */
+
+SettingsScreen {
+    align: center top;
+}
+
+#settings-panel {
+    width: 100%;
+    max-width: 88;
+    height: 1fr;
+    padding: 0 1;
+}
+
+#settings-form {
+    height: 1fr;
+}
+
+.setting {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.setting-label {
+    text-style: bold;
+}
+
+.setting-help {
+    color: $text-muted;
+}
+
+#load-error {
+    margin: 1 0;
+    color: $error;
+}
+
+#config-path {
+    color: $text-muted;
+}
+
+#form-error {
+    display: none;
+    height: auto;
+    color: $error;
+}
+
+#settings-buttons {
+    height: 1;
+    margin: 1 0 0 0;
+    align-horizontal: right;
+}
+
+#settings-buttons Button {
+    margin-left: 2;
+}
