@@ -25,6 +25,8 @@ from tinysteno.transcript import (
     audible_channels, scale_progress, split_enabled)
 
 REJECTED_WARNING = "The transcription server rejected speaker separation; channel labels were used."
+NO_LABELS_WARNING = (
+    "The transcription server returned no speaker labels; channel labels were used.")
 
 
 class _Decoded(NamedTuple):
@@ -114,6 +116,8 @@ class ApiTranscriber:
             on_progress=scale_progress(on_progress, SPLIT_DECODE_SHARE, 1.0), gains=gains)
         if rejected:
             result["warnings"] = [*result.get("warnings", []), REJECTED_WARNING]
+        elif server_label is not None and channels[server_label] and not server_turns[server_label]:
+            result["warnings"] = [*result.get("warnings", []), NO_LABELS_WARNING]
         if splitting and on_progress:
             on_progress(1.0)
         return result
@@ -179,6 +183,7 @@ class ApiTranscriber:
             if start is None:
                 timed = False
                 continue
+            start = max(start, 0.0)  # a negative time is a server glitch, not before the audio
             end = _number(_field(raw, "end"))
             end = start if end is None else max(end, start)
             segments.append(Segment(start, end, text))
@@ -216,6 +221,6 @@ def _number(value: object) -> float | None:
     """A finite float from a number or numeric string, else None."""
     try:
         result = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return result if math.isfinite(result) else None

@@ -464,7 +464,7 @@ def test_rejection_without_the_field_is_not_retried(mock_openai, tmp_path):
                     server=False)
 
 
-def test_server_without_speaker_labels_changes_nothing(mock_openai, tmp_path):
+def test_server_without_speaker_labels_keeps_channel_labels_and_says_so(mock_openai, tmp_path):
     _, client = mock_openai
     plain = _response("them", [_spk(1.0, 31.0, "a"), _spk(40.0, 100.0, "b", ""),
                                _spk(101.0, 102.0, "c", 7)])
@@ -472,7 +472,8 @@ def test_server_without_speaker_labels_changes_nothing(mock_openai, tmp_path):
         result = _server_run(client, tmp_path, [_LEFT, plain])
     local.assert_not_called()
     assert {s.speaker for s in result["segments"]} == {"You", "Others"}
-    assert not result["warnings"]
+    assert result["warnings"] == [
+        "The transcription server returned no speaker labels; channel labels were used."]
 
 
 def test_malformed_times_yield_no_server_turns(mock_openai, tmp_path):
@@ -547,4 +548,45 @@ def test_mono_recording_without_server_labels_stays_unlabelled(mock_openai, tmp_
                side_effect=AssertionError("local diarizer ran")):
         result = _server_run(client, tmp_path, [reply], path=_mono(tmp_path))
     assert {s.speaker for s in result["segments"]} == {""}
-    assert not result["warnings"]
+    assert result["warnings"] == [
+        "The transcription server returned no speaker labels; channel labels were used."]
+
+
+def test_negative_times_are_clamped_and_the_result_can_be_saved(mock_openai, tmp_path):
+    from tinysteno.transcript import load_transcript, save_transcript
+    _, client = mock_openai
+    segs = [{"start": -0.4, "end": 1.0, "text": "early"},
+            {"start": -2.0, "end": -1.0, "text": "before"}]
+    result = _run(client, tmp_path, _response("early before", segs))
+    assert [(s.start, s.end) for s in result["segments"]] == [(0.0, 1.0), (0.0, 0.0)]
+    wav = tmp_path / "audio.wav"
+    save_transcript(str(wav), result, {"k": 1})
+    assert load_transcript(str(wav), {"k": 1}) is not None
+
+
+def test_overflowing_times_are_treated_as_missing(mock_openai, tmp_path):
+    _, client = mock_openai
+    segs = [{"start": 1.0, "end": 10 ** 400, "text": "a"}]
+    result = _run(client, tmp_path, _response("a", segs))
+    assert [(s.start, s.end) for s in result["segments"]] == [(1.0, 1.0)]
+
+
+NO_LABELS = "The transcription server returned no speaker labels; channel labels were used."
+
+
+def test_no_server_labels_on_the_diarized_channel_is_a_warning(mock_openai, tmp_path):
+    _, client = mock_openai
+    plain = _response("them", [_spk(1.0, 31.0, "a"), _spk(40.0, 100.0, "b")])
+    result = _server_run(client, tmp_path, [_LEFT, plain])
+    assert result["warnings"] == [NO_LABELS]
+
+
+def test_no_labels_warning_needs_server_diarization_and_speech(mock_openai, tmp_path):
+    _, client = mock_openai
+    plain = _response("them", [_spk(1.0, 31.0, "a"), _spk(40.0, 100.0, "b")])
+    assert not _server_run(client, tmp_path, [_LEFT, plain], server=False)["warnings"]
+    empty = _server_run(client, tmp_path, [_response("", [])], path=_long_stereo(
+        tmp_path, right_only=True))
+    assert NO_LABELS not in empty["warnings"]
+    labelled = _server_run(client, tmp_path, [_LEFT, _RIGHT])
+    assert not labelled["warnings"]
