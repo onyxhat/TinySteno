@@ -112,13 +112,37 @@ def test_delete_of_a_missing_file_raises_filenotfound(tmp_path):
 def test_sidecar_failure_propagates_after_the_wav_is_gone(tmp_path, monkeypatch):
     touch(tmp_path / "a.wav")
     touch(tmp_path / "a.wav.transcript.json")
-    real_unlink = type(tmp_path).unlink
+    real_unlink = os.unlink
 
-    def flaky(self, *args, **kwargs):
-        if self.name.endswith(".transcript.json"):
+    def flaky(name, *args, **kwargs):
+        if str(name).endswith(".transcript.json"):
             raise PermissionError("nope")
-        return real_unlink(self, *args, **kwargs)
-    monkeypatch.setattr(type(tmp_path), "unlink", flaky)
+        return real_unlink(name, *args, **kwargs)
+    monkeypatch.setattr(os, "unlink", flaky)
+    monkeypatch.setattr(os, "supports_dir_fd", {flaky, os.stat})
     with pytest.raises(PermissionError):
         delete_recording(tmp_path, tmp_path / "a.wav")
     assert not (tmp_path / "a.wav").exists()
+
+
+def test_delete_accepts_str_arguments(tmp_path):
+    touch(tmp_path / "a.wav")
+    touch(tmp_path / "a.wav.levels.json")
+    removed = delete_recording(str(tmp_path), str(tmp_path / "a.wav"))
+    assert [p.name for p in removed] == ["a.wav", "a.wav.levels.json"]
+    assert not list(tmp_path.iterdir())
+
+
+def test_delete_fallback_without_dir_fd_support(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "supports_dir_fd", set())
+    precious = touch(tmp_path / "precious.json")
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    touch(rec / "a.wav")
+    (rec / "a.wav.transcript.json").symlink_to(precious)
+    (rec / "a.wav.levels.json").mkdir()
+    removed = delete_recording(rec, rec / "a.wav")
+    assert [p.name for p in removed] == ["a.wav", "a.wav.transcript.json"]
+    assert precious.exists() and (rec / "a.wav.levels.json").is_dir()
+    with pytest.raises(FileNotFoundError):
+        delete_recording(rec, rec / "a.wav")
