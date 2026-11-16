@@ -1,5 +1,6 @@
 """UI-free transcribe -> summarize -> export pipeline with per-stage reporting."""
 
+import hashlib
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -171,9 +172,10 @@ def transcript_fingerprint(wav_path: str, config: dict) -> dict:
         "max_speakers": config.get("max_speakers") if split else None,
     }
     if backend == "api":
-        # The server that transcribed it (the LLM endpoint when no separate one is set).
-        fingerprint["whisper_base_url"] = (
-            config.get("whisper_base_url") or config.get("base_url") or "")
+        # Which server transcribed it (the LLM endpoint when no separate one is set), as a
+        # digest: the URL can carry credentials, and the sidecar sits in the (synced) vault.
+        url = config.get("whisper_base_url") or config.get("base_url") or ""
+        fingerprint["server_id"] = hashlib.sha256(str(url).encode("utf-8")).hexdigest()
     if split and backend == "api" and config.get("whisper_api_diarize"):
         # Present only while it is in effect, so setting the option while the split is off
         # (or on the local backend) does not make a saved transcript stale.

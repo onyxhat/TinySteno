@@ -1,5 +1,6 @@
 """Tests for tinysteno.pipeline."""
 # pylint: disable=unused-argument
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -548,12 +549,31 @@ def test_prompt_for_legacy_text_names_the_recorder_only_when_you_appears(tmp_pat
 def test_fingerprint_tracks_the_transcription_server_on_the_api_backend_only(tmp_path):
     wav = _real_wav(tmp_path)
     api = {"transcription_backend": "api", "base_url": "http://llm/v1"}
-    assert transcript_fingerprint(wav, api)["whisper_base_url"] == "http://llm/v1"
+    assert len(transcript_fingerprint(wav, api)["server_id"]) == 64
+    assert (transcript_fingerprint(wav, api)
+            == transcript_fingerprint(wav, {**api, "whisper_base_url": "http://llm/v1"}))
     assert (transcript_fingerprint(wav, {**api, "whisper_base_url": "http://a/v1"})
             != transcript_fingerprint(wav, {**api, "whisper_base_url": "http://b/v1"}))
+    assert (transcript_fingerprint(wav, {**api, "whisper_base_url": "http://a/v1"})
+            == transcript_fingerprint(wav, {**api, "whisper_base_url": "http://a/v1"}))
     local = {"whisper_base_url": "http://a/v1"}
-    assert "whisper_base_url" not in transcript_fingerprint(wav, local)
+    assert "server_id" not in transcript_fingerprint(wav, local)
     assert transcript_fingerprint(wav, local) == transcript_fingerprint(wav, {})
+
+
+def test_fingerprint_and_saved_transcript_never_hold_the_server_url(tmp_path):
+    transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
+    url = "https://alice:secret@whisper.example.com/v1?token=tok123"
+    config = {"transcription_backend": "api", "whisper_base_url": url}
+    fingerprint = json.dumps(transcript_fingerprint(wav, config))
+    _run(tmp_path, transcriber=transcriber, wav_path=wav, config_overrides=config)
+    saved = Path(wav + ".transcript.json").read_text(encoding="utf-8")
+    for text in (fingerprint, saved):
+        for leak in (url, "whisper.example.com", "alice", "secret", "tok123", "https://"):
+            assert leak not in text
+    _run(tmp_path, transcriber=transcriber, wav_path=wav, config_overrides=config)
+    assert transcriber.calls == 1  # the digest still matches on the next run
+
 
 
 def test_pipeline_error_carries_the_warnings_gathered_so_far(tmp_path):
