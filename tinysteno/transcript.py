@@ -1,6 +1,6 @@
 """Transcript segments and the single assembly path shared by both backends."""
 from dataclasses import dataclass, replace
-from typing import Iterable
+from typing import Callable, Iterable
 
 import numpy as np
 
@@ -98,6 +98,9 @@ def assemble(
     def level(label: str, start: float, end: float) -> float:
         return _level_over(audio, label, start, end)
 
+    def channel_level(label: str) -> Callable[[float, float], float]:
+        return lambda start, end: level(label, start, end)
+
     if options.drop_hallucinations:
         stamped = {
             label: drop_hallucinations(
@@ -107,7 +110,8 @@ def assemble(
             for label, segs in stamped.items()
         }
     if options.suppress_bleed and YOU in stamped and OTHERS in stamped:
-        stamped[YOU], stamped[OTHERS] = suppress_bleed(stamped[YOU], stamped[OTHERS], level)
+        stamped[YOU], stamped[OTHERS] = suppress_bleed(
+            stamped[YOU], stamped[OTHERS], channel_level(YOU), channel_level(OTHERS))
 
     segments = interleave(seg for segs in stamped.values() for seg in segs)
     longest = max((len(arr) for arr in audio.values()), default=0)

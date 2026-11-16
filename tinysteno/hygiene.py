@@ -136,14 +136,16 @@ def _bleed_partner(seg: Segment, mic: list[Segment], paired: set[int]) -> int | 
 def suppress_bleed(
         mic: list[Segment],
         system: list[Segment],
-        rms: Callable[[str, float, float], float]) -> tuple[list[Segment], list[Segment]]:
+        mic_rms: Callable[[float, float], float],
+        system_rms: Callable[[float, float], float]) -> tuple[list[Segment], list[Segment]]:
     """Drop the quieter copy of a sentence transcribed on both channels.
 
     Speaker audio leaking into the microphone is heard twice. For each system segment the
     nearest unpaired microphone segment starting within 3 s is its candidate; if both texts
     are at least 15 characters and their token sets overlap (Jaccard >= 0.5) the copy with the
-    lower `rms(speaker, start, end)` is removed (the microphone copy on a tie). Returns new
-    `(mic, system)` lists; the inputs are untouched.
+    lower level is removed, measured with `mic_rms(start, end)` / `system_rms(start, end)` (the
+    channel a segment came from, never its speaker label); the microphone copy on a tie.
+    Returns new `(mic, system)` lists; the inputs are untouched.
     """
     paired: set[int] = set()
     drop_mic: set[int] = set()
@@ -160,8 +162,8 @@ def suppress_bleed(
                 or _token_similarity(mic_seg.text, sys_seg.text) < _BLEED_SIMILARITY):
             continue
         paired.add(i)
-        mic_level = rms(mic_seg.speaker, mic_seg.start, mic_seg.end)
-        sys_level = rms(sys_seg.speaker, sys_seg.start, sys_seg.end)
+        mic_level = mic_rms(mic_seg.start, mic_seg.end)
+        sys_level = system_rms(sys_seg.start, sys_seg.end)
         if sys_level < mic_level:
             drop_system.add(j)
             _log_removed("speaker bleed", sys_seg)

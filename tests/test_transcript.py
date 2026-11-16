@@ -116,3 +116,24 @@ def test_assemble_drops_credits_per_channel_but_still_warns_for_loud_empty_chann
     result = assemble(channels, audio, diarize=True, language="en")
     assert result["segments"] == []
     assert result["warnings"] == ["System audio was present but no speech was recognised."]
+
+
+def _bleed_audio(mic_level, system_level):
+    return {YOU: np.full(64000, mic_level, dtype=np.float32),
+            OTHERS: np.full(64000, system_level, dtype=np.float32)}
+
+
+def test_assemble_measures_bleed_by_channel_not_by_speaker_label():
+    text = "we should move the launch to friday"
+    channels = {YOU: [Segment(1.1, 3.0, text, "Alice")],
+                OTHERS: [Segment(1.0, 3.0, text)]}
+    result = assemble(channels, _bleed_audio(0.01, 0.2), diarize=True, language="en")
+    assert [(s.speaker, s.text) for s in result["segments"]] == [(OTHERS, text)]
+
+
+def test_assemble_drops_a_relabelled_system_copy_when_the_microphone_is_louder():
+    text = "we should move the launch to friday"
+    channels = {YOU: [Segment(1.1, 3.0, text)],
+                OTHERS: [Segment(1.0, 3.0, text, "Speaker 2")]}
+    result = assemble(channels, _bleed_audio(0.2, 0.01), diarize=True, language="en")
+    assert [(s.speaker, s.text) for s in result["segments"]] == [(YOU, text)]
