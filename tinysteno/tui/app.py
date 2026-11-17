@@ -300,24 +300,28 @@ class TinyStenoApp(App):
         self.clear_notifications()
 
     async def action_quit(self) -> None:
-        """Quit (q, ctrl+q, the palette); ask first when the screen has unsaved changes.
+        """Quit (q, ctrl+q, the palette); ask first when any open screen has unsaved changes.
 
         A screen with edits that quitting would lose implements ``has_unsaved_changes() ->
-        bool``; the topmost screen that is not a dialog is asked. Exit signals skip this.
+        bool``; every screen in the stack is asked, not only the top one (Settings may lie
+        under the System check). Exit signals skip this.
         """
         if self._asking_to_quit:
             return
-        screen = next(
-            (s for s in reversed(self.screen_stack) if not isinstance(s, ModalScreen)), None
-        )
-        has_unsaved = getattr(screen, "has_unsaved_changes", None)
-        if callable(has_unsaved) and has_unsaved():
+        if self._any_unsaved_changes():
             self._asking_to_quit = True
             self.push_screen(
                 ConfirmScreen("Quit and discard unsaved changes?", "Quit"), self._quit_answered
             )
             return
         await self._quit_now()
+
+    def _any_unsaved_changes(self) -> bool:
+        for screen in self.screen_stack:
+            has_unsaved = getattr(screen, "has_unsaved_changes", None)
+            if callable(has_unsaved) and has_unsaved():
+                return True
+        return False
 
     def _quit_answered(self, confirmed: bool | None) -> None:
         self._asking_to_quit = False

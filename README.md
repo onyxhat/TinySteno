@@ -154,7 +154,7 @@ Press `m` on Home, or open the command palette (`Ctrl+P`) and pick an entry, to 
 
 ![Settings screen: the Notes section with the vault, notes folder, recordings folder and default persona](docs/images/tui-settings.svg)
 
-- **Save and Back.** `Ctrl+S` saves and closes the screen; `Esc` goes back, and asks first when you have unsaved changes (quitting with `Ctrl+Q` asks too). A field that is not valid is named under the form, focus moves to it, and nothing is written.
+- **Save and Back.** `Ctrl+S` saves and closes the screen; `Esc` goes back, and asks first when you have unsaved changes (quitting with `q` or `Ctrl+Q` asks too, even from another screen opened over Settings). A field that is not valid is named under the form, focus moves to it, and nothing is written.
 - **Only what you changed is written, and settings the screen does not show are kept.** Keys in `config.yaml` that the form has no field for (for example a key you added by hand) stay in the file. Blanking an optional field removes its key.
 - **The file is rewritten.** Saving writes the whole file again, so comments and key order in a `config.yaml` you edited by hand are not preserved. `tinysteno setup` does the same. A new file is created with mode `600`; an existing file keeps its mode; a symlinked `config.yaml` is written through to its target. A read-only file is refused, and the file is left as it was.
 - **When a change takes effect.** The next recording and the next processing run use the new settings; a run already in progress keeps the settings it started with. The time limit on Home and the recordings folder follow a saved change at once.
