@@ -29,7 +29,7 @@ from tinysteno.config import (
     config_dir as _config_dir, config_path as _config_path,
     DEFAULT_CONFIG, ensure_config_file, read_stored, invalid_settings, load_config,
     recordings_dir as _recordings_dir,
-    validate_config as _validate_config, update_config, write_config as _write_config,
+    validate_config as _validate_config, update_config,
     is_timeout_minutes as _is_timeout_minutes, is_positive_number as _is_positive_number,
     is_speaker_count as _is_speaker_count,
 )

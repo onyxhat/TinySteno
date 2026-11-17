@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from tinysteno.config import config_path, read_stored, recordings_dir, validate_config
+from tinysteno.config import (
+    DEFAULT_CONFIG, config_path, read_stored, recordings_dir, validate_config,
+)
 from tinysteno.personas import load_persona
 
 # Seams for tests: patch these, not importlib itself.
@@ -83,8 +85,9 @@ def _recordings_folder(config: dict) -> Check:
 
 
 def _default_persona(config: dict) -> Check:
-    load_persona(config["persona"])
-    return Check("Default persona", True, str(config["persona"]))
+    slug = config.get("persona", DEFAULT_CONFIG["persona"])
+    load_persona(slug)
+    return Check("Default persona", True, str(slug))
 
 
 def _speaker_separation() -> Check:

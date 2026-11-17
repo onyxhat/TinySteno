@@ -188,16 +188,3 @@ def from_text(item: Setting, text: str) -> object:
             raise _fail(item, f"must be one of {', '.join(item.choices)}")
         return int(text) if item.key == "channels" else text
     return text
-
-
-def collect(values: dict[str, object]) -> dict:
-    """Turn field values into config changes: {key: value}, None for a blank optional.
-
-    A str is parsed with from_text; any other value passes through unchanged. Raises
-    ValueError on the first unknown key or invalid value.
-    """
-    changes: dict = {}
-    for key, value in values.items():
-        item = setting(key)
-        changes[key] = from_text(item, value) if isinstance(value, str) else value
-    return changes

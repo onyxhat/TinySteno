@@ -3,9 +3,9 @@ import re
 
 import pytest
 
-from tinysteno.config import DEFAULT_CONFIG, validate_config
+from tinysteno.config import DEFAULT_CONFIG
 from tinysteno.settings import (
-    SECTIONS, SETTINGS, accepts_any, collect, from_text, setting, to_text,
+    SECTIONS, SETTINGS, accepts_any, from_text, setting, to_text,
 )
 
 
@@ -69,21 +69,10 @@ def test_bool_round_trip():
     assert from_text(s, to_text(s, False)) is False
 
 
-def test_collected_defaults_pass_validation():
-    validate_config(collect({s.key: DEFAULT_CONFIG[s.key] for s in SETTINGS
-                             if s.key in DEFAULT_CONFIG}))
 
 
-def test_collect_mixes_text_and_typed_values_and_blank_optional_is_none():
-    got = collect({"session_timeout_minutes": "30", "auto_title": False, "max_speakers": " "})
-    assert got == {"session_timeout_minutes": 30, "auto_title": False, "max_speakers": None}
 
 
-def test_collect_rejects_unknown_key_and_first_invalid_value():
-    with pytest.raises(ValueError):
-        collect({"nonsense": "1"})
-    with pytest.raises(ValueError, match=re.escape(by_key("sample_rate").label)):
-        collect({"sample_rate": "x", "channels": "9"})
 
 
 def test_secret_errors_never_echo_the_text():

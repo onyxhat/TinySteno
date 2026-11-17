@@ -256,7 +256,7 @@ UI-free (no CLI, argparse, rich or Textual). `DEFAULT_CONFIG`; `config_dir()` / 
 
 ### 12. `tinysteno/settings.py` -- Editable Settings
 
-UI-free. `SECTIONS` (Notes, Summary (LLM), Transcription, Speakers, Recording, Appearance) and `SETTINGS`, a tuple of frozen `Setting(key, label, kind, section, help, choices, optional, essential)` with kinds `text`, `path`, `secret`, `int`, `number`, `bool`, `choice`. `essential` marks what the Setup guide asks for. `to_text`, `from_text` (parses a field, raising `ValueError` that starts with the label; a blank optional setting gives `None`, meaning "remove the key"), `collect` and `setting(key)`. To add an editable setting, add it to `SETTINGS` (and to `DEFAULT_CONFIG` when it has a default).
+UI-free. `SECTIONS` (Notes, Summary (LLM), Transcription, Speakers, Recording, Appearance) and `SETTINGS`, a tuple of frozen `Setting(key, label, kind, section, help, choices, optional, essential)` with kinds `text`, `path`, `secret`, `int`, `number`, `bool`, `choice`. `essential` marks what the Setup guide asks for. `to_text`, `from_text` (parses a field, raising `ValueError` that starts with the label; a blank optional setting gives `None`, meaning "remove the key") and `setting(key)`. To add an editable setting, add it to `SETTINGS` (and to `DEFAULT_CONFIG` when it has a default).
 
 ### 13. `tinysteno/doctor.py` -- Setup Checks
 

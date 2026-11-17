@@ -66,6 +66,16 @@ def test_default_persona_ok_when_seeded(tmp_path):
     assert by_name(run_checks(make_config(tmp_path)))["Default persona"].ok
 
 
+def test_a_config_without_a_persona_checks_the_default_one(tmp_path, monkeypatch):
+    asked = []
+    monkeypatch.setattr("tinysteno.doctor.load_persona", asked.append)
+    config = make_config(tmp_path)
+    del config["persona"]
+    check = by_name(run_checks(config))["Default persona"]
+    assert check == Check("Default persona", True, "default")
+    assert asked == ["default"]
+
+
 def test_recordings_folder_ok_when_it_can_be_created(tmp_path):
     config = make_config(tmp_path, recordings_path=str(tmp_path / "new" / "deep"))
     check = by_name(run_checks(config))["Recordings folder"]
