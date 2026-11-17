@@ -1,5 +1,6 @@
 """Personas screen: which personas exist and are valid, the default, restoring the built-ins."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from rich.text import Text
@@ -17,6 +18,7 @@ from tinysteno.tui.formscreen import readable_reason
 
 LOADING = "Loading…"
 RESTORING = "Restoring…"
+RESTORE_NOTE = "Restoring also brings back built-in personas you have deleted."
 NO_PERSONAS = "No personas found. Press b to restore the built-in ones."
 RESTORE_QUESTION = ("Restore the built-in personas? Your changes to them will be overwritten; "
                     "personas you added are kept.")
@@ -42,6 +44,16 @@ class _Listing:
     rows: list[_Row]
     list_error: str | None
     default: str | None
+
+
+def _cell(value: object) -> str:
+    """Any value as one capped line of text: None is empty, nothing here can raise."""
+    if value is None:
+        return ""
+    try:
+        return _one_line(value)
+    except Exception:
+        return type(value).__name__
 
 
 def _auto_stop(persona: Persona | None) -> str:
@@ -74,6 +86,7 @@ class PersonasScreen(Screen):
         self._list_error: str | None = None
         self._load: Worker | None = None       # the read in progress, None when idle
         self._restore: Worker | None = None    # the restore in progress, None when idle
+        self._poll = None                      # timer watching a restore this screen did not start
         self._leaving = False                  # (not `_closing`: Textual's message pump)
 
     def compose(self) -> ComposeResult:
@@ -81,6 +94,7 @@ class PersonasScreen(Screen):
         with Vertical(id="personas-panel"):
             yield Static(LOADING, id="personas-note", markup=False)
             yield DataTable(id="personas", cursor_type="row", zebra_stripes=True)
+            yield Static(RESTORE_NOTE, id="personas-footnote", markup=False)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -88,11 +102,23 @@ class PersonasScreen(Screen):
         for label in COLUMNS:
             table.add_column(label)
         table.focus()
+        if self.app.restoring_personas.is_set():  # an earlier visit's restore is running
+            self._poll = self.set_interval(0.1, self._restore_over)
         self._reload()
+
+    def _restore_over(self) -> None:
+        if self.app.restoring_personas.is_set() or self._restore is not None:
+            return
+        if self._poll is not None:
+            self._poll.stop()
+            self._poll = None
+        if not self._leaving:
+            self._reload()
 
     @property
     def _busy(self) -> bool:
-        return self._load is not None or self._restore is not None
+        return (self._load is not None or self._restore is not None
+                or self.app.restoring_personas.is_set())
 
     # ── reading ──────────────────────────────────────────────────────────────
 
@@ -131,11 +157,24 @@ class PersonasScreen(Screen):
         parts = []
         if row.slug == self._default:
             parts.append("default")
-        parts.append("ok" if row.error is None else f"Invalid: {row.error}")
-        return ", ".join(parts) if row.error is not None else parts[0]
+        if row.error is not None:
+            parts.append(f"Invalid: {row.error}")
+        elif not parts:
+            parts.append("ok")
+        return ", ".join(parts)
+
+    def _cells(self, row: _Row) -> tuple[str, str, str, str]:
+        """The four cells of a row; a row that cannot be formatted shows as invalid."""
+        try:
+            persona = row.persona
+            return (_cell(row.slug), _cell(persona.name) if persona else "",
+                    _auto_stop(persona), _cell(self._status(row)))
+        except Exception as err:
+            row.persona, row.error = None, type(err).__name__
+            return _cell(row.slug), "", "", _cell(self._status(row))
 
     def _notice(self) -> str:
-        if self._restore is not None:
+        if self._restore is not None or self.app.restoring_personas.is_set():
             return RESTORING
         if self._load is not None:
             return LOADING
@@ -152,10 +191,7 @@ class PersonasScreen(Screen):
         keep = table.ordered_rows[table.cursor_row].key.value if table.row_count else None
         table.clear()
         for row in self._rows:
-            persona = row.persona
-            cells = (row.slug, persona.name if persona else "", _auto_stop(persona),
-                     self._status(row))
-            table.add_row(*(Text(cell) for cell in cells), key=row.slug)
+            table.add_row(*(Text(cell) for cell in self._cells(row)), key=row.slug)
         if keep is not None and any(r.slug == keep for r in self._rows):
             table.move_cursor(row=table.get_row_index(keep))
         note = self.query_one("#personas-note", Static)
@@ -202,6 +238,17 @@ class PersonasScreen(Screen):
                         markup=False)
         self._reload()
 
+    @staticmethod
+    def _seeder(app) -> Callable[[], dict[str, list[str]]]:
+        """The restore as a thread function that clears the app's flag however the screen
+        was left (it holds the app, not the screen)."""
+        def seed() -> dict[str, list[str]]:
+            try:
+                return app.deps.seed_personas()
+            finally:
+                app.restoring_personas.clear()
+        return seed
+
     # ── actions ──────────────────────────────────────────────────────────────
 
     def _can_act(self) -> bool:
@@ -222,6 +269,13 @@ class PersonasScreen(Screen):
         row = self._rows[table.cursor_row]
         app = self.app
         if row.error is not None:
+            app.notify("Cannot use an invalid persona as the default", severity="error")
+            return
+        try:
+            app.deps.load_persona(row.slug)     # it may have been broken since the listing
+        except Exception as err:
+            row.persona, row.error = None, _one_line(err) or type(err).__name__
+            self._show_rows()
             app.notify("Cannot use an invalid persona as the default", severity="error")
             return
         try:
@@ -253,8 +307,9 @@ class PersonasScreen(Screen):
     def _restore_answered(self, confirmed: bool | None) -> None:
         if not confirmed or not self._can_act():
             return
+        self.app.restoring_personas.set()
         self._restore = self.run_worker(
-            self.app.deps.seed_personas, thread=True, exit_on_error=False,
+            self._seeder(self.app), thread=True, exit_on_error=False,
             group="personas-restore",
         )
         self._show_rows()

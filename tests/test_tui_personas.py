@@ -332,3 +332,163 @@ async def test_escape_goes_back_and_the_menu_lists_personas(tmp_path):
         await pilot.press("escape")
         await pilot.pause()
         assert isinstance(app.screen, HomeScreen)
+
+
+async def confirm_restore(app, pilot):
+    """Press b, then Restore, and let the screen react."""
+    await pilot.press("b")
+    await pilot.pause()
+    app.screen.query_one("#confirm", Button).press()
+    await pilot.pause()
+
+
+async def test_odd_persona_names_never_break_the_table(tmp_path):
+    deps = make_deps(
+        tmp_path, personas=["default", "int", "none", "lst", "long"],
+        persona_names={"int": 2024, "none": None, "lst": ["a", "b"], "long": "line\n" * 100})
+    app = TinyStenoApp(CONFIG, deps)
+    async with app.run_test() as pilot:
+        screen = await open_personas(app, pilot)
+        shown = rows(screen)
+        assert [r[0] for r in shown] == ["default", "int", "none", "lst", "long"]
+        assert [r[1] for r in shown[1:4]] == ["2024", "", "['a', 'b']"]
+        assert "\n" not in shown[4][1] and 0 < len(shown[4][1]) <= 120
+        await confirm_restore(app, pilot)
+        await pilot.pause()
+        assert ("Nothing to restore", "information") in notes(app)
+
+
+async def test_a_name_that_cannot_be_printed_shows_its_type(tmp_path):
+    class Bad:  # pylint: disable=too-few-public-methods
+        """Text that cannot be turned into a string."""
+        def __str__(self):
+            raise RuntimeError("no text")
+    deps = make_deps(tmp_path, persona_names={"1on1": Bad()})
+    app = TinyStenoApp(CONFIG, deps)
+    async with app.run_test() as pilot:
+        screen = await open_personas(app, pilot)
+        assert [r[3] for r in rows(screen)] == ["default", "ok"]
+        assert rows(screen)[1][1] == "Bad"
+
+
+async def test_home_hint_and_actions_survive_an_unloadable_persona(tmp_path):
+    deps = make_deps(tmp_path, persona_errors={"1on1": UnicodeDecodeError(
+        "utf-8", b"\xff", 0, 1, "bad")})
+    app = TinyStenoApp({"persona": "1on1"}, deps)
+    async with app.run_test() as pilot:
+        home = app.screen
+        assert str(home.query_one("#timeout-hint").content) == "Persona error: UnicodeDecodeError"
+        await pilot.press("r")
+        await pilot.pause()
+        assert app.screen is home and not app.events
+        app.process_file(str(tmp_path / "x.wav"), "1on1")
+        await pilot.pause()
+        assert app.screen is home and not app.events
+        wanted = ('Persona "1on1" cannot be loaded: UnicodeDecodeError', "error")
+        assert [n for n in notes(app) if n == wanted] == [wanted, wanted]
+
+
+async def test_restored_persona_named_by_the_flag_is_chosen_on_home(tmp_path):
+    deps = make_deps(tmp_path, personas=["default"])
+    app = TinyStenoApp(CONFIG, deps, persona="rca")
+    async with app.run_test() as pilot:
+        home = app.screen
+        assert home.query_one("#persona").value == "default"
+        deps.personas.extend(["rca", "1on1"])
+        await open_personas(app, pilot)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert home.query_one("#persona").value == "rca"
+
+
+async def test_d_refuses_a_persona_broken_since_the_listing(tmp_path):
+    deps = make_deps(tmp_path)
+    app = TinyStenoApp(CONFIG, deps)
+    async with app.run_test() as pilot:
+        screen = await open_personas(app, pilot)
+        deps.persona_errors["1on1"] = PersonaInvalidError("now broken")
+        move_to(screen, "1on1")
+        await pilot.press("d")
+        await pilot.pause()
+        assert not deps.saved
+        assert ("Cannot use an invalid persona as the default", "error") in notes(app)
+        assert rows(screen)[1][3] == "Invalid: now broken"
+
+
+async def test_a_restore_outlives_the_screen_and_blocks_a_second_one(tmp_path):
+    gate = threading.Event()
+    calls = []
+    deps = make_deps(tmp_path, seed_gate=gate, seed_result={"copied": [], "skipped": []})
+    inner = deps.seed_personas
+    deps.seed_personas = lambda: calls.append(1) or inner()
+    app = TinyStenoApp(CONFIG, deps)
+    async with app.run_test() as pilot:
+        screen = await open_personas(app, pilot)
+        await confirm_restore(app, pilot)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.restoring_personas.is_set()
+        again = await open_personas(app, pilot)
+        assert again is not screen and note(again) == "Restoring…"
+        await pilot.press("b")
+        await pilot.pause()
+        assert app.screen is again
+        gate.set()
+        for _ in range(20):
+            await pilot.pause(0.05)
+        assert not app.restoring_personas.is_set() and calls == [1]
+        assert note(again) == ""
+        await pilot.press("b")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+
+
+async def test_a_second_b_while_the_dialog_is_open_opens_no_second_dialog(tmp_path):
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
+    async with app.run_test() as pilot:
+        await open_personas(app, pilot)
+        await pilot.press("b", "b")
+        await pilot.pause()
+        assert len([s for s in app.screen_stack if isinstance(s, ConfirmScreen)]) == 1
+
+
+async def test_b_is_ignored_during_the_initial_load(tmp_path):
+    deps = make_deps(tmp_path)
+    app = TinyStenoApp(CONFIG, deps)
+    gate = threading.Event()
+    real = deps.list_personas
+    async with app.run_test() as pilot:
+        deps.list_personas = lambda: gate.wait(5) and real()
+        app.open_destination("personas")
+        await pilot.pause()
+        screen = app.screen
+        assert note(screen) == "Loading…"
+        await pilot.press("b")
+        await pilot.pause()
+        assert app.screen is screen
+        gate.set()
+        await pilot.pause(0.3)
+        assert [r[0] for r in rows(screen)] == ["default", "1on1"]
+        await pilot.press("b")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfirmScreen)
+
+
+async def test_the_cursor_stays_on_the_same_persona_after_a_refresh(tmp_path):
+    deps = make_deps(tmp_path, personas=["default", "1on1", "rca"])
+    app = TinyStenoApp(CONFIG, deps)
+    async with app.run_test() as pilot:
+        screen = await open_personas(app, pilot)
+        move_to(screen, "rca")
+        await confirm_restore(app, pilot)
+        await pilot.pause(0.2)
+        table = screen.query_one("#personas", DataTable)
+        assert table.ordered_rows[table.cursor_row].key.value == "rca"
+
+
+async def test_the_restore_note_sits_under_the_table(tmp_path):
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
+    async with app.run_test() as pilot:
+        screen = await open_personas(app, pilot)
+        foot = screen.query_one("#personas-footnote", Static)
+        assert str(foot.content) == "Restoring also brings back built-in personas you have deleted."

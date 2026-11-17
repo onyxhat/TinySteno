@@ -95,6 +95,7 @@ class _Fakes:  # pylint: disable=too-many-instance-attributes
         self.seed_error = options.pop("seed_error", None)
         self.persona_timeouts = options.pop("persona_timeouts", {})
         self.persona_errors = options.pop("persona_errors", {})  # slug -> exception to raise
+        self.persona_names = options.pop("persona_names", {})  # slug -> any value for name
         self.personas = list(options.pop("personas", ["default", "1on1"]))
         self.seed_makes = options.pop("seed_makes", None)  # the list once personas are restored
         self.seed_gate = options.pop("seed_gate", None)    # threading.Event: seeding waits on it
@@ -128,7 +129,10 @@ class _Fakes:  # pylint: disable=too-many-instance-attributes
         """The fake persona, or raise the error set for this slug."""
         if slug in self.persona_errors:
             raise self.persona_errors[slug]
-        return _persona(slug, self.persona_timeouts.get(slug))
+        persona = _persona(slug, self.persona_timeouts.get(slug))
+        if slug in self.persona_names:
+            persona.name = self.persona_names[slug]
+        return persona
 
     def seed(self):
         """Return seed_result (and apply seed_makes), or raise seed_error."""
@@ -145,7 +149,7 @@ def make_deps(tmp_path: Path, **overrides) -> TuiDeps:
     """Build TuiDeps backed by fakes; any TuiDeps field can be overridden.
 
     Extra keywords: settings, save_error, checks, seed_result, seed_error, persona_timeouts,
-    persona_errors, personas, seed_makes, seed_gate.
+    persona_errors, persona_names, personas, seed_makes, seed_gate.
     The returned deps also carries ``saved`` (each save's changes), ``pipeline_kwargs`` (the
     keyword arguments of each pipeline call) and ``retranscribes`` (the value each run saw).
     """
@@ -169,6 +173,7 @@ def make_deps(tmp_path: Path, **overrides) -> TuiDeps:
     fields.update(overrides)
     deps = TuiDeps(**fields)
     deps.saved = fakes.saved  # type: ignore[attr-defined]
+    deps.persona_errors = fakes.persona_errors  # type: ignore[attr-defined]
     deps.personas = fakes.personas  # type: ignore[attr-defined]  # mutate to change the list
     deps.pipeline_kwargs = fakes.pipeline_kwargs  # type: ignore[attr-defined]
     return deps

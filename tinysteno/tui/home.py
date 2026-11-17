@@ -120,7 +120,7 @@ class HomeScreen(Screen):
     async def _follow_persona_list(self) -> None:
         """Rebuild the persona Select when the personas on disk changed (restored, added or
         removed in the Personas screen): keep the current choice if it still exists, else
-        the configured default, else the first."""
+        --persona, else the configured default, else the first."""
         try:
             personas = list(self.app.deps.list_personas())
         except Exception:
@@ -128,13 +128,15 @@ class HomeScreen(Screen):
         if personas == self._personas:
             return
         current = self._slug_or_none()
-        default = self.app.config.get("persona")
-        if current in personas:
+        # The current choice stays unless the user never picked it and --persona (which did
+        # not exist at startup) exists now.
+        if current in personas and (self._persona_picked or self._persona_arg not in personas):
             initial = current
         else:
-            initial = next((s for s in (default, *personas) if s in personas), Select.NULL)
+            # --persona (perhaps restored just now), then the configured default, then the first.
+            initial = initial_persona(self.app.config, personas, self._persona_arg)
+            self._persona_picked = self._persona_arg in personas
             self._default_shown = initial if isinstance(initial, str) else None
-            self._persona_picked = False
         self._personas = personas
         old = self.query_one("#persona", Select)
         parent = old.parent
@@ -170,6 +172,10 @@ class HomeScreen(Screen):
         except (PersonaNotFoundError, PersonaInvalidError) as err:
             hint.add_class("error")
             hint.update(f"Persona error: {err}")
+            return
+        except Exception as err:
+            hint.add_class("error")
+            hint.update(f"Persona error: {type(err).__name__}")
             return
         hint.remove_class("error")
         limit = self.app.timeout_seconds_for(persona)

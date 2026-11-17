@@ -3,6 +3,7 @@
 import asyncio
 import os
 import signal
+import threading
 import weakref
 from collections.abc import Callable, Iterable
 from datetime import datetime
@@ -13,7 +14,7 @@ from textual.app import App, SystemCommand
 from textual.binding import Binding
 from textual.screen import ModalScreen, Screen
 
-from tinysteno.personas import Persona
+from tinysteno.personas import Persona, PersonaInvalidError, PersonaNotFoundError
 from tinysteno.session import resolve_timeout_seconds
 from tinysteno.tui.checks import ChecksScreen
 from tinysteno.tui.confirm import ConfirmScreen
@@ -83,6 +84,9 @@ class TinyStenoApp(App):
         }
         self._opened: dict[str, weakref.ref[Screen]] = {}  # the last screen of each destination
         self._asking_to_quit = False
+        # True while a restore of the built-in personas runs (it outlives the screen that
+        # started it, so the flag lives here).
+        self.restoring_personas = threading.Event()
 
     def on_mount(self) -> None:
         self._install_signal_handlers()
@@ -161,8 +165,23 @@ class TinyStenoApp(App):
 
     def start_recording(self, name: str | None, persona_slug: str) -> None:
         """Begin a recording session."""
+        if not self._persona_loads(persona_slug):
+            return
         self.events.append(("record", name, persona_slug))
         self.push_screen(RecordingScreen(name, persona_slug))
+
+    def _persona_loads(self, slug: str) -> bool:
+        """False (after a notification) when the persona fails in a way the Recording and
+        Processing screens do not report; a missing or invalid persona is theirs to report."""
+        try:
+            self.deps.load_persona(slug)
+        except (PersonaNotFoundError, PersonaInvalidError):
+            pass
+        except Exception as err:
+            self.notify(f'Persona "{slug}" cannot be loaded: {type(err).__name__}',
+                        severity="error", markup=False)
+            return False
+        return True
 
     def finish_recording(
         self, wav_path: str, name: str | None, persona_slug: str, started_at: datetime
@@ -178,6 +197,8 @@ class TinyStenoApp(App):
         self, wav_path: str, persona_slug: str, *, retranscribe: bool = False
     ) -> None:
         """Process an existing recording."""
+        if not self._persona_loads(persona_slug):
+            return
         self.events.append(("process", wav_path, persona_slug))
         try:
             started_at = datetime.fromtimestamp(os.path.getmtime(wav_path))
