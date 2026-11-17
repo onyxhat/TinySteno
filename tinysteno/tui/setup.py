@@ -5,6 +5,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Button, Footer, Header, Static
 
+from tinysteno.config import config_path
 from tinysteno.settings import SETTINGS
 from tinysteno.tui.checks import ChecksScreen
 from tinysteno.tui.formscreen import FormScreen, readable_reason, unexpected
@@ -19,8 +20,9 @@ _ESSENTIAL = tuple(s for s in SETTINGS if s.essential)
 
 
 class SetupScreen(FormScreen):
-    """The essential settings. Finish saves every one of them (so a first-run file holds the
-    user's answers) and shows the System check; Skip and escape leave without writing."""
+    """The essential settings. Finish saves what the user changed, plus any essential setting
+    the file still lacks (so a first-run file holds the user's answers), and shows the System
+    check; Skip and escape leave without writing."""
 
     SUB_TITLE = "Setup"
     BINDINGS = [
@@ -30,7 +32,8 @@ class SetupScreen(FormScreen):
 
     def __init__(self) -> None:
         super().__init__()
-        self._notice = ""
+        self._load_error: str | None = None   # the config file could not be read
+        self._notice = ""                     # anything else worth saying under the form
         self._no_personas = False
 
     def _build_form(self) -> None:
@@ -38,10 +41,10 @@ class SetupScreen(FormScreen):
         try:
             stored = deps.load_settings()
         except Exception as err:
-            # A file that cannot be read: show the guide on the defaults; saving will then
-            # report the real reason and leave the file untouched.
-            stored = {}
-            self._notice = f"Config file cannot be read: {readable_reason(err)}"
+            # A file that cannot be read: no form, so nothing built on defaults can be
+            # written over the real values once the file is repaired.
+            self._load_error = readable_reason(err)
+            return
         try:
             personas: list[str] | None = list(deps.list_personas())
         except Exception as err:
@@ -65,6 +68,10 @@ class SetupScreen(FormScreen):
                 yield Static(NO_PERSONAS_NOTE, id="setup-no-personas", markup=False)
             if self._form is not None:
                 yield self._form
+            elif self._load_error is not None:
+                yield Static(f"Config file cannot be read: {self._load_error}",
+                             id="load-error", markup=False)
+                yield Static(f"File: {config_path()}", id="config-path", markup=False)
             error = Static(self._notice, id="form-error", markup=False)
             error.display = bool(self._notice)
             yield error
@@ -102,15 +109,34 @@ class SetupScreen(FormScreen):
             self._close()
 
     def action_finish(self) -> None:
-        """Save every essential setting, then show the System check."""
+        """Save what changed and what the file lacks, then show the System check."""
         if self._form is None or not self._can_act():
             return
         try:
-            values = self._collect(self._form, self._form.read)
-            if values is None or self._write(values) is None:
+            values = self._values_to_save(self._form)
+            if values is None or (values and self._write(values) is None):
                 return
         except Exception as err:
             self._show_error(unexpected(err))
             return
         self._leaving = True
         self.app.switch_screen(ChecksScreen())
+
+    def _values_to_save(self, form: SettingsForm) -> dict | None:
+        """The user's changes, plus the shown value of each essential setting the stored file
+        lacks right now (it is read again: it may have changed since the guide opened). None
+        after showing why nothing can be saved."""
+        changes = self._collect(form, form.changes)
+        if changes is None:
+            return None
+        try:
+            stored_keys = frozenset(self.app.deps.load_settings())
+        except Exception as err:
+            self._show_error(f"Config file cannot be read: {readable_reason(err)}")
+            return None
+        lacking = [s.key for s in _ESSENTIAL if s.key not in stored_keys and s.key not in changes]
+        shown = self._collect(form, lambda: form.read(lacking)) if lacking else {}
+        if shown is None:
+            return None
+        changes.update((key, value) for key, value in shown.items() if value is not None)
+        return {s.key: changes[s.key] for s in _ESSENTIAL if s.key in changes}

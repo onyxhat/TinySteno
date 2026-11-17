@@ -59,9 +59,11 @@ async def test_guide_shows_only_essential_settings(tmp_path):
         assert app.screen.query_one("#skip").label.plain == "Skip for now"
 
 
-async def test_finish_saves_every_essential_key_then_shows_checks(tmp_path):
+async def test_finish_on_a_file_lacking_them_saves_every_essential_key_then_checks(tmp_path):
     vault = tmp_path / "vault"
     vault.mkdir()
+    # The fake file is empty, so every essential key is lacking and is written; a file that
+    # holds them gets only the changes (tests/test_tui_setup_finish.py).
     deps = make_deps(tmp_path, first_run=True, checks=[Check("Python", True)])
     app = TinyStenoApp(CONFIG, deps)
     async with app.run_test() as pilot:

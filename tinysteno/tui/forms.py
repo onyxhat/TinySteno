@@ -171,8 +171,9 @@ class SettingsForm(VerticalScroll):
         if self._personas and value not in self._personas:
             raise FormError(item.key, f"{item.label}: '{value}' no longer exists")
 
-    def read(self) -> dict:
-        """Every field's value: {key: value}, None for a blank optional field.
+    def read(self, keys: Collection[str] | None = None) -> dict:
+        """Each field's value (only those in ``keys`` when given): {key: value}, None for a
+        blank optional field.
 
         A field the user has not touched gives back its starting value unchanged (the stored
         value, else the default); touched fields are parsed. A persona that no longer exists
@@ -181,6 +182,8 @@ class SettingsForm(VerticalScroll):
         """
         result: dict = {}
         for item in self._order:
+            if keys is not None and item.key not in keys:
+                continue
             if self._touched(item.key):
                 result[item.key] = self._parse(item)
             else:
