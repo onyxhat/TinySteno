@@ -7,7 +7,6 @@ from textual.widgets import Button, Footer, Header, Static
 
 from tinysteno.config import config_path
 from tinysteno.settings import SETTINGS
-from tinysteno.tui.checks import ChecksScreen
 from tinysteno.tui.formscreen import FormScreen, readable_reason, unexpected
 from tinysteno.tui.forms import SettingsForm
 
@@ -30,8 +29,11 @@ class SetupScreen(FormScreen):
         Binding("escape", "skip", "Skip"),
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, automatic: bool = False) -> None:
+        """``automatic`` is the instance the app opens by itself on first run: it never asks
+        before Skip or quit. One opened from the Menu asks like the Settings screen."""
         super().__init__()
+        self._automatic = automatic
         self._load_error: str | None = None   # the config file could not be read
         self._notice = ""                     # anything else worth saying under the form
         self._no_personas = False
@@ -94,19 +96,20 @@ class SetupScreen(FormScreen):
             self.action_skip()
 
     def has_unsaved_changes(self) -> bool:
-        """Never on first run (quitting from the guide must not ask); otherwise the form's
-        real state."""
-        if self._form is None or self._leaving or self.app.deps.first_run:
+        """Never for the automatic first-run instance (quitting from it must not ask);
+        otherwise the form's real state."""
+        if self._automatic:
             return False
-        try:
-            return self._form.has_changes()
-        except Exception:
-            return True
+        return super().has_unsaved_changes()
 
     def action_skip(self) -> None:
-        """Leave without writing anything."""
-        if self._can_act():
-            self._close()
+        """Leave without writing anything; a guide opened from the Menu asks first when it
+        has unsaved changes."""
+        if self._automatic:
+            if self._can_act():
+                self._close()
+            return
+        self._leave_asking()
 
     def action_finish(self) -> None:
         """Save what changed and what the file lacks, then show the System check."""
@@ -119,8 +122,10 @@ class SetupScreen(FormScreen):
         except Exception as err:
             self._show_error(unexpected(err))
             return
-        self._leaving = True
-        self.app.switch_screen(ChecksScreen())
+        # Through open_destination, so the palette cannot stack a second System check.
+        app = self.app
+        self._close()
+        app.open_destination("checks")
 
     def _values_to_save(self, form: SettingsForm) -> dict | None:
         """The user's changes, plus the shown value of each essential setting the stored file

@@ -1,10 +1,12 @@
 """First-run Setup guide: the essential settings, shown once, re-openable from the Menu."""
+import pytest
 from textual.widgets import Input, Static
 
 from tinysteno.doctor import Check
 from tinysteno.settings import SETTINGS
 from tinysteno.tui.app import TinyStenoApp
 from tinysteno.tui.checks import ChecksScreen
+from tinysteno.tui.confirm import ConfirmScreen
 from tinysteno.tui.deps import SettingsNotApplied
 from tinysteno.tui.home import HomeScreen
 from tinysteno.tui.setup import NO_PERSONAS_NOTE, SetupScreen
@@ -196,3 +198,82 @@ async def test_no_personas_still_completable_with_a_note(tmp_path):
         await _settle(pilot)
         assert isinstance(app.screen, ChecksScreen)
         assert len(deps.saved) == 1
+
+
+async def test_a_guide_reopened_in_a_first_run_session_reports_real_changes(tmp_path):
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path, first_run=True))
+    async with app.run_test() as pilot:
+        await _settle(pilot)
+        await pilot.press("escape")             # skip the automatic guide
+        await _settle(pilot)
+        app.open_destination("setup")           # reopened from the Menu, same session
+        await _settle(pilot)
+        assert isinstance(app.screen, SetupScreen)
+        assert app.screen.has_unsaved_changes() is False
+        app.screen.query_one("#set-obsidian_vault", Input).value = "edited"
+        assert app.screen.has_unsaved_changes() is True
+
+
+@pytest.mark.parametrize("leave", ["escape", "skip"])
+async def test_leaving_a_reopened_guide_with_edits_asks_first(tmp_path, leave):
+    deps = make_deps(tmp_path)
+    app = TinyStenoApp(CONFIG, deps)
+    async with app.run_test() as pilot:
+        app.open_destination("setup")
+        await _settle(pilot)
+        guide = app.screen
+        guide.query_one("#set-obsidian_vault", Input).value = "edited"
+        await (pilot.press("escape") if leave == "escape" else pilot.click("#skip"))
+        await _settle(pilot)
+        assert isinstance(app.screen, ConfirmScreen)
+        assert str(app.screen.query_one("#confirm-title").content) == "Discard unsaved changes?"
+        await pilot.press("enter")              # Cancel
+        await _settle(pilot)
+        assert app.screen is guide
+        await (pilot.press("escape") if leave == "escape" else pilot.click("#skip"))
+        await _settle(pilot)
+        app.screen.query_one("#confirm").focus()
+        await pilot.press("enter")              # Discard
+        await _settle(pilot)
+        assert isinstance(app.screen, HomeScreen)
+        assert not deps.saved
+
+
+async def test_leaving_a_reopened_guide_without_edits_does_not_ask(tmp_path):
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
+    async with app.run_test() as pilot:
+        app.open_destination("setup")
+        await _settle(pilot)
+        await pilot.press("escape")
+        await _settle(pilot)
+        assert isinstance(app.screen, HomeScreen)
+
+
+@pytest.mark.parametrize("leave", ["escape", "skip"])
+async def test_leaving_the_first_run_guide_with_edits_never_asks(tmp_path, leave):
+    deps = make_deps(tmp_path, first_run=True)
+    app = TinyStenoApp(CONFIG, deps)
+    async with app.run_test() as pilot:
+        await _settle(pilot)
+        app.screen.query_one("#set-obsidian_vault", Input).value = "edited"
+        await (pilot.press("escape") if leave == "escape" else pilot.click("#skip"))
+        await _settle(pilot)
+        assert isinstance(app.screen, HomeScreen)
+        assert not deps.saved
+
+
+async def test_the_checks_shown_after_finish_are_not_opened_twice(tmp_path):
+    deps = make_deps(tmp_path, first_run=True, checks=[Check("Python", True)])
+    app = TinyStenoApp(CONFIG, deps)
+    async with app.run_test() as pilot:
+        await _settle(pilot)
+        app.screen.query_one("#set-obsidian_vault", Input).value = "x"
+        await pilot.click("#finish")
+        await _settle(pilot)
+        checks = app.screen
+        assert isinstance(checks, ChecksScreen)
+        app.open_destination("checks")          # as the palette does
+        await _settle(pilot)
+        assert app.screen is checks
+        assert sum(isinstance(s, ChecksScreen) for s in app.screen_stack) == 1
+        assert [type(s) for s in app.screen_stack[1:]] == [HomeScreen, ChecksScreen]

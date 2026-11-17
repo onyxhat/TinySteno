@@ -7,7 +7,6 @@ from textual.widgets import Button, Footer, Header, Static
 
 from tinysteno.config import config_path
 from tinysteno.settings import SETTINGS
-from tinysteno.tui.confirm import ConfirmScreen
 from tinysteno.tui.formscreen import FormScreen, readable_reason, unexpected
 from tinysteno.tui.forms import SettingsForm
 
@@ -79,15 +78,6 @@ class SettingsScreen(FormScreen):
         elif event.button.id == "back":
             self.action_back()
 
-    def has_unsaved_changes(self) -> bool:
-        """True when leaving now would lose edits (the app asks before quitting)."""
-        if self._form is None or self._leaving:
-            return False
-        try:
-            return self._form.has_changes()
-        except Exception:
-            return True  # cannot tell: ask rather than lose edits
-
     # ── saving ───────────────────────────────────────────────────────────────
 
     def action_save(self) -> None:
@@ -113,18 +103,4 @@ class SettingsScreen(FormScreen):
 
     def action_back(self) -> None:
         """Leave; with unsaved changes, ask first."""
-        if not self._can_act():
-            return
-        try:
-            if not self.has_unsaved_changes():
-                self._close()
-                return
-            self.app.push_screen(
-                ConfirmScreen("Discard unsaved changes?", "Discard"), self._discard_answered
-            )
-        except Exception as err:
-            self._show_error(unexpected(err))
-
-    def _discard_answered(self, confirmed: bool | None) -> None:
-        if confirmed and self._can_act():
-            self._close()
+        self._leave_asking()

@@ -5,6 +5,7 @@ from collections.abc import Callable
 from textual.screen import Screen
 from textual.widgets import Static
 
+from tinysteno.tui.confirm import ConfirmScreen
 from tinysteno.tui.deps import SettingsNotApplied
 from tinysteno.tui.forms import FormError, SettingsForm
 from tinysteno.tui.leaving import LeaveOnceMixin
@@ -51,6 +52,33 @@ class FormScreen(LeaveOnceMixin, Screen):
 
     def _close(self) -> None:
         self._leave_once()
+
+    def has_unsaved_changes(self) -> bool:
+        """True when leaving now would lose edits (the app asks before quitting)."""
+        if self._form is None or self._leaving:
+            return False
+        try:
+            return self._form.has_changes()
+        except Exception:
+            return True  # cannot tell: ask rather than lose edits
+
+    def _leave_asking(self) -> None:
+        """Leave; with unsaved changes, ask first."""
+        if not self._can_act():
+            return
+        try:
+            if not self.has_unsaved_changes():
+                self._close()
+                return
+            self.app.push_screen(
+                ConfirmScreen("Discard unsaved changes?", "Discard"), self._discard_answered
+            )
+        except Exception as err:
+            self._show_error(unexpected(err))
+
+    def _discard_answered(self, confirmed: bool | None) -> None:
+        if confirmed and self._can_act():
+            self._close()
 
     def _collect(self, form: SettingsForm, read: Callable[[], dict]) -> dict | None:
         """The values ``read`` returns, or None after showing why they are not valid."""

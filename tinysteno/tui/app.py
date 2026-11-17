@@ -94,7 +94,8 @@ class TinyStenoApp(App):
         self.push_screen(HomeScreen(persona=self.initial_persona))
         if self.deps.first_run and not self.autostart:
             # Over Home, so Skip, escape and the checks' Back all land on a working Home.
-            self.call_after_refresh(self.open_destination, "setup")
+            self.call_after_refresh(
+                self.open_destination, "setup", partial(SetupScreen, automatic=True))
         if self.autostart:
             slug = self.initial_persona or self.config.get("persona", "default")
             # After Home has mounted, so a failed start can fall back to a ready Home screen.
@@ -268,15 +269,15 @@ class TinyStenoApp(App):
         if dest is not None:
             self.open_destination(dest)
 
-    def open_destination(self, dest: str) -> None:
-        """Open a registered destination's screen; ignored where the Menu is unavailable."""
+    def open_destination(self, dest: str, factory: Callable[[], Screen] | None = None) -> None:
+        """Open a registered destination's screen (made by ``factory`` when given, else by
+        the registered one); ignored where the Menu is unavailable."""
         if dest not in self.destinations or not self.menu_available():
             return
         opened = self._opened.get(dest)
         if opened is not None and opened() in self.screen_stack:
             return  # already open (perhaps under another management screen)
-        _, factory = self.destinations[dest]
-        screen = factory()
+        screen = (factory or self.destinations[dest][1])()
         self._opened[dest] = weakref.ref(screen)
         self.push_screen(screen)
 
