@@ -5,6 +5,45 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-11-17
+- fix(tui): a second queued start never begins a second recording
+- fix(tui): the quit prompt cannot get stuck when a screen below it is replaced
+- test: stricter quit-during-delete check; screenshot script keeps HOME in its temp dir
+- fix: the default-persona check without a persona key; remove dead code
+- fix(tui): persona listing failures and restores never go unreported
+- fix(config): odd config files give errors, not tracebacks; saves keep key order
+- fix(tui): a reopened setup guide asks before discarding edits
+- fix(tui): a second Enter on a recent recording starts no second run
+- fix(cli): config --edit creates the default config when there is none
+- fix(tui): the quit prompt considers every open screen
+- fix(tui): a queued second activation never pops the screen below
+- fix(tui): setup guide saves only what the user chose, plus what the file lacks
+- docs: TUI menu, settings, personas, recordings and system check
+- test(tui): split the recordings tests
+- fix(tui): deleting a recording updates the session ledger and always reports
+- fix(tui): personas screen survives odd persona files; home guards persona errors
+- feat(tui): recordings screen with re-transcribe and delete
+- feat(tui): personas screen
+- feat(tui): first-run setup guide and system check
+- fix(tui): settings screen hardening
+- fix(config): YAML errors never quote the file
+- feat(tui): menu and settings screen
+- fix(tui): per-run settings snapshot; saves never empty the live config
+- fix(doctor): literal output, no side effects, accurate folder checks
+- fix(recordings): delete by name inside the opened recordings folder
+- feat(tui): dependencies for settings, checks, personas and recordings
+- refactor: setup checks and recording file operations as UI-free modules
+- test: no module-level path points at the real home
+- fix(setup): check the config first and repair invalid settings
+- fix(config): refuse read-only files, write through symlinks, fsync
+- feat: describe the editable settings in one place
+- test: no test can touch the real home directory
+- fix(tui): disable screenshot delivery outright
+- refactor: move configuration into tinysteno/config.py; saves keep unknown keys
+- test(tui): pin the palette commands and prove no route saves a screenshot
+- feat(tui): remove the Screenshot command from the app
+- docs: plan for TUI setup, settings and management
+
 ## [0.2.6] - 2026-11-16
 - fix: describe numbered speakers by the labels actually present
 - fix: fingerprint the transcription server by digest, never by URL
