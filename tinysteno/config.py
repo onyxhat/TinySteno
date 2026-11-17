@@ -53,11 +53,19 @@ def config_path() -> Path:
     return config_dir() / "config.yaml"
 
 
+def _finite(value: int | float) -> bool:
+    """math.isfinite, False for an int too large for a float (YAML reads 10**400 exactly)."""
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def is_timeout_minutes(value) -> bool:
     """True for a finite int/float >= 0 that is not a bool."""
     return (
         isinstance(value, (int, float)) and not isinstance(value, bool)
-        and math.isfinite(value) and value >= 0
+        and _finite(value) and value >= 0
     )
 
 
@@ -65,7 +73,7 @@ def is_positive_number(value) -> bool:
     """True for a finite int/float > 0 that is not a bool."""
     return (
         isinstance(value, (int, float)) and not isinstance(value, bool)
-        and math.isfinite(value) and value > 0
+        and _finite(value) and value > 0
     )
 
 
@@ -74,6 +82,7 @@ def is_speaker_count(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 1
 
 
+# Messages never include a setting's value: they are shown on screen and may hold credentials.
 def validate_config(config: dict) -> None:
     """Raise ValueError if required config fields have wrong types."""
     int_fields = {"sample_rate": int, "channels": int}
@@ -132,7 +141,9 @@ def write_config(path: Path, config: dict) -> None:
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(yaml.dump(config, default_flow_style=False))
+            # In the file's own key order (a new key goes at the end), non-ASCII as written.
+            handle.write(yaml.dump(config, default_flow_style=False, sort_keys=False,
+                                   allow_unicode=True))
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(tmp_name, mode)
@@ -143,6 +154,18 @@ def write_config(path: Path, config: dict) -> None:
         except OSError:
             pass
         raise
+
+
+def _read_text(path: Path) -> str:
+    """The file's text, read as UTF-8. Raises ValueError naming the path when it is not
+    UTF-8: the decode error itself holds the file's bytes, which may include an API key."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        pass
+    # Raised outside the except block, and from None: the decode error is neither chained
+    # nor kept as context.
+    raise ValueError(f"Config file is not valid UTF-8: {path}") from None
 
 
 def _parse_yaml(text: str, path: Path):
@@ -170,7 +193,7 @@ def read_stored() -> dict:
     """
     path = config_path()
     try:
-        text = path.read_text(encoding="utf-8")
+        text = _read_text(path)
     except FileNotFoundError:
         return {}
     stored = _parse_yaml(text, path)
@@ -233,10 +256,11 @@ def ensure_config_file() -> Path:
 def load_config() -> dict:
     """Load configuration from ~/.tinysteno/config.yaml, creating defaults on first run.
 
-    Raises ValueError when the file is not valid YAML, not a mapping or holds invalid values.
+    Raises ValueError when the file is not UTF-8, not valid YAML, not a mapping or holds
+    invalid values; OSError when it cannot be read or created.
     """
     path = ensure_config_file()
-    config = _parse_yaml(path.read_text(), path)
+    config = _parse_yaml(_read_text(path), path)
     if not isinstance(config, dict):
         raise ValueError(f"Config file is malformed: {path}")
     validate_config(config)

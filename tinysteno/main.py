@@ -881,6 +881,9 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
         print(f"Error: {exc}", file=sys.stderr)
         print("Fix the file, or run: tinysteno config --edit", file=sys.stderr)
         sys.exit(1)
+    except OSError as exc:
+        print(f"Error: Cannot read {_config_path()}: {exc.strerror or exc}", file=sys.stderr)
+        sys.exit(1)
 
     if args.command == "tui":
         cmd_tui(args, config, first_run=first_run)
