@@ -229,11 +229,15 @@ def _demo_app():
     """A TinyStenoApp on stand-in dependencies, run from a throwaway directory.
 
     Yields (app, clock, recorder, gate). Paths are relative to that directory so the
-    screenshots show a vault-like path instead of a temp folder.
+    screenshots show a vault-like path instead of a temp folder. HOME points at the same
+    directory while it is open and is restored afterwards.
     """
     previous = Path.cwd()
+    previous_home = os.environ.get("HOME")
     with tempfile.TemporaryDirectory() as tmp:
         os.chdir(tmp)
+        # A second layer: even a dependency that reached for ~/.tinysteno would land here.
+        os.environ["HOME"] = tmp
         clock, gate = DemoClock(), threading.Event()
         try:
             _seed_recordings(VAULT / "audio")
@@ -242,6 +246,10 @@ def _demo_app():
         finally:
             gate.set()
             os.chdir(previous)
+            if previous_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = previous_home
 
 
 async def _capture_journey(out: Path) -> None:

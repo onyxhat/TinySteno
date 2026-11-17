@@ -150,8 +150,9 @@ def make_deps(tmp_path: Path, **overrides) -> TuiDeps:
 
     Extra keywords: settings, save_error, checks, seed_result, seed_error, persona_timeouts,
     persona_errors, persona_names, personas, seed_makes, seed_gate.
-    The returned deps also carries ``saved`` (each save's changes), ``pipeline_kwargs`` (the
-    keyword arguments of each pipeline call) and ``retranscribes`` (the value each run saw).
+    The returned deps also carries ``saved`` (each save's changes), ``persona_errors`` (slug
+    -> exception, mutable), ``personas`` (the listed slugs, mutable) and ``pipeline_kwargs``
+    (the keyword arguments of each pipeline call, e.g. ``retranscribe``).
     """
     fakes = _Fakes(tmp_path, overrides)
     fields = {

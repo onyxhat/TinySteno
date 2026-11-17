@@ -202,7 +202,7 @@ The screenshots are generated from the real app with stand-in audio, settings, p
 | Home, Recording, Processing, Result, Menu screens | `q` | Quit (see below) |
 | Any screen, including the discard confirmation | `Ctrl+Q` | Quit |
 
-`r`, `m` and `q` are ordinary text while the Name box has focus. In the discard confirmation `q` quits the same way as everywhere else: the recording is saved, not discarded. The footer only lists keys that do something right now: `r` and `n` appear on the Processing screen once the pipeline has stopped running.
+`r`, `m` and `q` are ordinary text while the Name box has focus; likewise `q` types into a focused text field on the Settings and Setup screens (use `Ctrl+Q` to quit from there). In the discard confirmation `q` quits the same way as everywhere else: the recording is saved, not discarded. The footer only lists keys that do something right now: `r` and `n` appear on the Processing screen once the pipeline has stopped running.
 
 Things to know:
 
@@ -291,7 +291,7 @@ Run `tinysteno setup` to create it interactively, edit it from the TUI (Menu, Se
 
 `tinysteno setup` checks the file before it asks anything, and stops with the position of the problem (never the text) if it is not valid YAML. It keeps settings it does not ask about (`whisper_prompt`, `tui_theme`, `max_speakers`, anything you added) and rewrites the file, so comments in a hand-edited `config.yaml` are not preserved (the order of its keys is kept). A stored setting it does not ask about that is invalid is removed, after printing its name, old value (hidden for keys and tokens) and the reason. An invalid value it does ask about is reported and the prompt starts from the built-in default.
 
-`tinysteno test` writes nothing, not even a missing config file. Besides the modules and packages it checks the config file, the vault folder, the recordings folder, the default persona and, when `speaker_split` is on, the optional speaker-separation package. A failed required check is marked `✗` and makes the command exit 1; an optional item is marked `!` and does not.
+`tinysteno test` writes nothing, not even a missing config file. Besides the modules and packages it checks the config file, the vault folder, the recordings folder, the default persona and, when `speaker_split` is on, the optional speaker-separation package. A failed required check is marked `✗` and makes the command exit 1; an optional item is marked `!` and does not. A vault folder that does not exist yet is a failed required check, so on a fresh default config (`~/Obsidian/Vault` not created) `tinysteno test` exits 1 until you create the folder or set your own.
 
 To create it manually:
 

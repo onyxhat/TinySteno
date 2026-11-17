@@ -393,6 +393,7 @@ async def test_quitting_during_a_delete_waits_for_it_and_the_summary_is_right(tm
             await pilot.pause(0.05)
             if app.exit_message is not None or not app.is_running:
                 break
+        assert app.return_code == 0  # the app really quit (the loop did not just time out)
         assert not wav.exists()
         assert app.exit_message is None  # nothing left to tell the user
         assert screen._delete is None  # pylint: disable=protected-access
