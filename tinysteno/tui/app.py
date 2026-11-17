@@ -83,7 +83,9 @@ class TinyStenoApp(App):
             "checks": ("System check", ChecksScreen),
         }
         self._opened: dict[str, weakref.ref[Screen]] = {}  # the last screen of each destination
-        self._asking_to_quit = False
+        # The open quit prompt, if any. Whether it is still in the stack is what counts: a
+        # prompt removed by any route (even one that drops its callback) stops counting.
+        self._quit_prompt: ConfirmScreen | None = None
         # True while a restore of the built-in personas runs (it outlives the screen that
         # started it, so the flag lives here).
         self.restoring_personas = threading.Event()
@@ -226,7 +228,8 @@ class TinyStenoApp(App):
 
     def _replace_topmost(self, kind: type, new_screen) -> None:
         """Replace the topmost screen of ``kind`` (closing any dialog above it, such as the
-        command palette); with none in the stack, replace the current screen."""
+        command palette or the quit prompt, which then no longer counts as open); with none in
+        the stack, replace the current screen."""
         target = next((s for s in reversed(self.screen_stack) if isinstance(s, kind)), None)
         while target is not None and self.screen is not target:
             self.pop_screen()
@@ -315,13 +318,11 @@ class TinyStenoApp(App):
         bool``; every screen in the stack is asked, not only the top one (Settings may lie
         under the System check). Exit signals skip this.
         """
-        if self._asking_to_quit:
-            return
+        if self._quit_prompt is not None and self._quit_prompt in self.screen_stack:
+            return  # already asking
         if self._any_unsaved_changes():
-            self._asking_to_quit = True
-            self.push_screen(
-                ConfirmScreen("Quit and discard unsaved changes?", "Quit"), self._quit_answered
-            )
+            self._quit_prompt = ConfirmScreen("Quit and discard unsaved changes?", "Quit")
+            self.push_screen(self._quit_prompt, self._quit_answered)
             return
         await self._quit_now()
 
@@ -333,7 +334,7 @@ class TinyStenoApp(App):
         return False
 
     def _quit_answered(self, confirmed: bool | None) -> None:
-        self._asking_to_quit = False
+        self._quit_prompt = None
         if confirmed:
             self.call_later(self._quit_now)
 

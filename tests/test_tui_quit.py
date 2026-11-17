@@ -1,10 +1,14 @@
 """Quitting asks when any open screen, not only the top one, has unsaved changes."""
+import threading
+
 import pytest
 
 from tinysteno.tui.app import TinyStenoApp
 from tinysteno.tui.checks import ChecksScreen
 from tinysteno.tui.confirm import ConfirmScreen
+from tinysteno.tui.processing import ProcessingScreen
 from tinysteno.tui.recordings import RecordingsScreen
+from tinysteno.tui.result import ResultScreen
 from tinysteno.tui.settings import SettingsScreen
 from tinysteno.tui.setup import SetupScreen
 from tests.tui_fakes import make_deps
@@ -99,3 +103,81 @@ async def test_an_exit_signal_never_asks_even_with_changes_below(tmp_path):
         app._on_exit_signal()                   # pylint: disable=protected-access
         await _settle(pilot)
         assert exits and not isinstance(app.screen, ConfirmScreen)
+
+
+def _gated_pipeline(deps, gate, *, fail: bool):
+    """Hold each pipeline run until ``gate`` is set; then finish (or fail)."""
+    inner = deps.run_pipeline
+
+    def run(*args, **kwargs):
+        gate.wait(5)
+        if fail:
+            raise RuntimeError("the run failed")
+        return inner(*args, **kwargs)
+    deps.run_pipeline = run
+
+
+async def _prompt_over_processing(app, pilot, tmp_path):
+    """Settings with an edit, Recordings over it, Enter on a recording, then q: the quit
+    prompt opens over the Processing screen."""
+    (tmp_path / "Old.wav").write_bytes(b"")
+    await _edit_settings_then_open(app, pilot, "recordings")
+    await pilot.press("enter")
+    await _settle(pilot)
+    assert isinstance(app.screen, ProcessingScreen)
+    await pilot.press("q")
+    await _settle(pilot)
+    assert isinstance(app.screen, ConfirmScreen)
+
+
+async def _quit_still_asks_and_confirm_exits(app, pilot, exits):
+    if isinstance(app.screen, ConfirmScreen):    # the prompt survived: answer Cancel
+        await pilot.press("enter")
+        await _settle(pilot)
+    assert not isinstance(app.screen, ConfirmScreen) and not exits
+    await pilot.press("q")
+    await _settle(pilot)
+    assert isinstance(app.screen, ConfirmScreen)
+    app.screen.query_one("#confirm").focus()
+    await pilot.press("enter")
+    await _settle(pilot)
+    assert exits
+
+
+async def test_a_prompt_removed_when_processing_finishes_does_not_block_quitting(tmp_path):
+    gate = threading.Event()
+    deps = make_deps(tmp_path)
+    _gated_pipeline(deps, gate, fail=False)
+    app = TinyStenoApp(CONFIG, deps)
+    exits = _record_exits(app)
+    async with app.run_test() as pilot:
+        await _prompt_over_processing(app, pilot, tmp_path)
+        gate.set()
+        await app.workers.wait_for_complete()
+        await _settle(pilot)
+        assert isinstance(app.screen, ResultScreen)   # the prompt went with Processing
+        await _quit_still_asks_and_confirm_exits(app, pilot, exits)
+
+
+async def test_a_prompt_over_a_failed_run_still_lets_quitting_ask_again(tmp_path):
+    gate = threading.Event()
+    deps = make_deps(tmp_path)
+    _gated_pipeline(deps, gate, fail=True)
+    app = TinyStenoApp(CONFIG, deps)
+    exits = _record_exits(app)
+    async with app.run_test() as pilot:
+        await _prompt_over_processing(app, pilot, tmp_path)
+        gate.set()
+        await app.workers.wait_for_complete()
+        await _settle(pilot)
+        await _quit_still_asks_and_confirm_exits(app, pilot, exits)
+
+
+async def test_only_one_quit_prompt_opens_at_a_time(tmp_path):
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
+    async with app.run_test() as pilot:
+        await _edit_settings_then_open(app, pilot, "checks")
+        await app.run_action("quit")
+        await app.run_action("quit")
+        await _settle(pilot)
+        assert sum(isinstance(s, ConfirmScreen) for s in app.screen_stack) == 1
