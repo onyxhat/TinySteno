@@ -158,3 +158,31 @@ async def test_two_presses_of_back_leave_once(tmp_path, dest, button):
         widget.press()
         await _settle(pilot)
         assert _stack(app) == [HomeScreen]
+
+
+async def test_two_enters_on_a_recent_recording_start_one_run(tmp_path):
+    (tmp_path / "Old.wav").write_bytes(b"")
+    deps = make_deps(tmp_path)
+    app = TinyStenoApp(CONFIG, deps)
+    async with app.run_test() as pilot:
+        app.screen.query_one("#recent").focus()
+        await _settle(pilot)
+        send_together(app, "enter", "enter")
+        await _settle(pilot)
+        await app.workers.wait_for_complete()
+        await _settle(pilot)
+        assert len(deps.pipeline_kwargs) == 1
+        assert [e[0] for e in app.events].count("process") == 1
+
+
+async def test_process_file_is_refused_while_that_recording_is_being_processed(tmp_path):
+    wav = tmp_path / "Old.wav"
+    wav.write_bytes(b"")
+    deps = make_deps(tmp_path)
+    app = TinyStenoApp(CONFIG, deps)
+    async with app.run_test() as pilot:
+        app.ledger.begin_run(str(wav))           # e.g. a run the app still has going
+        app.process_file(str(wav), "default")
+        await _settle(pilot)
+        assert isinstance(app.screen, HomeScreen)
+        assert not deps.pipeline_kwargs and not app.events

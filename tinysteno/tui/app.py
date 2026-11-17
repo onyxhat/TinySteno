@@ -196,7 +196,11 @@ class TinyStenoApp(App):
     def process_file(
         self, wav_path: str, persona_slug: str, *, retranscribe: bool = False
     ) -> None:
-        """Process an existing recording."""
+        """Process an existing recording; does nothing while a recording, processing or
+        result screen is open, or while a run on this WAV has not ended (a second Enter
+        queued behind the first must not start a second run on the same file)."""
+        if self._session_busy() or self.ledger.is_busy(wav_path):
+            return
         if not self._persona_loads(persona_slug):
             return
         self.events.append(("process", wav_path, persona_slug))
@@ -209,6 +213,10 @@ class TinyStenoApp(App):
         self.ledger.saved(wav_path)
         self.push_screen(
             ProcessingScreen(wav_path, None, persona_slug, started_at, retranscribe))
+
+    def _session_busy(self) -> bool:
+        """True while a recording, processing or result screen is open."""
+        return any(isinstance(s, _BUSY_SCREENS) for s in self.screen_stack)
 
     def show_result(self, result: PipelineResult) -> None:
         """Show the finished note."""
@@ -241,7 +249,7 @@ class TinyStenoApp(App):
         blocked = getattr(page, "navigation_blocked", None)
         if callable(blocked) and blocked():  # e.g. a delete that must report its outcome
             return False
-        if isinstance(screen, ModalScreen) or any(isinstance(s, _BUSY_SCREENS) for s in stack):
+        if isinstance(screen, ModalScreen) or self._session_busy():
             return False
         return any(isinstance(s, HomeScreen) for s in stack)
 
