@@ -32,6 +32,16 @@ class SessionLedger:
         """A note was exported from this WAV."""
         self._unprocessed.pop(wav_path, None)
 
+    def forget(self, wav_path: str) -> None:
+        """This WAV no longer exists (it was deleted): it needs no message on exit.
+
+        Matched by absolute path, whatever spelling ``saved`` was given. A failed save's
+        message is not affected.
+        """
+        key = os.path.abspath(wav_path)
+        for recorded in [w for w in self._unprocessed if os.path.abspath(w) == key]:
+            del self._unprocessed[recorded]
+
     def save_failed(self, message: str) -> None:
         """A recording could not be saved; ``message`` is what to tell the user."""
         if message not in self._failures:

@@ -237,6 +237,10 @@ class TinyStenoApp(App):
         processing or result screen is open."""
         screen = self.screen if screen is None else screen
         stack = self.screen_stack
+        page = next((s for s in reversed(stack) if not isinstance(s, ModalScreen)), None)
+        blocked = getattr(page, "navigation_blocked", None)
+        if callable(blocked) and blocked():  # e.g. a delete that must report its outcome
+            return False
         if isinstance(screen, ModalScreen) or any(isinstance(s, _BUSY_SCREENS) for s in stack):
             return False
         return any(isinstance(s, HomeScreen) for s in stack)
@@ -332,6 +336,10 @@ class TinyStenoApp(App):
         )
         if recording is not None:
             await recording.stop_for_quit()
+        for screen in list(self.screen_stack):
+            pending = getattr(screen, "wait_for_pending", None)
+            if callable(pending):  # e.g. a delete: the ledger must be right before it is read
+                await pending()
         message, failed = self.ledger.summary()
         self.exit_message = message
         self.exit(return_code=1 if failed else 0)

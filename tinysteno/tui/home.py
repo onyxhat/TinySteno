@@ -9,6 +9,7 @@ from textual.widgets import Button, Footer, Header, Input, Label, OptionList, Se
 from textual.widgets.option_list import Option
 
 from tinysteno.personas import PersonaInvalidError, PersonaNotFoundError
+from tinysteno.recordings import list_recordings
 
 NO_RECORDINGS = "No recordings yet"
 NO_PERSONAS = "No personas found. Open the menu (m) and choose Personas."
@@ -16,10 +17,11 @@ NO_PERSONAS = "No personas found. Open the menu (m) and choose Personas."
 
 def recent_recordings(directory: Path, limit: int = 8) -> list[Path]:
     """Newest-first WAV files in a directory (empty when it does not exist)."""
-    if not directory.is_dir():
+    try:
+        found = list_recordings(directory)  # skips what cannot be read: a broken link, a folder
+    except OSError:  # the folder itself cannot be read: Home stays usable with an empty list
         return []
-    wavs = sorted(directory.glob("*.wav"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return wavs[:limit]
+    return [info.path for info in found[:limit]]
 
 
 def initial_persona(config: dict, personas: list[str], preferred: str | None = None) -> object:

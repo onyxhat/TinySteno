@@ -1,5 +1,6 @@
 """Recordings screen: every recording, to process, transcribe again, or delete."""
 
+import asyncio
 import os
 from datetime import datetime
 from functools import partial
@@ -30,11 +31,20 @@ def format_size(size: int) -> str:
     if size < 1024:
         return f"{size} B"
     value = float(size)
-    for unit in _UNITS[1:]:
+    for unit in _UNITS[1:-1]:
         value /= 1024
-        if value < 1024 or unit == _UNITS[-1]:
+        if value < 1024:
             return f"{value:.1f} {unit}"
-    return f"{value:.1f} {_UNITS[-1]}"  # unreachable; keeps the return type honest
+    return f"{value / 1024:.1f} {_UNITS[-1]}"
+
+
+def shorten(name: str, width: int = NAME_WIDTH) -> str:
+    """``name`` cut in the middle to ``width`` characters: recorder names end in a timestamp,
+    so both the start and the end stay readable."""
+    if len(name) <= width:
+        return name
+    head = (width - 1) // 2
+    return f"{name[:head]}…{name[len(name) - (width - 1 - head):]}"
 
 
 def format_date(moment: datetime) -> str:
@@ -68,25 +78,22 @@ class RecordingsScreen(Screen):  # pylint: disable=too-many-instance-attributes
     def __init__(self) -> None:
         super().__init__()
         self._items: list[RecordingInfo] = []
+        self._personas: list[str] = []
         self._list_error: str | None = None
         self._load: Worker | None = None     # the read in progress, None when idle
         self._reload_wanted = False          # a refresh was asked for while a read ran
         self._delete: Worker | None = None   # the delete in progress, None when idle
-        self._deleting = ""                  # its file name, for the message
+        self._deleting: Path | None = None   # the file it deletes, for the message
         self._leaving = False                # (not `_closing`: Textual's message pump)
 
     def compose(self) -> ComposeResult:
         app = self.app
-        personas = list(app.deps.list_personas())
+        self._personas = personas = list(app.deps.list_personas())
         yield Header()
         with Vertical(id="recordings-panel"):
             with Horizontal(classes="field"):
                 yield Label("Persona", classes="field-label")
-                yield Select(
-                    [(slug, slug) for slug in personas],
-                    value=initial_persona(app.config, personas),
-                    allow_blank=not personas, prompt="No personas", id="persona",
-                )
+                yield self._persona_select(personas, initial_persona(app.config, personas))
             yield Static(LOADING, id="recordings-note", markup=False)
             yield DataTable(id="recordings", cursor_type="row", zebra_stripes=True)
         yield Footer()
@@ -97,9 +104,35 @@ class RecordingsScreen(Screen):  # pylint: disable=too-many-instance-attributes
             table.add_column(label, width=NAME_WIDTH if label == COLUMNS[0] else None)
         table.focus()
 
-    def on_screen_resume(self) -> None:
-        """Shown first, or back from Processing / Result: read the folder again."""
+    async def on_screen_resume(self) -> None:
+        """Shown first, or back from Processing / Result / Personas: follow the persona list
+        and read the folder again."""
+        await self._follow_persona_list()
         self.action_refresh()
+
+    async def _follow_persona_list(self) -> None:
+        """Rebuild the persona Select when the personas changed (restored, added, removed):
+        keep the current choice if it still exists, else the configured default."""
+        try:
+            personas = list(self.app.deps.list_personas())
+        except Exception:
+            return  # cannot tell: keep what is shown
+        if personas == self._personas:
+            return
+        current = self.query_one("#persona", Select).value
+        initial = current if current in personas else initial_persona(self.app.config, personas)
+        self._personas = personas
+        old = self.query_one("#persona", Select)
+        parent = old.parent
+        await old.remove()
+        await parent.mount(self._persona_select(personas, initial))
+
+    @staticmethod
+    def _persona_select(personas: list[str], initial: object) -> Select:
+        return Select(
+            [(slug, slug) for slug in personas], value=initial,
+            allow_blank=not personas, prompt="No personas", id="persona",
+        )
 
     # ── reading ──────────────────────────────────────────────────────────────
 
@@ -145,6 +178,8 @@ class RecordingsScreen(Screen):  # pylint: disable=too-many-instance-attributes
     # ── showing ──────────────────────────────────────────────────────────────
 
     def _notice(self) -> str:
+        if self._delete is not None and self._deleting is not None:
+            return f"Deleting {self._deleting.name}…"
         if self._load is not None:
             return LOADING
         if self._list_error is not None:
@@ -170,7 +205,7 @@ class RecordingsScreen(Screen):  # pylint: disable=too-many-instance-attributes
         for info in self._items:
             has = SAVED if info.has_transcript else NOT_SAVED
             cells = (
-                Text(info.path.name, no_wrap=True, overflow="ellipsis"),
+                Text(shorten(info.path.name), no_wrap=True),
                 Text(format_date(info.modified)), Text(format_size(info.size_bytes)), Text(has),
             )
             table.add_row(*cells, key=str(info.path))
@@ -200,9 +235,26 @@ class RecordingsScreen(Screen):  # pylint: disable=too-many-instance-attributes
             return f"{path.name} is being recorded"
         return None
 
+    def navigation_blocked(self) -> bool:
+        """True while a delete runs: its outcome is always reported here, so no leaving."""
+        return self._delete is not None
+
+    async def wait_for_pending(self, timeout: float = 5.0) -> None:
+        """Let a running delete finish (for a few seconds at most), so quitting leaves the
+        session ledger right about it."""
+        worker = self._delete
+        if worker is None:
+            return
+        try:
+            await asyncio.wait_for(worker.wait(), timeout)
+        except Exception:  # the delete failed (reported below) or took too long
+            pass
+        if self._delete is worker and worker.is_finished:
+            self._finish_delete(worker, worker.state)
+
     def action_back(self) -> None:
-        """Leave; a read or delete still going finishes unseen."""
-        if self._leaving or not self.is_active:
+        """Leave; a read still going finishes unseen. Not while a delete runs."""
+        if self._leaving or not self.is_active or self.navigation_blocked():
             return
         self._leaving = True
         self.dismiss()
@@ -257,17 +309,26 @@ class RecordingsScreen(Screen):  # pylint: disable=too-many-instance-attributes
         if reason is not None:
             self.app.notify(reason, severity="error", markup=False)
             return
-        self._deleting = path.name
+        self._deleting = path
         self._delete = self.run_worker(
             partial(self.app.deps.delete_recording, path), thread=True, exit_on_error=False,
             group="recordings-delete",
         )
+        self._show_rows()
 
     def _delete_finished(self, worker: Worker, state: WorkerState) -> None:
+        if worker is self._delete:
+            self._finish_delete(worker, state)
+
+    def _finish_delete(self, worker: Worker, state: WorkerState) -> None:
         self._delete = None
-        if state == WorkerState.CANCELLED:
+        path = self._deleting
+        if state == WorkerState.CANCELLED or path is None:
             return
-        name, notify = self._deleting, self.app.notify
+        # Whatever the outcome says, if the audio is gone the exit message must not name it.
+        if not os.path.lexists(path):
+            self.app.ledger.forget(str(path))
+        name, notify = path.name, self.app.notify
         if state == WorkerState.SUCCESS:
             notify(f"Deleted {name}", markup=False)
         elif isinstance(worker.error, FileNotFoundError):
