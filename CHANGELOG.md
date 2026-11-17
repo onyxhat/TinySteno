@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-11-17
+- fix(tui): start the multiprocessing helper before the app takes the terminal
+
 ## [0.2.7] - 2026-11-17
 - fix(tui): a second queued start never begins a second recording
 - fix(tui): the quit prompt cannot get stuck when a screen below it is replaced
