@@ -167,7 +167,11 @@ class TinyStenoApp(App):
     # ── navigation ───────────────────────────────────────────────────────────
 
     def start_recording(self, name: str | None, persona_slug: str) -> None:
-        """Begin a recording session."""
+        """Begin a recording session; does nothing while a recording, processing or result
+        screen is open (a second start queued behind the first, from the Record button, r,
+        Enter in the name field or after --now, must not begin a second recorder)."""
+        if self._session_busy():
+            return
         if not self._persona_loads(persona_slug):
             return
         self.events.append(("record", name, persona_slug))
