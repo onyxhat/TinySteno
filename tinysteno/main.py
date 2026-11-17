@@ -21,8 +21,18 @@ from tinysteno.session import (
     DEFAULT_SESSION_TIMEOUT_MINUTES, SessionTimer, resolve_timeout_seconds, saved_message,
 )
 from tinysteno.pipeline import PipelineError, Stage, run_pipeline
+from tinysteno.doctor import run_checks
+from tinysteno.recordings import delete_recording
 from tinysteno.log_file import log_to_file
 from tinysteno.signals import deferred_exit_signals
+from tinysteno.config import (
+    config_dir as _config_dir, config_path as _config_path,
+    DEFAULT_CONFIG, ensure_config_file, read_stored, invalid_settings, load_config,
+    recordings_dir as _recordings_dir,
+    validate_config as _validate_config, update_config,
+    is_timeout_minutes as _is_timeout_minutes, is_positive_number as _is_positive_number,
+    is_speaker_count as _is_speaker_count,
+)
 from tinysteno.personas import (
     load_persona, list_personas, seed_builtin_personas,
     PersonaNotFoundError, PersonaInvalidError, Persona,
@@ -33,121 +43,6 @@ def setup_logging(verbose: bool = False):
     """Configure logging level."""
     level = logging.DEBUG if verbose else logging.WARNING
     logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
-
-
-def load_config() -> dict:
-    """Load configuration from ~/.tinysteno/config.yaml."""
-    import yaml
-
-    config_path = Path.home() / ".tinysteno" / "config.yaml"
-
-    if not config_path.exists():
-        default_config = {
-            "obsidian_vault": str(Path.home() / "Obsidian" / "Vault"),
-            "api_key": "ollama",
-            "base_url": "http://localhost:11434/v1",
-            "model": "llama3.2:3b",
-            "llm_context_tokens": 8192,
-            "whisper_model": "small",
-            "transcription_backend": "local",
-            "whisper_device": "auto",
-            "whisper_compute_type": "auto",
-            "whisper_api_key": "",
-            "whisper_base_url": "",
-            "whisper_api_model": "whisper-1",
-            "whisper_api_diarize": False,
-            "whisper_api_timeout": 600,
-            "whisper_vad": True,
-            "whisper_prompt": "",
-            "hallucination_filter": True,
-            "bleed_filter": True,
-            "diarization": False,
-            "speaker_split": False,
-            "transcript_timestamps": True,
-            "auto_title": True,
-            "auto_tags": True,
-            "output_folder": "meetings",
-            "sample_rate": 44100,
-            "channels": 1,
-            "persona": "default",
-            "session_timeout_minutes": DEFAULT_SESSION_TIMEOUT_MINUTES,
-        }
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(yaml.dump(default_config, default_flow_style=False))
-
-    # Seed built-in personas on first run (silent; only when dir absent)
-    personas_dir = config_path.parent / "personas"
-    if not personas_dir.exists():
-        seed_builtin_personas()
-
-    config = yaml.safe_load(config_path.read_text())
-    if not isinstance(config, dict):
-        raise ValueError(f"Config file is malformed: {config_path}")
-    _validate_config(config)
-    for key in ("obsidian_vault", "recordings_path"):
-        if config.get(key):
-            config[key] = str(Path(config[key]).expanduser())
-    return config
-
-
-def _recordings_dir(config: dict) -> Path:
-    """Return the effective recordings directory from config."""
-    if config.get("recordings_path"):
-        return Path(config["recordings_path"]).expanduser()
-    vault = config.get("obsidian_vault", str(Path.home() / "Obsidian" / "Vault"))
-    folder = config.get("output_folder", "meetings")
-    return Path(vault) / folder / "audio"
-
-
-def _validate_config(config: dict) -> None:
-    """Raise ValueError if required config fields have wrong types."""
-    int_fields = {"sample_rate": int, "channels": int}
-    for field, expected_type in int_fields.items():
-        if field in config and not isinstance(config[field], expected_type):
-            raise ValueError(
-                f"Config field '{field}' must be {expected_type.__name__}, "
-                f"got {type(config[field]).__name__}"
-            )
-    if "llm_context_tokens" in config and (
-        isinstance(config["llm_context_tokens"], bool)
-        or not isinstance(config["llm_context_tokens"], int)
-    ):
-        raise ValueError(
-            "Config field 'llm_context_tokens' must be int, "
-            f"got {type(config['llm_context_tokens']).__name__}"
-        )
-    if "channels" in config and config["channels"] not in (1, 2):
-        raise ValueError("Config field 'channels' must be 1 or 2")
-    if "max_speakers" in config and not _is_speaker_count(config["max_speakers"]):
-        raise ValueError("Config field 'max_speakers' must be a whole number >= 1")
-    if "whisper_api_timeout" in config and not _is_positive_number(config["whisper_api_timeout"]):
-        raise ValueError("Config field 'whisper_api_timeout' must be a positive number of seconds")
-    if "session_timeout_minutes" in config:
-        if not _is_timeout_minutes(config["session_timeout_minutes"]):
-            raise ValueError(
-                "Config field 'session_timeout_minutes' must be a number >= 0 (0 disables)"
-            )
-
-
-def _is_timeout_minutes(value) -> bool:
-    """True for a finite int/float >= 0 that is not a bool."""
-    return (
-        isinstance(value, (int, float)) and not isinstance(value, bool)
-        and math.isfinite(value) and value >= 0
-    )
-
-
-def _is_positive_number(value) -> bool:
-    """True for a finite int/float > 0 that is not a bool."""
-    return (
-        isinstance(value, (int, float)) and not isinstance(value, bool)
-        and math.isfinite(value) and value > 0
-    )
-
-
-def _is_speaker_count(value) -> bool:
-    """True for an int >= 1 that is not a bool."""
-    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
 
 
 def _speaker_count(value: str) -> int:
@@ -206,17 +101,26 @@ def create_transcriber(config: dict) -> Transcriber:
     )
 
 
+_CLI_TO_CONFIG = {
+    "backend": "transcription_backend",
+    "whisper_device": "whisper_device",
+    "whisper_compute_type": "whisper_compute_type",
+    "whisper_api_key": "whisper_api_key",
+    "whisper_api_model": "whisper_api_model",
+    "speakers": "max_speakers",
+}
+
+
+def _cli_overridden(args: argparse.Namespace) -> frozenset[str]:
+    """The config keys these CLI flags set."""
+    return frozenset(
+        key for flag, key in _CLI_TO_CONFIG.items() if getattr(args, flag, None) is not None
+    )
+
+
 def _apply_cli_overrides(config: dict, args: argparse.Namespace) -> None:
     """Merge CLI flags into config in-place (CLI overrides take precedence)."""
-    cli_to_config = {
-        "backend": "transcription_backend",
-        "whisper_device": "whisper_device",
-        "whisper_compute_type": "whisper_compute_type",
-        "whisper_api_key": "whisper_api_key",
-        "whisper_api_model": "whisper_api_model",
-        "speakers": "max_speakers",
-    }
-    for cli_key, config_key in cli_to_config.items():
+    for cli_key, config_key in _CLI_TO_CONFIG.items():
         val = getattr(args, cli_key, None)
         if val is not None:
             config[config_key] = val
@@ -398,36 +302,65 @@ def _is_interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def cmd_tui(args, config):
+def cmd_tui(args, config, *, first_run: bool = False):
     """Launch the Textual interface."""
     from tinysteno.tui import run_tui
-    from tinysteno.tui.deps import TuiDeps
+    from tinysteno.tui.deps import SettingsNotApplied, TuiDeps
 
     notes = _read_notes(args)
     _apply_cli_overrides(config, args)
 
     def make_recorder():
+        # Reads the live config at call time, so saved settings apply to the next recording.
         return AudioRecorder(
             sample_rate=config.get("sample_rate", 44100),
             channels=config.get("channels", 1),
             recordings_dir=_recordings_dir(config),
         )
 
-    deps = TuiDeps(
-        make_recorder=make_recorder,
-        run_pipeline=lambda wav_path, name, persona, timestamp, reporter: run_pipeline(
-            wav_path, name, config, persona, timestamp,
-            transcriber=create_transcriber(config),
+    def pipeline(  # pylint: disable=too-many-arguments
+        wav_path, name, persona, timestamp, reporter, *, retranscribe=False
+    ):
+        snapshot = dict(config)  # one consistent view for the whole run, whatever is saved
+        return run_pipeline(
+            wav_path, name, snapshot, persona, timestamp,
+            transcriber=create_transcriber(snapshot),
             orchestrator_cls=Orchestrator,
             exporter_cls=ObsidianExporter,
             reporter=reporter,
             notes=notes,
-        ),
+            retranscribe=retranscribe,
+        )
+
+    def save_settings(changes: dict) -> None:
+        update_config(changes)  # ValueError / OSError: nothing written, nothing changed
+        try:
+            fresh = load_config()
+            _apply_cli_overrides(fresh, args)  # a CLI flag wins for this session, never the file
+            new_dir = _recordings_dir(fresh)
+        except Exception as err:
+            raise SettingsNotApplied(str(err)) from err
+        # In place, never empty: overwrite first, then drop the keys that went away.
+        config.update(fresh)
+        for key in [key for key in config if key not in fresh]:
+            del config[key]
+        deps.recordings_dir = new_dir
+
+    deps = TuiDeps(
+        make_recorder=make_recorder,
+        run_pipeline=pipeline,
         list_personas=list_personas,
         load_persona=load_persona,
         recordings_dir=_recordings_dir(config),
+        load_settings=read_stored,
+        save_settings=save_settings,
+        run_checks=lambda: run_checks(dict(config)),
+        seed_personas=lambda: seed_builtin_personas(force=True),
+        delete_recording=lambda wav: delete_recording(deps.recordings_dir, wav),
+        first_run=first_run,
+        overridden_keys=_cli_overridden(args),
     )
-    log_path = Path.home() / ".tinysteno" / "tui.log"
+    log_path = _config_dir() / "tui.log"
     with log_to_file(log_path, getattr(args, "verbose", False)) as log:
         message, code = run_tui(
             config, deps,
@@ -485,82 +418,45 @@ def cmd_list(args):
         print(meeting.name)
 
 
-def cmd_test(_args):  # pylint: disable=too-many-statements  # large interactive CLI setup function
+def _check_line(check) -> str:
+    """One printed line for a check; the checks `test` always had keep their original wording."""
+    if check.ok:
+        return "✓ Config file exists" if check.name == "Config file" else f"✓ {check.name}"
+    legacy = {"Recorder module": "Recorder", "Transcriber module": "Transcriber",
+              "Config file": "Config"}
+    if check.name in legacy:
+        return f"✗ {legacy[check.name]}: {check.detail}"
+    if check.name in ("sounddevice", "faster-whisper", "openai", "pyyaml", "rich"):
+        return f"✗ {check.name} ({check.detail})"
+    return f"{'✗' if check.required else '!'} {check.name}: {check.detail}"
+
+
+def cmd_test(_args):
     """Verify setup before first use."""
     from rich.console import Console
 
     console = Console()
-    issues = []
-
     console.print("\n[TinySteno Setup Test]")
 
-    try:
-        from tinysteno.recorder import AudioRecorder as _  # noqa: F401  # pylint: disable=unused-import,reimported,redefined-outer-name  # import-existence check
+    config = None  # nothing is created or seeded here; the Config file check reports why
+    if _config_path().exists():
+        try:
+            stored = read_stored()
+            _validate_config(stored)
+            config = {**DEFAULT_CONFIG, **stored}
+        except (ValueError, OSError):
+            config = None
 
-        console.print("✓ Recorder module")
-    except ImportError as e:
-        issues.append(f"Recorder: {e}")
-        console.print(f"✗ Recorder: {e}")
-
-    try:
-        from tinysteno.transcriber import WhisperTranscriber as _  # noqa: F401  # pylint: disable=unused-import,reimported,redefined-outer-name  # import-existence check
-
-        console.print("✓ Transcriber module")
-    except ImportError as e:
-        issues.append(f"Transcriber: {e}")
-        console.print(f"✗ Transcriber: {e}")
-
-    try:
-        import sounddevice as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
-
-        console.print("✓ sounddevice")
-    except ImportError:
-        issues.append("sounddevice")
-        console.print("✗ sounddevice (pip install sounddevice)")
-
-    try:
-        import faster_whisper as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
-
-        console.print("✓ faster-whisper")
-    except ImportError:
-        issues.append("faster-whisper")
-        console.print("✗ faster-whisper (pip install faster-whisper)")
-
-    try:
-        import openai as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
-
-        console.print("✓ openai")
-    except ImportError:
-        issues.append("openai")
-        console.print("✗ openai (pip install openai)")
-
-    try:
-        import yaml as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
-
-        console.print("✓ pyyaml")
-    except ImportError:
-        issues.append("pyyaml")
-        console.print("✗ pyyaml (pip install pyyaml)")
-
-    try:
-        import rich as _  # noqa: F401  # pylint: disable=unused-import  # import-existence check
-
-        console.print("✓ rich")
-    except ImportError:
-        issues.append("rich")
-        console.print("✗ rich (pip install rich)")
-
-    config_path = Path.home() / ".tinysteno" / "config.yaml"
-    if config_path.exists():
-        console.print("✓ Config file exists")
-    else:
-        issues.append("config missing")
-        console.print(f"✗ Config: {config_path} not found")
+    issues = 0
+    for check in run_checks(config):
+        console.print(_check_line(check), markup=False, highlight=False, soft_wrap=True)
+        if not check.ok and check.required:
+            issues += 1
 
     if not issues:
         console.print("\n✓ All checks passed!")
         return 0
-    console.print(f"\n✗ Found {len(issues)} issue(s)")
+    console.print(f"\n✗ Found {issues} issue(s)")
     return 1
 
 
@@ -568,10 +464,14 @@ def cmd_config(args):
     """Show or edit configuration."""
     import yaml
 
-    config_path = Path.home() / ".tinysteno" / "config.yaml"
-    config = load_config()
+    config_path = _config_path()
 
     if args.edit:
+        try:
+            ensure_config_file()  # the editor needs a folder to save into; never reads the file
+        except OSError as exc:
+            print(f"Cannot create {config_path}: {exc}", file=sys.stderr)
+            sys.exit(1)
         editor = (
             os.environ.get("VISUAL")
             or os.environ.get("EDITOR")
@@ -579,8 +479,14 @@ def cmd_config(args):
         )
         editor_cmd = shlex.split(editor) + [str(config_path)]
         subprocess.call(editor_cmd)
-    else:
-        print(yaml.dump(config, indent=2))
+        return
+    try:
+        config = load_config()
+    except (ValueError, OSError, yaml.YAMLError) as exc:
+        print(f"Cannot read {config_path}: {exc}", file=sys.stderr)
+        print("Fix the file with: tinysteno config --edit", file=sys.stderr)
+        sys.exit(1)
+    print(yaml.dump(config, indent=2))
 
 
 def _prompt(console, label: str, default: str, hint: str = "") -> str:
@@ -605,7 +511,7 @@ def _prompt_bool(console, label: str, default: bool, hint: str = "") -> bool:
 
 def _print_seed_summary(console, result: dict) -> None:
     """Print persona seeding summary using rich."""
-    user_dir = Path.home() / ".tinysteno" / "personas"
+    user_dir = _config_dir() / "personas"
     if result["copied"]:
         console.print(f"[green]✓[/green] Personas seeded in [bold]{user_dir}[/bold]")
         console.print(f"  Copied: {', '.join(result['copied'])}")
@@ -613,16 +519,35 @@ def _print_seed_summary(console, result: dict) -> None:
         console.print(f"  Skipped (kept yours): {', '.join(result['skipped'])}")
 
 
-def _write_config(config_path: Path, config: dict) -> None:
-    """Persist config dict to YAML file."""
-    import yaml  # pylint: disable=import-outside-toplevel
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(yaml.dump(config, default_flow_style=False), encoding="utf-8")
+_ASKED_KEYS = frozenset({
+    "obsidian_vault", "output_folder", "recordings_path", "api_key", "base_url", "model",
+    "auto_title", "auto_tags", "whisper_model", "diarization", "channels", "sample_rate",
+    "persona", "session_timeout_minutes",
+})
+
+
+def _shown(key: str, value) -> str:
+    """Repr of a value for messages; secrets are hidden."""
+    lowered = key.lower()
+    return "(hidden)" if "key" in lowered or "token" in lowered else repr(value)
+
+
+def _report_invalid_settings(existing: dict) -> dict:
+    """Report invalid stored settings. Asked keys are dropped from `existing` (so the prompt
+    default falls back to the built-in); unasked keys are returned as removals (key -> None)."""
+    removals = {}
+    for key, reason in invalid_settings(existing).items():
+        if key in _ASKED_KEYS:
+            print(f"Current value of {key} is invalid: {reason}")
+            del existing[key]
+        else:
+            print(f"Removing invalid setting {key} (was {_shown(key, existing[key])}): {reason}")
+            removals[key] = None
+    return removals
 
 
 def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # large interactive CLI setup function
     """Interactively create or update ~/.tinysteno/config.yaml."""
-    import yaml
     from rich.console import Console
     from rich.rule import Rule
 
@@ -634,15 +559,17 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         _print_seed_summary(console, result)
         return
 
-    config_path = Path.home() / ".tinysteno" / "config.yaml"
+    cfg_path = _config_path()
 
-    # Load existing values as defaults, or fall back to built-in defaults.
-    if config_path.exists():
-        existing = yaml.safe_load(config_path.read_text()) or {}
-        action = "Updating"
-    else:
-        existing = {}
-        action = "Creating"
+    # Read the stored file once, before asking anything.
+    try:
+        existing = read_stored()
+    except (ValueError, OSError) as exc:
+        print(f"Cannot read {cfg_path}: {exc}")
+        print("Fix or remove the file, or run: tinysteno config --edit")
+        sys.exit(1)
+    action = "Updating" if cfg_path.exists() else "Creating"
+    removals = _report_invalid_settings(existing)
 
     def get(key, fallback):
         return existing.get(key, fallback)
@@ -650,7 +577,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
     console.print()
     console.print(Rule("[bold]TinySteno Setup[/bold]"))
     console.print()
-    console.print(f"{action} [bold]{config_path}[/bold]")
+    console.print(f"{action} [bold]{cfg_path}[/bold]")
     console.print("Press Enter to keep the current value.\n")
 
     # --- Obsidian ---
@@ -658,7 +585,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
     obsidian_vault = _prompt(
         console,
         "Vault path",
-        get("obsidian_vault", str(Path.home() / "Obsidian" / "Vault")),
+        get("obsidian_vault", str(Path("~/Obsidian/Vault").expanduser())),
         "absolute path to your Obsidian vault",
     )
 
@@ -794,24 +721,27 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
         )
 
     # --- Write ---
-    config = {
-        "obsidian_vault": obsidian_vault,
-        "output_folder": output_folder,
-        **( {"recordings_path": recordings_path} if recordings_path else {} ),
-        "api_key": api_key,
-        "base_url": base_url,
-        "model": model,
-        "auto_title": auto_title,
-        "auto_tags": auto_tags,
-        "whisper_model": whisper_model,
-        "diarization": diarization,
-        "channels": channels,
-        "sample_rate": sample_rate,
-        "persona": persona_slug,
-        "session_timeout_minutes": session_timeout_minutes,
-    }
-
-    _write_config(config_path, config)
+    try:
+        update_config({
+            **removals,
+            "obsidian_vault": obsidian_vault,
+            "output_folder": output_folder,
+            "recordings_path": recordings_path or None,
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": model,
+            "auto_title": auto_title,
+            "auto_tags": auto_tags,
+            "whisper_model": whisper_model,
+            "diarization": diarization,
+            "channels": channels,
+            "sample_rate": sample_rate,
+            "persona": persona_slug,
+            "session_timeout_minutes": session_timeout_minutes,
+        })
+    except (ValueError, OSError) as exc:
+        console.print(f"[red]✗ Could not save config: {exc}[/red]")
+        sys.exit(1)
 
     # Seed built-in personas, prompting on conflicts
     seed_result = seed_builtin_personas(interactive=True)
@@ -819,7 +749,7 @@ def cmd_setup(_args):  # pylint: disable=too-many-statements,too-many-locals  # 
 
     console.print()
     console.print(Rule())
-    console.print(f"[green]✓[/green] Config written to [bold]{config_path}[/bold]")
+    console.print(f"[green]✓[/green] Config written to [bold]{cfg_path}[/bold]")
     console.print()
     console.print("Run [bold]tinysteno setup[/bold] again any time to update settings.")
     console.print("Run [bold]tinysteno test[/bold] to verify your setup.")
@@ -944,10 +874,19 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
         args = parser.parse_args(["tui"])
 
     setup_logging(getattr(args, "verbose", False))
-    config = load_config()
+    first_run = not _config_path().exists()
+    try:
+        config = load_config()
+    except ValueError as exc:  # its message names the file, never the file's content
+        print(f"Error: {exc}", file=sys.stderr)
+        print("Fix the file, or run: tinysteno config --edit", file=sys.stderr)
+        sys.exit(1)
+    except OSError as exc:
+        print(f"Error: Cannot read {_config_path()}: {exc.strerror or exc}", file=sys.stderr)
+        sys.exit(1)
 
     if args.command == "tui":
-        cmd_tui(args, config)
+        cmd_tui(args, config, first_run=first_run)
     elif args.command == "record":
         cmd_record(args, config)
     elif args.command == "process":

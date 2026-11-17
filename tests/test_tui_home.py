@@ -116,7 +116,7 @@ async def test_no_personas_shows_a_hint_and_disables_record(tmp_path):
         screen = app.screen
         assert isinstance(screen, HomeScreen)
         hint = screen.query_one("#timeout-hint")
-        assert str(hint.content) == "No personas found. Run tinysteno setup."
+        assert str(hint.content) == "No personas found. Open the menu (m) and choose Personas."
         assert hint.has_class("error")
         assert screen.query_one("#record").disabled
         await pilot.press("r")
@@ -141,3 +141,25 @@ async def test_home_fits_80x24_with_five_recent_recordings(tmp_path):
         assert recent.region.bottom <= footer.region.y
         assert app.focused.id == "record"
         assert screen.query_one("#record").region.height == 1
+
+
+async def test_home_survives_a_broken_symlink_a_wav_named_folder_and_a_listing_error(
+        tmp_path, monkeypatch):
+    (tmp_path / "x.wav").symlink_to(tmp_path / "missing-target")
+    (tmp_path / "dir.wav").mkdir()
+    good = tmp_path / "good.wav"
+    good.write_bytes(b"")
+    assert recent_recordings(tmp_path) == [good]
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
+    async with app.run_test():
+        assert isinstance(app.screen, HomeScreen)
+        assert app.screen.query_one("#recent").option_count == 1
+
+    def unreadable(self):
+        raise PermissionError("no")
+
+    monkeypatch.setattr("pathlib.Path.iterdir", unreadable)
+    assert recent_recordings(tmp_path) == []
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
+    async with app.run_test():
+        assert isinstance(app.screen, HomeScreen)

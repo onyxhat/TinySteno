@@ -83,8 +83,9 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         Binding("n", "home", "Home"),
     ]
 
-    def __init__(
-        self, wav_path: str, name: str | None, persona_slug: str, timestamp: datetime
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        self, wav_path: str, name: str | None, persona_slug: str, timestamp: datetime,
+        retranscribe: bool = False,
     ) -> None:
         # ``name`` is the meeting name; Screen's own ``name`` (a DOM name) is left unset.
         super().__init__()
@@ -92,6 +93,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self.meeting_name = name
         self.persona_slug = persona_slug
         self.timestamp = timestamp
+        self.retranscribe = retranscribe  # applies to the first run only
         self.state = Run.PENDING
         self.pipeline_thread: threading.Thread | None = None
         self._frame = 0
@@ -169,6 +171,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
 
     def _start(self) -> None:
         self.state = Run.RUNNING
+        self.app.ledger.begin_run(self.wav_path)
         self.refresh_bindings()
         loop = asyncio.get_running_loop()
         outcome: asyncio.Future = loop.create_future()
@@ -186,9 +189,12 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
     def _pipeline_main(self, app: App, deps, loop, outcome: asyncio.Future) -> None:
         try:
             persona = deps.load_persona(self.persona_slug)
+            # Only the first run may transcribe again; the keyword is passed only when set.
+            extra = {"retranscribe": True} if self.retranscribe else {}
+            self.retranscribe = False
             result = deps.run_pipeline(
                 self.wav_path, self.meeting_name, persona, self.timestamp,
-                _UiReporter(app, self),
+                _UiReporter(app, self), **extra,
             )
             report = (result, None)
         except Exception as err:
@@ -213,6 +219,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
             self._on_done(result)
 
     def _on_done(self, result: PipelineResult) -> None:
+        self.app.ledger.end_run(self.wav_path)
         if result.no_speech or not result.note_path:
             self.state = Run.NO_SPEECH
             self.refresh_bindings()
@@ -234,6 +241,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
             self.app.notify("Used the saved transcript for this recording.", markup=False)
 
     def _on_failed(self, err: Exception) -> None:
+        self.app.ledger.end_run(self.wav_path)
         self.state = Run.FAILED
         self.refresh_bindings()
         if isinstance(err, PipelineError):

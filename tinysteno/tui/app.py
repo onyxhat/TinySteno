@@ -3,22 +3,38 @@
 import asyncio
 import os
 import signal
+import threading
+import weakref
+from collections.abc import Callable, Iterable
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
-from textual.app import App
+from textual.app import App, SystemCommand
 from textual.binding import Binding
+from textual.screen import ModalScreen, Screen
 
-from tinysteno.personas import Persona
+from tinysteno.personas import Persona, PersonaInvalidError, PersonaNotFoundError
 from tinysteno.session import resolve_timeout_seconds
+from tinysteno.tui.checks import ChecksScreen
+from tinysteno.tui.confirm import ConfirmScreen
 from tinysteno.tui.deps import TuiDeps
 from tinysteno.tui.guard import RecorderGuard
 from tinysteno.pipeline import PipelineResult
 from tinysteno.tui.home import HomeScreen
 from tinysteno.tui.ledger import SessionLedger
+from tinysteno.tui.menu import DESTINATION_ORDER, MenuScreen
+from tinysteno.tui.personas import PersonasScreen
 from tinysteno.tui.processing import ProcessingScreen
 from tinysteno.tui.recording import RecordingScreen
+from tinysteno.tui.recordings import RecordingsScreen
 from tinysteno.tui.result import ResultScreen
+from tinysteno.tui.settings import SettingsScreen
+from tinysteno.tui.setup import SetupScreen
+
+# While one of these is open, a recording or a pipeline run is (or was just) in progress: the
+# Menu and its destinations stay closed, so settings never change under a running session.
+_BUSY_SCREENS = (RecordingScreen, ProcessingScreen, ResultScreen)
 
 
 class TinyStenoApp(App):
@@ -57,17 +73,40 @@ class TinyStenoApp(App):
         self.recorder_guard: RecorderGuard | None = None
         self.exit_signals: list[signal.Signals] = []  # signals routed to action_quit
         self._previous_signal_handlers: dict[signal.Signals, object] = {}
+        # Menu destinations: id -> (label, screen factory). The Menu and the command palette
+        # list them in DESTINATION_ORDER; each management screen registers itself here.
+        self.destinations: dict[str, tuple[str, Callable[[], Screen]]] = {
+            "settings": ("Settings", SettingsScreen),
+            "setup": ("Setup guide", SetupScreen),
+            "personas": ("Personas", PersonasScreen),
+            "recordings": ("Recordings", RecordingsScreen),
+            "checks": ("System check", ChecksScreen),
+        }
+        self._opened: dict[str, weakref.ref[Screen]] = {}  # the last screen of each destination
+        # The open quit prompt, if any. Whether it is still in the stack is what counts: a
+        # prompt removed by any route (even one that drops its callback) stops counting.
+        self._quit_prompt: ConfirmScreen | None = None
+        # True while a restore of the built-in personas runs (it outlives the screen that
+        # started it, so the flag lives here).
+        self.restoring_personas = threading.Event()
 
     def on_mount(self) -> None:
         self._install_signal_handlers()
-        theme = self.config.get("tui_theme")
-        if theme in self.available_themes:
-            self.theme = theme
+        self.use_theme(self.config.get("tui_theme"))
         self.push_screen(HomeScreen(persona=self.initial_persona))
+        if self.deps.first_run and not self.autostart:
+            # Over Home, so Skip, escape and the checks' Back all land on a working Home.
+            self.call_after_refresh(
+                self.open_destination, "setup", partial(SetupScreen, automatic=True))
         if self.autostart:
             slug = self.initial_persona or self.config.get("persona", "default")
             # After Home has mounted, so a failed start can fall back to a ready Home screen.
             self.call_after_refresh(self.start_recording, self.initial_name, slug)
+
+    def use_theme(self, name: object) -> None:
+        """Switch to the named theme when it is one of the available themes."""
+        if isinstance(name, str) and name in self.available_themes:
+            self.theme = name
 
     def timeout_seconds_for(self, persona: Persona) -> float | None:
         """Auto-stop limit in seconds for a persona, or None for no limit."""
@@ -92,7 +131,8 @@ class TinyStenoApp(App):
             self.exit_signals.append(sig)
 
     def _on_exit_signal(self) -> None:
-        self.call_later(self.action_quit)
+        # Never held up by a dialog: a closing terminal or a kill quits at once.
+        self.call_later(self._quit_now)
 
     def on_unmount(self) -> None:
         loop = asyncio.get_running_loop()
@@ -127,9 +167,28 @@ class TinyStenoApp(App):
     # ── navigation ───────────────────────────────────────────────────────────
 
     def start_recording(self, name: str | None, persona_slug: str) -> None:
-        """Begin a recording session."""
+        """Begin a recording session; does nothing while a recording, processing or result
+        screen is open (a second start queued behind the first, from the Record button, r,
+        Enter in the name field or after --now, must not begin a second recorder)."""
+        if self._session_busy():
+            return
+        if not self._persona_loads(persona_slug):
+            return
         self.events.append(("record", name, persona_slug))
         self.push_screen(RecordingScreen(name, persona_slug))
+
+    def _persona_loads(self, slug: str) -> bool:
+        """False (after a notification) when the persona fails in a way the Recording and
+        Processing screens do not report; a missing or invalid persona is theirs to report."""
+        try:
+            self.deps.load_persona(slug)
+        except (PersonaNotFoundError, PersonaInvalidError):
+            pass
+        except Exception as err:
+            self.notify(f'Persona "{slug}" cannot be loaded: {type(err).__name__}',
+                        severity="error", markup=False)
+            return False
+        return True
 
     def finish_recording(
         self, wav_path: str, name: str | None, persona_slug: str, started_at: datetime
@@ -141,8 +200,16 @@ class TinyStenoApp(App):
             RecordingScreen, ProcessingScreen(wav_path, name, persona_slug, started_at)
         )
 
-    def process_file(self, wav_path: str, persona_slug: str) -> None:
-        """Process an existing recording."""
+    def process_file(
+        self, wav_path: str, persona_slug: str, *, retranscribe: bool = False
+    ) -> None:
+        """Process an existing recording; does nothing while a recording, processing or
+        result screen is open, or while a run on this WAV has not ended (a second Enter
+        queued behind the first must not start a second run on the same file)."""
+        if self._session_busy() or self.ledger.is_busy(wav_path):
+            return
+        if not self._persona_loads(persona_slug):
+            return
         self.events.append(("process", wav_path, persona_slug))
         try:
             started_at = datetime.fromtimestamp(os.path.getmtime(wav_path))
@@ -151,7 +218,12 @@ class TinyStenoApp(App):
                         markup=False)
             return
         self.ledger.saved(wav_path)
-        self.push_screen(ProcessingScreen(wav_path, None, persona_slug, started_at))
+        self.push_screen(
+            ProcessingScreen(wav_path, None, persona_slug, started_at, retranscribe))
+
+    def _session_busy(self) -> bool:
+        """True while a recording, processing or result screen is open."""
+        return any(isinstance(s, _BUSY_SCREENS) for s in self.screen_stack)
 
     def show_result(self, result: PipelineResult) -> None:
         """Show the finished note."""
@@ -160,17 +232,117 @@ class TinyStenoApp(App):
 
     def _replace_topmost(self, kind: type, new_screen) -> None:
         """Replace the topmost screen of ``kind`` (closing any dialog above it, such as the
-        command palette); with none in the stack, replace the current screen."""
+        command palette or the quit prompt, which then no longer counts as open); with none in
+        the stack, replace the current screen."""
         target = next((s for s in reversed(self.screen_stack) if isinstance(s, kind)), None)
         while target is not None and self.screen is not target:
             self.pop_screen()
         self.switch_screen(new_screen)
+
+    # ── the Menu ─────────────────────────────────────────────────────────────
+
+    def _menu_entries(self) -> list[tuple[str, str]]:
+        """(destination id, label) for each registered destination, in DESTINATION_ORDER."""
+        rank = {dest: i for i, dest in enumerate(DESTINATION_ORDER)}
+        ordered = sorted(self.destinations, key=lambda dest: rank.get(dest, len(rank)))
+        return [(dest, self.destinations[dest][0]) for dest in ordered]
+
+    def menu_available(self, screen: Screen | None = None) -> bool:
+        """True when ``screen`` (default: the current one) may open the Menu: Home, or a
+        management screen opened from Home; never a dialog, and never while a recording,
+        processing or result screen is open."""
+        screen = self.screen if screen is None else screen
+        stack = self.screen_stack
+        page = next((s for s in reversed(stack) if not isinstance(s, ModalScreen)), None)
+        blocked = getattr(page, "navigation_blocked", None)
+        if callable(blocked) and blocked():  # e.g. a delete that must report its outcome
+            return False
+        if isinstance(screen, ModalScreen) or self._session_busy():
+            return False
+        return any(isinstance(s, HomeScreen) for s in stack)
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "open_menu":
+            return self.menu_available()
+        return True
+
+    def action_open_menu(self) -> None:
+        """Show the Menu (only where menu_available allows it)."""
+        if not self.menu_available():
+            return
+        self.push_screen(MenuScreen(self._menu_entries()), self._menu_chosen)
+
+    def _menu_chosen(self, dest: str | None) -> None:
+        if dest is not None:
+            self.open_destination(dest)
+
+    def open_destination(self, dest: str, factory: Callable[[], Screen] | None = None) -> None:
+        """Open a registered destination's screen (made by ``factory`` when given, else by
+        the registered one); ignored where the Menu is unavailable."""
+        if dest not in self.destinations or not self.menu_available():
+            return
+        opened = self._opened.get(dest)
+        if opened is not None and opened() in self.screen_stack:
+            return  # already open (perhaps under another management screen)
+        screen = (factory or self.destinations[dest][1])()
+        self._opened[dest] = weakref.ref(screen)
+        self.push_screen(screen)
+
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        """Command palette entries: Textual's defaults minus Screenshot, plus the app's own:
+        one per Menu destination, where the Menu is available."""
+        for command in super().get_system_commands(screen):
+            if command.title != "Screenshot":
+                yield command
+        if self.menu_available(screen):
+            for dest, label in self._menu_entries():
+                yield SystemCommand(label, f"Open {label}", partial(self.open_destination, dest))
+
+    def action_screenshot(self, filename: str | None = None, path: str | None = None) -> None:
+        """Do nothing: screenshots are made by scripts/tui_screenshots.py, which calls
+        save_screenshot directly."""
+
+    def deliver_screenshot(  # pylint: disable=arguments-differ
+        self,
+        filename: str | None = None,
+        path: str | None = None,
+        time_format: str | None = None,
+    ) -> str | None:
+        """Do nothing: the palette command and the action both end here, so neither saves."""
+        return None
 
     def action_dismiss_notices(self) -> None:
         """Clear every notice on screen (a failed-save notice stays until this or a click)."""
         self.clear_notifications()
 
     async def action_quit(self) -> None:
+        """Quit (q, ctrl+q, the palette); ask first when any open screen has unsaved changes.
+
+        A screen with edits that quitting would lose implements ``has_unsaved_changes() ->
+        bool``; every screen in the stack is asked, not only the top one (Settings may lie
+        under the System check). Exit signals skip this.
+        """
+        if self._quit_prompt is not None and self._quit_prompt in self.screen_stack:
+            return  # already asking
+        if self._any_unsaved_changes():
+            self._quit_prompt = ConfirmScreen("Quit and discard unsaved changes?", "Quit")
+            self.push_screen(self._quit_prompt, self._quit_answered)
+            return
+        await self._quit_now()
+
+    def _any_unsaved_changes(self) -> bool:
+        for screen in self.screen_stack:
+            has_unsaved = getattr(screen, "has_unsaved_changes", None)
+            if callable(has_unsaved) and has_unsaved():
+                return True
+        return False
+
+    def _quit_answered(self, confirmed: bool | None) -> None:
+        self._quit_prompt = None
+        if confirmed:
+            self.call_later(self._quit_now)
+
+    async def _quit_now(self) -> None:
         """Quit; a recording in progress is stopped and saved first, never lost.
 
         The exit message comes from the ledger: every WAV that has no note yet (a running
@@ -182,6 +354,10 @@ class TinyStenoApp(App):
         )
         if recording is not None:
             await recording.stop_for_quit()
+        for screen in list(self.screen_stack):
+            pending = getattr(screen, "wait_for_pending", None)
+            if callable(pending):  # e.g. a delete: the ledger must be right before it is read
+                await pending()
         message, failed = self.ledger.summary()
         self.exit_message = message
         self.exit(return_code=1 if failed else 0)

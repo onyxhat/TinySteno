@@ -4,6 +4,7 @@ from pathlib import Path
 
 from tinysteno.personas import Persona
 from tinysteno.pipeline import PipelineResult
+from tinysteno.recordings import delete_recording
 from tinysteno.tui.deps import TuiDeps
 
 NOTE_TEXT = "---\ntitle: Sync\n---\n# Sync\n\nWe met.\n"
@@ -83,27 +84,97 @@ def _persona(slug: str, timeout: float | None) -> Persona:
     )
 
 
-def make_deps(tmp_path: Path, **overrides) -> TuiDeps:
-    """Build TuiDeps backed by fakes; any TuiDeps field can be overridden."""
-    persona_timeouts = overrides.pop("persona_timeouts", {})
-    note = tmp_path / "Sync.md"
-    note.write_text(NOTE_TEXT)
+class _Fakes:  # pylint: disable=too-many-instance-attributes
+    """In-memory settings, personas-restore and pipeline fakes behind make_deps."""
 
-    def fake_pipeline(wav_path, name, persona, timestamp, reporter):  # pylint: disable=unused-argument
+    def __init__(self, tmp_path: Path, options: dict):
+        self.settings = options.pop("settings", {})
+        self.save_error = options.pop("save_error", None)  # any exception, e.g. SettingsNotApplied
+        self.checks = options.pop("checks", [])
+        self.seed_result = options.pop("seed_result", {"copied": [], "skipped": []})
+        self.seed_error = options.pop("seed_error", None)
+        self.persona_timeouts = options.pop("persona_timeouts", {})
+        self.persona_errors = options.pop("persona_errors", {})  # slug -> exception to raise
+        self.persona_names = options.pop("persona_names", {})  # slug -> any value for name
+        self.personas = list(options.pop("personas", ["default", "1on1"]))
+        self.seed_makes = options.pop("seed_makes", None)  # the list once personas are restored
+        self.seed_gate = options.pop("seed_gate", None)    # threading.Event: seeding waits on it
+        self.saved: list[dict] = []
+        self.pipeline_kwargs: list[dict] = []
+        self.note = tmp_path / "Sync.md"
+        self.note.write_text(NOTE_TEXT)
+
+    def pipeline(  # pylint: disable=unused-argument,too-many-arguments,too-many-positional-arguments
+        self, wav_path, name, persona, timestamp, reporter, **kwargs
+    ):
+        """Record the keyword arguments of each run and return a finished result."""
+        self.pipeline_kwargs.append(kwargs)
         return PipelineResult(
-            wav_path=wav_path, note_path=str(note), title="Sync",
+            wav_path=wav_path, note_path=str(self.note), title="Sync",
             duration_seconds=61.0, no_speech=False,
         )
 
+    def save(self, changes):
+        """Merge changes into the settings (None removes a key) or raise save_error."""
+        if self.save_error is not None:
+            raise self.save_error
+        self.saved.append(dict(changes))
+        for key, value in changes.items():
+            if value is None:
+                self.settings.pop(key, None)
+            else:
+                self.settings[key] = value
+
+    def load(self, slug):
+        """The fake persona, or raise the error set for this slug."""
+        if slug in self.persona_errors:
+            raise self.persona_errors[slug]
+        persona = _persona(slug, self.persona_timeouts.get(slug))
+        if slug in self.persona_names:
+            persona.name = self.persona_names[slug]
+        return persona
+
+    def seed(self):
+        """Return seed_result (and apply seed_makes), or raise seed_error."""
+        if self.seed_gate is not None:
+            self.seed_gate.wait(5)
+        if self.seed_makes is not None and self.seed_error is None:
+            self.personas[:] = self.seed_makes
+        if self.seed_error is not None:
+            raise self.seed_error
+        return self.seed_result
+
+
+def make_deps(tmp_path: Path, **overrides) -> TuiDeps:
+    """Build TuiDeps backed by fakes; any TuiDeps field can be overridden.
+
+    Extra keywords: settings, save_error, checks, seed_result, seed_error, persona_timeouts,
+    persona_errors, persona_names, personas, seed_makes, seed_gate.
+    The returned deps also carries ``saved`` (each save's changes), ``persona_errors`` (slug
+    -> exception, mutable), ``personas`` (the listed slugs, mutable) and ``pipeline_kwargs``
+    (the keyword arguments of each pipeline call, e.g. ``retranscribe``).
+    """
+    fakes = _Fakes(tmp_path, overrides)
     fields = {
         "make_recorder": lambda: FakeRecorder(tmp_path),
-        "run_pipeline": fake_pipeline,
-        "list_personas": lambda: ["default", "1on1"],
-        "load_persona": lambda slug: _persona(slug, persona_timeouts.get(slug)),
+        "run_pipeline": fakes.pipeline,
+        "list_personas": lambda: list(fakes.personas),
+        "load_persona": fakes.load,
         "recordings_dir": tmp_path,
         "clock": FakeClock(),
         # Tests drive RecordingScreen.tick() by hand; a real-time interval would race them.
         "live_updates": False,
+        "load_settings": lambda: dict(fakes.settings),
+        "save_settings": fakes.save,
+        "run_checks": lambda: list(fakes.checks),
+        "seed_personas": fakes.seed,
+        "delete_recording": lambda wav: delete_recording(tmp_path, wav),
+        "first_run": False,
     }
     fields.update(overrides)
-    return TuiDeps(**fields)
+    deps = TuiDeps(**fields)
+    deps.saved = fakes.saved  # type: ignore[attr-defined]
+    deps.persona_errors = fakes.persona_errors  # type: ignore[attr-defined]
+    deps.personas = fakes.personas  # type: ignore[attr-defined]  # mutate to change the list
+    deps.pipeline_kwargs = fakes.pipeline_kwargs  # type: ignore[attr-defined]
+    return deps
