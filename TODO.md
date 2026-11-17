@@ -20,3 +20,6 @@
 - [ ] Speaker split: split a segment between speakers at word level
 - [ ] Speaker split: add a Parakeet backend
 - [ ] Speaker split: measure it against hand-labelled recordings
+- [ ] TUI: edit and create personas from the Personas screen
+- [ ] TUI: test the LLM and transcription connection from Setup
+- [ ] TUI: download the speaker-separation models from the Menu

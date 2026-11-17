@@ -2,7 +2,9 @@
 """Regenerate the TUI screenshots used in README.md.
 
 Drives the real TinySteno Textual app headlessly with stand-in dependencies (no audio
-hardware, no transcription, no LLM) and saves one SVG per screen.
+hardware, no transcription, no LLM) and saves one SVG per screen. It never reads or writes
+the real ~/.tinysteno or a real recordings folder: every stand-in file lives in a temporary
+directory, and the settings, personas and recordings the screens show are made up here.
 
 Usage:
     uv run python scripts/tui_screenshots.py [output_dir]    # default: docs/images
@@ -15,8 +17,10 @@ import os
 import sys
 import tempfile
 import threading
+from datetime import datetime
 from pathlib import Path
 
+from tinysteno.doctor import Check
 from tinysteno.personas import Persona
 from tinysteno.pipeline import PipelineResult, Stage
 from tinysteno.tui.app import TinyStenoApp
@@ -30,6 +34,22 @@ MEETING = "Weekly sync"
 ELAPSED_SECONDS = 42 * 60 + 17
 CONFIG = {"persona": "default", "session_timeout_minutes": 75}
 PERSONAS = ["default", "1on1", "rca", "irm", "sprint", "kickoff", "executive-summary"]
+# What the Personas screen lists: the built-ins plus one persona of the user's own.
+LISTED_PERSONAS = [*PERSONAS, "weekly-review"]
+PERSONA_NAMES = {
+    "default": "Default meeting", "1on1": "One-on-one", "rca": "Root cause analysis",
+    "irm": "Incident review", "sprint": "Sprint planning", "kickoff": "Project kickoff",
+    "executive-summary": "Executive summary", "weekly-review": "Weekly review",
+}
+PERSONA_TIMEOUTS = {"1on1": 45, "executive-summary": 30, "kickoff": 0}  # others: the global limit
+# The config file's own contents as the Settings screen shows them. The key is a placeholder
+# (the field is masked anyway) and the paths are made up.
+STORED_SETTINGS = {
+    "obsidian_vault": "~/Obsidian/Vault", "output_folder": "meetings", "persona": "default",
+    "base_url": "http://localhost:11434/v1", "model": "llama3.2:3b",
+    "api_key": "sk-placeholder-not-a-real-key", "transcription_backend": "local",
+    "whisper_model": "small", "session_timeout_minutes": 75, "tui_theme": "tokyo-night",
+}
 VAULT = Path("Obsidian/Vault/meetings")  # relative: the script runs inside a temp directory
 # (who is talking, for how many 0.1 s ticks): 120 ticks fill both meters' 12-second history.
 TURNS = [
@@ -44,6 +64,11 @@ RECENT = [
     ("Incident-review-20261106-1630.wav", 8),
 ]
 SMALL_SIZE = (80, 24)  # a standard terminal: Home must fit without scrolling
+SETTINGS_SIZE = (84, 40)  # tall enough to show the first sections of the form
+# Recordings whose transcript was saved, and how big each audio file looks (bytes).
+TRANSCRIBED = {"Design-review-20261113-1502.wav", "Meeting-20261112-0930.wav",
+               "Incident-review-20261106-1630.wav"}
+SIZES = [31_400_000, 18_900_000, 52_300_000, 44_100_000, 27_800_000]
 NOTE = """---
 title: Weekly sync
 date: 2026-11-14 15:02
@@ -105,8 +130,9 @@ class DemoRecorder:
 
 def _persona(slug: str) -> Persona:
     return Persona(
-        slug=slug, name=slug, description="", schema={}, system_prompt="", template="",
-        template_path=Path("template.md"), tags=[],
+        slug=slug, name=PERSONA_NAMES.get(slug, slug), description="", schema={},
+        system_prompt="", template="", template_path=Path("template.md"), tags=[],
+        session_timeout_minutes=PERSONA_TIMEOUTS.get(slug),
     )
 
 
@@ -133,21 +159,31 @@ def _make_deps(clock: DemoClock, recorder: DemoRecorder, gate: threading.Event) 
     return TuiDeps(
         make_recorder=lambda: recorder,
         run_pipeline=pipeline,
-        list_personas=lambda: PERSONAS,
+        list_personas=lambda: LISTED_PERSONAS,
         load_persona=_persona,
         recordings_dir=recordings,
         clock=clock,
         live_updates=False,  # the script advances the clock and ticks by hand
+        load_settings=lambda: dict(STORED_SETTINGS),
+        save_settings=lambda changes: None,  # nothing is ever written
+        run_checks=lambda: [Check("System check", True)],
+        seed_personas=lambda: {"copied": [], "skipped": []},
+        delete_recording=lambda wav: [],  # nothing is ever deleted
     )
 
 
 def _seed_recordings(recordings: Path) -> None:
     recordings.mkdir(parents=True, exist_ok=True)
-    for filename, days_ago in RECENT:
+    for (filename, _days_ago), size in zip(RECENT, SIZES):
         path = recordings / filename
         path.write_bytes(b"")
-        stamp = 1_800_000_000 - days_ago * 86_400
-        os.utime(path, (stamp, stamp))
+        os.truncate(path, size)  # a sparse file: it only has to look this big
+        if filename in TRANSCRIBED:
+            Path(f"{path}.transcript.json").write_text("{}", encoding="utf-8")
+        # The date in the name (YYYYMMDD-HHMM), so the screenshot does not depend on the clock
+        # or time zone of the machine that made it.
+        stamp = datetime.strptime(filename.rsplit("-", 2)[-2] + filename[-8:-4], "%Y%m%d%H%M")
+        os.utime(path, (stamp.timestamp(), stamp.timestamp()))
 
 
 def _voice(tick: int, speaking: bool) -> float:
@@ -258,6 +294,42 @@ async def _capture_small_home(out: Path) -> None:
             app.save_screenshot("tui-home-80x24.svg", path=str(out))
 
 
+async def _open_destination(pilot, app: TinyStenoApp, dest: str) -> None:
+    """Open a Menu destination and let it finish reading its stand-in data."""
+    app.open_destination(dest)
+    await pilot.pause()
+    await app.workers.wait_for_complete()
+    await pilot.pause()
+
+
+async def _capture_management(out: Path) -> None:
+    """The Menu, then Settings, Personas and Recordings opened from it."""
+    with _demo_app() as (app, _clock, _recorder, _gate):
+        async with app.run_test(size=SIZE) as pilot:
+            await pilot.pause()
+            await pilot.press("m")
+            await pilot.pause()
+            app.save_screenshot("tui-menu.svg", path=str(out))
+            await pilot.press("escape")
+            await pilot.pause()
+
+            await _open_destination(pilot, app, "personas")
+            app.save_screenshot("tui-personas.svg", path=str(out))
+            await pilot.press("escape")
+            await pilot.pause()
+
+            await _open_destination(pilot, app, "recordings")
+            app.save_screenshot("tui-recordings.svg", path=str(out))
+            await pilot.press("escape")
+            await pilot.pause()
+
+    with _demo_app() as (app, _clock, _recorder, _gate):
+        async with app.run_test(size=SETTINGS_SIZE) as pilot:
+            await pilot.pause()
+            await _open_destination(pilot, app, "settings")
+            app.save_screenshot("tui-settings.svg", path=str(out))
+
+
 def main() -> None:
     """Write the screenshots into the output directory."""
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "docs/images").resolve()
@@ -265,6 +337,7 @@ def main() -> None:
     asyncio.run(_capture_journey(out))
     asyncio.run(_capture_warning(out))
     asyncio.run(_capture_small_home(out))
+    asyncio.run(_capture_management(out))
     for path in sorted(out.glob("tui-*.svg")):
         print(path)
 

@@ -49,13 +49,19 @@ Built-in personas live in `tinysteno/personas/<slug>/`, each with `persona.yaml`
 
 ## Notes
 
-- Runtime config lives at `~/.tinysteno/config.yaml` (created by `tinysteno setup`).
+- Runtime config lives at `~/.tinysteno/config.yaml` (created on first run, or by `tinysteno setup`).
+  Loading, validating and saving it is `tinysteno/config.py`; saving rewrites the file atomically,
+  so comments in a hand-edited file are not preserved.
+- A new editable setting is added to `SETTINGS` in `tinysteno/settings.py` (and to `DEFAULT_CONFIG`
+  in `config.py` when it has a default); the Settings screen and the first-run guide are built from it.
 - Transcription has two backends, selected by `transcription_backend` / `--backend`:
   `local` (faster-whisper, GPU auto-detected) and `api` (Whisper-compatible endpoint).
 - This repo is indexed by both `graft` and the GitNexus MCP for code navigation and
   impact analysis.
 - The TUI lives in `tinysteno/tui/` (Textual). It takes all side effects through `TuiDeps`, must not
   import `tinysteno.main`, and is tested with `App.run_test()` (pytest-asyncio auto mode).
+  TUI screens reach the filesystem only through `TuiDeps` (reading the recordings folder listing
+  is the one exception).
 - Transcript clean-up (hallucinated lines, speaker bleed) lives in `tinysteno/hygiene.py` and runs
   inside `transcript.assemble()` for both backends. Its thresholds are deliberate (see the
   constants and `tests/test_hygiene.py`); do not tune them without audio evidence.

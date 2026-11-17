@@ -9,6 +9,7 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 
 - Record meetings (Ctrl+C to stop; auto-stops after 75 minutes by default, change it with `--timeout` or `session_timeout_minutes`, `0` disables)
 - Interactive terminal UI (`tinysteno`) with live level meters, per-stage progress and an in-terminal note preview
+- A Menu in the terminal UI for first-run setup, settings, personas, recordings and a system check
 - Captures mic + system audio simultaneously — no virtual audio device required
 - Transcribe with faster-whisper (local CPU/GPU) or OpenAI Whisper API
 - GPU auto-detection — CUDA, with a CPU fallback (Apple Silicon runs on the CPU)
@@ -145,7 +146,36 @@ The happy path is `tinysteno`, `Enter` to record, `Enter` to stop, and the finis
 
 ![Result screen showing the rendered meeting note](docs/images/tui-result.svg)
 
-The screenshots are generated from the real app with stand-in audio and a sample note: `uv run python scripts/tui_screenshots.py`.
+### Menu
+
+Press `m` on Home, or open the command palette (`Ctrl+P`) and pick an entry, to open the Menu. It lists Settings, Setup guide, Personas, Recordings and System check; the palette has the same five entries. Each opens its own screen on top of Home, and `Esc` goes back. The Menu is not available while a recording is being made or processed, or while a Result is showing: those screens leave it closed, so settings never change under a running session. It is available again once you are back on Home.
+
+**Settings** edits `~/.tinysteno/config.yaml` in six collapsible sections: Notes, Summary (LLM), Transcription, Speakers, Recording and Appearance. Secret fields (the API keys) are masked.
+
+![Settings screen: the Notes section with the vault, notes folder, recordings folder and default persona](docs/images/tui-settings.svg)
+
+- **Save and Back.** `Ctrl+S` saves and closes the screen; `Esc` goes back, and asks first when you have unsaved changes (quitting with `Ctrl+Q` asks too). A field that is not valid is named under the form, focus moves to it, and nothing is written.
+- **Only what you changed is written, and settings the screen does not show are kept.** Keys in `config.yaml` that the form has no field for (for example a key you added by hand) stay in the file. Blanking an optional field removes its key.
+- **The file is rewritten.** Saving writes the whole file again, so comments and key order in a `config.yaml` you edited by hand are not preserved. `tinysteno setup` does the same. A new file is created with mode `600`; an existing file keeps its mode; a symlinked `config.yaml` is written through to its target. A read-only file is refused, and the file is left as it was.
+- **When a change takes effect.** The next recording and the next processing run use the new settings; a run already in progress keeps the settings it started with. The time limit on Home and the recordings folder follow a saved change at once.
+- **Command-line flags win.** A value given as a flag (`--backend`, `--whisper-device`, `--whisper-compute-type`, `--whisper-api-key`, `--whisper-api-model`, `--speakers`) is marked `(overridden by a command-line flag this session)` in the form, is never written to the file, and keeps winning until you quit. The form shows what the file holds, not the flag's value. If you edit that field anyway, what you typed is saved for the next session but the flag still applies to this one.
+- **A file that is not valid YAML** cannot be edited here: Settings says where it is broken (line and column, never the text on that line, which could be a key) and leaves it alone. Fix it with `tinysteno config --edit`; `tinysteno` itself will not start until it is valid.
+
+**Setup guide.** The first time the TUI starts without a `config.yaml`, TinySteno creates one with the defaults and opens the Setup guide over Home (not when you start with `--now`). It asks for the settings that matter to get going: the vault, the notes folder, the default persona, the LLM base URL, model and API key, and the transcription backend. `Save and continue` writes those seven and shows the System check; `Skip for now` (or `Esc`) leaves without writing, and the guide does not come back by itself, because the file now exists. Reopen it any time from the Menu.
+
+**Personas** lists the personas in `~/.tinysteno/personas/`. Columns: Persona (the folder name), Name, Auto-stop (`global` when the persona does not set its own `session_timeout_minutes`, `off` for `0`, else the minutes) and Status (`default` for the default persona, `ok`, or `Invalid: ...` with the reason when a listed persona fails to load). `d` makes the persona under the cursor the default (it is saved to `config.yaml` like any other setting; an invalid persona is refused). `b` restores the built-ins, after asking: it overwrites each built-in persona's files with the packaged version, so your edits to them are lost (a file you added inside a built-in's folder stays); it brings back built-in persona folders you deleted; and it keeps personas you added. A persona folder that is malformed (a missing file, a `persona.yaml` that does not parse, a bad schema) is not listed at all: it is skipped and a warning goes to `~/.tinysteno/tui.log`. Editing and creating personas stays a job for your editor.
+
+![Personas screen: slug, name, auto-stop and status of each persona](docs/images/tui-personas.svg)
+
+**Recordings** lists every `.wav` in the recordings folder, newest first, with its date, size and whether a transcript was saved. A persona chooser sits above the table. `Enter` processes the recording under the cursor with that persona, as on Home (a saved transcript is reused when it is still valid; see "Saved transcripts"). `t` transcribes again: it ignores the saved transcript and transcribes the audio afresh; for a recording with no saved transcript it is the same as `Enter`. `d` deletes, after asking: it removes the audio and its saved transcript and levels files (`<name>.wav.transcript.json` and `<name>.wav.levels.json`) and keeps the notes in your vault. Only a `.wav` directly inside the recordings folder can be deleted, and never a symbolic link; a recording being processed or recorded cannot be deleted, processed or transcribed again. `r` reads the folder again.
+
+![Recordings screen: recordings with date, size and whether a transcript is saved](docs/images/tui-recordings.svg)
+
+**System check** runs the checks `tinysteno test` runs: the recorder and transcriber modules, the `sounddevice`, `faster-whisper`, `openai`, `pyyaml` and `rich` packages, the config file, the vault folder, the recordings folder (it must exist or be creatable and writable), the default persona, and, only when `speaker_split` is on, whether the optional speaker-separation package is installed. `✓` is a pass, `✗` a failure and `!` an optional item that needs attention; the summary says how many problems were found, and optional items alone do not count as problems. `r` runs the checks again.
+
+![Menu over Home: Settings, Setup guide, Personas, Recordings and System check](docs/images/tui-menu.svg)
+
+The screenshots are generated from the real app with stand-in audio, settings, personas and a sample note: `uv run python scripts/tui_screenshots.py`. The command palette does not save screenshots.
 
 ### Keys
 
@@ -154,6 +184,13 @@ The screenshots are generated from the real app with stand-in audio and a sample
 | Home | `Enter` on Record, or `r` | Start recording with the current name and persona |
 | Home | `Enter` in the Name box | Start recording |
 | Home | `Enter` on a recent recording | Process that WAV with the selected persona |
+| Home, and the screens opened from the Menu | `Ctrl+P` | Command palette; includes the Menu entries |
+| Home | `m` | Open the Menu |
+| Settings | `Ctrl+S` / `Esc` | Save and close / go back (asks when there are unsaved changes) |
+| Setup guide | `Ctrl+S` / `Esc` | Save and continue / skip |
+| Personas | `d` / `b` / `Esc` | Make default / restore built-ins (asks first) / back |
+| Recordings | `Enter` / `t` / `d` / `r` / `Esc` | Process / transcribe again / delete (asks first) / refresh / back |
+| System check | `r` / `Esc` | Run again / back |
 | Recording | `Enter`, `Space`, `s` | Stop and process (ignored, with a `Still starting…` notice, until the recorder has started) |
 | Recording | `k` | Keep recording: cancel the auto-stop for this session |
 | Recording | `+` | Extend the auto-stop by 15 minutes |
@@ -162,10 +199,10 @@ The screenshots are generated from the real app with stand-in audio and a sample
 | Processing | `n` | Back to Home (once the pipeline is no longer running) |
 | Result | `o` | Open the note in Obsidian |
 | Result | `n` | Back to Home |
-| Home, Recording, Processing, Result | `q` | Quit (see below) |
+| Home, Recording, Processing, Result, Menu screens | `q` | Quit (see below) |
 | Any screen, including the discard confirmation | `Ctrl+Q` | Quit |
 
-`r` and `q` are ordinary text while the Name box has focus. In the discard confirmation `q` quits the same way as everywhere else: the recording is saved, not discarded. The footer only lists keys that do something right now: `r` and `n` appear on the Processing screen once the pipeline has stopped running.
+`r`, `m` and `q` are ordinary text while the Name box has focus. In the discard confirmation `q` quits the same way as everywhere else: the recording is saved, not discarded. The footer only lists keys that do something right now: `r` and `n` appear on the Processing screen once the pipeline has stopped running.
 
 Things to know:
 
@@ -175,7 +212,7 @@ Things to know:
 - **A failed save keeps the raw audio.** If the WAV cannot be written (for example a full disk), the raw microphone and system-audio files are kept rather than deleted, and the error names them. In the TUI that notice stays on screen until you press `Esc` or click it, and when you quit TinySteno prints it to stderr and exits with code 1. That holds whenever you quit, even if the save failed earlier and you went back to Home in between.
 - **Quitting during processing** exits immediately; the pipeline is not waited for, so it is abandoned and may not finish writing a note. The WAV stays on disk and TinySteno prints the `tinysteno process` command to finish the job. The same message is printed for every recording that has no note yet when you quit: after a failed stage or "No speech detected", whether you are still on the Processing screen or went back to Home first.
 - **Failures keep your audio.** A failed stage or "No speech detected" leaves the WAV where it is and says so on the Processing screen, with any warnings gathered before it (the CLI prints them as `Warning:` lines too). After a failed stage `r` runs the pipeline again from the top; after "No speech detected" there is nothing to retry, so only `n` (Home) is offered.
-- **Only `d`, confirmed, deletes audio.**
+- **Only a confirmed `d` deletes audio**: `d` on the Recording screen discards the recording being made, and `d` on the Recordings screen deletes a finished one.
 - **One stream ending early does not shorten the recording.** If system-audio capture stops part-way through (or the microphone delivers nothing), the WAV still runs for the full length, with silence on that channel.
 - **Level meters.** Each meter is on a fixed scale from -60 dBFS (empty) to 0 dBFS (full), with the newest sound at the right; green is normal speech, amber is loud, red is close to clipping. An empty meter, just a faint baseline, means that input is at or below -60 dBFS: silent, muted, or the wrong device.
 - **System audio.** If system audio is not being captured, the System meter reads `System audio unavailable` and only the microphone is recorded. When macOS capture failed to start (usually missing Screen Recording permission), a warning toast says why.
@@ -196,7 +233,7 @@ Personas control what the LLM extracts from a transcript and how the Obsidian no
 
 ### Built-in personas
 
-Built-in personas are seeded to `~/.tinysteno/personas/` on first run, so you can inspect and edit them directly. To restore them to their defaults, run `tinysteno setup --reset-personas`.
+Built-in personas are seeded to `~/.tinysteno/personas/` on first run, so you can inspect and edit them directly. To restore them to their defaults, run `tinysteno setup --reset-personas` or use Restore built-ins on the TUI's Personas screen.
 
 | Slug | Name | Use for |
 |------|------|---------|
@@ -250,7 +287,13 @@ Schema field types are `string` or `list` (list of strings). Field names must be
 
 Config file: `~/.tinysteno/config.yaml`
 
-Run `tinysteno setup` to create it interactively, or create it manually:
+Run `tinysteno setup` to create it interactively, edit it from the TUI (Menu, Settings), or create it manually. A new file is created with mode `600`, since it may hold API keys.
+
+`tinysteno setup` checks the file before it asks anything, and stops with the position of the problem (never the text) if it is not valid YAML. It keeps settings it does not ask about (`whisper_prompt`, `tui_theme`, `max_speakers`, anything you added) and rewrites the file, so comments and key order in a hand-edited `config.yaml` are not preserved. A stored setting it does not ask about that is invalid is removed, after printing its name, old value (hidden for keys and tokens) and the reason. An invalid value it does ask about is reported and the prompt starts from the built-in default.
+
+`tinysteno test` writes nothing, not even a missing config file. Besides the modules and packages it checks the config file, the vault folder, the recordings folder, the default persona and, when `speaker_split` is on, the optional speaker-separation package. A failed required check is marked `✗` and makes the command exit 1; an optional item is marked `!` and does not.
+
+To create it manually:
 
 ```yaml
 # Obsidian vault path (~ is expanded)
