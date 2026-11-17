@@ -53,16 +53,20 @@ class HomeScreen(Screen):
                 yield Input(placeholder="Untitled meeting (optional)", id="name")
             with Horizontal(classes="field"):
                 yield Label("Persona", classes="field-label")
-                yield Select(
-                    [(slug, slug) for slug in personas], value=initial,
-                    allow_blank=not personas, prompt="No personas", id="persona",
-                )
+                yield self._persona_select(personas, initial)
             yield Static("", id="timeout-hint")
             yield Button("● Record", id="record", variant="success", compact=True,
                          disabled=not personas)
             yield Label("Recent recordings", id="recent-label")
             yield OptionList(*self._recent_options(), id="recent")
         yield Footer()
+
+    @staticmethod
+    def _persona_select(personas: list[str], initial: object) -> Select:
+        return Select(
+            [(slug, slug) for slug in personas], value=initial,
+            allow_blank=not personas, prompt="No personas", id="persona",
+        )
 
     def _recent_options(self) -> list[Option]:
         if self._recent:
@@ -80,10 +84,11 @@ class HomeScreen(Screen):
                 severity="error", markup=False,
             )
 
-    def on_screen_resume(self) -> None:
+    async def on_screen_resume(self) -> None:
         """Back from another screen: show recordings made meanwhile (from the recordings
-        folder, which a settings save may have changed), the new default persona unless the
-        user picked one, and Record ready."""
+        folder, which a settings save may have changed), the personas as they are now, the
+        new default persona unless the user picked one, and Record ready."""
+        await self._follow_persona_list()
         recent = recent_recordings(self.app.deps.recordings_dir)
         if recent != self._recent:
             self._recent = recent
@@ -93,6 +98,35 @@ class HomeScreen(Screen):
         self._follow_default_persona()
         self._update_hint()  # the time limit may have changed in Settings
         self.query_one("#record", Button).focus()
+
+    async def _follow_persona_list(self) -> None:
+        """Rebuild the persona Select when the personas on disk changed (restored, added or
+        removed in the Personas screen): keep the current choice if it still exists, else
+        the configured default, else the first."""
+        try:
+            personas = list(self.app.deps.list_personas())
+        except Exception:
+            return  # cannot tell: keep what is shown
+        if personas == self._personas:
+            return
+        current = self._slug_or_none()
+        default = self.app.config.get("persona")
+        if current in personas:
+            initial = current
+        else:
+            initial = next((s for s in (default, *personas) if s in personas), Select.NULL)
+            self._default_shown = initial if isinstance(initial, str) else None
+            self._persona_picked = False
+        self._personas = personas
+        old = self.query_one("#persona", Select)
+        parent = old.parent
+        await old.remove()
+        await parent.mount(self._persona_select(personas, initial))
+        self.query_one("#record", Button).disabled = not personas
+
+    def _slug_or_none(self) -> str | None:
+        value = self.query_one("#persona", Select).value
+        return value if isinstance(value, str) else None
 
     def _follow_default_persona(self) -> None:
         default = self.app.config.get("persona")

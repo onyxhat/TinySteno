@@ -418,3 +418,26 @@ SetupScreen {
 #setup-buttons Button {
     margin-left: 2;
 }
+
+/* ── Personas ──────────────────────────────────────────────────────────── */
+
+PersonasScreen {
+    align: center top;
+}
+
+#personas-panel {
+    width: 100%;
+    max-width: 88;
+    height: 1fr;
+    padding: 0 1;
+}
+
+#personas-note {
+    margin: 1 0 0 0;
+    color: $warning;
+}
+
+#personas {
+    height: 1fr;
+    margin-top: 1;
+}

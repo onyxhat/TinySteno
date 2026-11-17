@@ -15,7 +15,7 @@ CONFIG = {"persona": "1on1", "session_timeout_minutes": 120}
 # test_palette_titles_are_pinned, so someone has to decide whether it belongs in the app.
 # "Settings" is the app's own: one command per registered Menu destination.
 EXPECTED_TITLES = {"Theme", "Quit", "Keys", "Maximize", "Settings", "Setup guide",
-                   "System check"}
+                   "Personas", "System check"}
 
 
 @pytest.fixture(autouse=True)
