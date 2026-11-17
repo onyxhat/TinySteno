@@ -15,6 +15,7 @@ from tinysteno.personas import Persona, PersonaInvalidError, PersonaNotFoundErro
 from tinysteno.tui.confirm import ConfirmScreen
 from tinysteno.tui.deps import SettingsNotApplied
 from tinysteno.tui.formscreen import readable_reason
+from tinysteno.tui.leaving import LeaveOnceMixin
 
 LOADING = "Loading…"
 RESTORING = "Restoring…"
@@ -65,7 +66,7 @@ def _auto_stop(persona: Persona | None) -> str:
     return "off" if minutes == 0 else f"{minutes:g} min"
 
 
-class PersonasScreen(Screen):
+class PersonasScreen(LeaveOnceMixin, Screen):
     """A table of the personas; ``d`` makes one the default, ``b`` restores the built-ins.
 
     Reading the personas and restoring run in thread workers; a result that arrives after
@@ -87,7 +88,6 @@ class PersonasScreen(Screen):
         self._load: Worker | None = None       # the read in progress, None when idle
         self._restore: Worker | None = None    # the restore in progress, None when idle
         self._poll = None                      # timer watching a restore this screen did not start
-        self._leaving = False                  # (not `_closing`: Textual's message pump)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -252,14 +252,11 @@ class PersonasScreen(Screen):
     # ── actions ──────────────────────────────────────────────────────────────
 
     def _can_act(self) -> bool:
-        return not self._leaving and self.is_active and not self._busy
+        return self._may_leave() and not self._busy
 
     def action_back(self) -> None:
         """Leave; a read or restore still going finishes unseen."""
-        if self._leaving or not self.is_active:
-            return
-        self._leaving = True
-        self.dismiss()
+        self._leave_once()
 
     def action_set_default(self) -> None:
         """Make the persona under the cursor the default (a valid one only)."""

@@ -18,6 +18,7 @@ from tinysteno.recordings import RecordingInfo, list_recordings
 from tinysteno.tui.confirm import ConfirmScreen
 from tinysteno.tui.formscreen import readable_reason
 from tinysteno.tui.home import NO_PERSONAS, initial_persona
+from tinysteno.tui.leaving import LeaveOnceMixin
 
 LOADING = "Loading…"
 COLUMNS = ("Recording", "Date", "Size", "Transcript")
@@ -57,7 +58,7 @@ def _delete_question(name: str) -> str:
             "Notes in your vault are kept.")
 
 
-class RecordingsScreen(Screen):  # pylint: disable=too-many-instance-attributes
+class RecordingsScreen(LeaveOnceMixin, Screen):  # pylint: disable=too-many-instance-attributes
     """A table of the recordings folder; ``enter`` processes, ``t`` transcribes again, ``d``
     deletes (after asking).
 
@@ -84,7 +85,6 @@ class RecordingsScreen(Screen):  # pylint: disable=too-many-instance-attributes
         self._reload_wanted = False          # a refresh was asked for while a read ran
         self._delete: Worker | None = None   # the delete in progress, None when idle
         self._deleting: Path | None = None   # the file it deletes, for the message
-        self._leaving = False                # (not `_closing`: Textual's message pump)
 
     def compose(self) -> ComposeResult:
         app = self.app
@@ -217,7 +217,7 @@ class RecordingsScreen(Screen):  # pylint: disable=too-many-instance-attributes
     # ── actions ──────────────────────────────────────────────────────────────
 
     def _can_act(self) -> bool:
-        return not self._leaving and self.is_active and self._delete is None
+        return self._may_leave() and self._delete is None
 
     def _selected(self) -> RecordingInfo | None:
         table = self.query_one("#recordings", DataTable)
@@ -254,10 +254,8 @@ class RecordingsScreen(Screen):  # pylint: disable=too-many-instance-attributes
 
     def action_back(self) -> None:
         """Leave; a read still going finishes unseen. Not while a delete runs."""
-        if self._leaving or not self.is_active or self.navigation_blocked():
-            return
-        self._leaving = True
-        self.dismiss()
+        if not self.navigation_blocked():
+            self._leave_once()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Enter on the table (it takes the key before the screen's binding does)."""

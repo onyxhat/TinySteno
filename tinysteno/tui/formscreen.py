@@ -7,6 +7,7 @@ from textual.widgets import Static
 
 from tinysteno.tui.deps import SettingsNotApplied
 from tinysteno.tui.forms import FormError, SettingsForm
+from tinysteno.tui.leaving import LeaveOnceMixin
 
 
 def readable_reason(err: Exception) -> str:
@@ -26,7 +27,7 @@ def unexpected(err: Exception) -> str:
     return f"Unexpected error: {type(err).__name__}"
 
 
-class FormScreen(Screen):
+class FormScreen(LeaveOnceMixin, Screen):
     """A screen with a ``SettingsForm`` and a ``#form-error`` line under it.
 
     Subclasses set ``self._form`` and decide what happens after a save. Stored values live
@@ -37,8 +38,6 @@ class FormScreen(Screen):
     def __init__(self) -> None:
         super().__init__()
         self._form: SettingsForm | None = None
-        self._leaving = False   # the screen is closing: act on nothing more
-        # (not `_closing`: Textual's message pump uses that name)
 
     def _show_error(self, message: str) -> None:
         error = self.query_one("#form-error", Static)
@@ -48,11 +47,10 @@ class FormScreen(Screen):
     def _can_act(self) -> bool:
         """Only the top screen that is not already closing handles Save and Back (queued
         presses arriving after the first save must not pop the screen below)."""
-        return not self._leaving and self.is_active
+        return self._may_leave()
 
     def _close(self) -> None:
-        self._leaving = True
-        self.dismiss()
+        self._leave_once()
 
     def _collect(self, form: SettingsForm, read: Callable[[], dict]) -> dict | None:
         """The values ``read`` returns, or None after showing why they are not valid."""

@@ -7,14 +7,17 @@ from textual.content import Content
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Static
 
+from tinysteno.tui.leaving import LeaveOnceMixin
 
-class ConfirmScreen(ModalScreen[bool]):
+
+class ConfirmScreen(LeaveOnceMixin, ModalScreen[bool]):
     """Ask ``question``; dismiss with True when the user presses the confirm button.
 
-    Focus starts on Cancel, so Enter on its own never confirms; escape cancels.
+    Focus starts on Cancel, so Enter on its own never confirms; escape cancels. Only the
+    first answer counts: one queued behind it never closes the screen below.
     """
 
-    BINDINGS = [Binding("escape", "dismiss(False)", "Cancel")]
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
     AUTO_FOCUS = "#cancel"
 
     def __init__(self, question: str, confirm_label: str) -> None:
@@ -31,6 +34,10 @@ class ConfirmScreen(ModalScreen[bool]):
                 yield Button(Content(self.confirm_label), id="confirm", variant="error")
         yield Footer()
 
+    def action_cancel(self) -> None:
+        """Answer no."""
+        self._leave_once(False)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
-        self.dismiss(event.button.id == "confirm")
+        self._leave_once(event.button.id == "confirm")

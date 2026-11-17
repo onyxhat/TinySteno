@@ -8,6 +8,7 @@ from textual.widgets import Button, Footer, Header, Static
 from textual.worker import Worker, WorkerState
 
 from tinysteno.doctor import Check
+from tinysteno.tui.leaving import LeaveOnceMixin
 
 RUNNING = "Running checks…"
 
@@ -33,7 +34,7 @@ def _row_text(check: Check) -> str:
     return f"{_mark(check)} {_one_line(check.name)}{detail}"
 
 
-class ChecksScreen(Screen):
+class ChecksScreen(LeaveOnceMixin, Screen):
     """Runs ``deps.run_checks()`` in a thread worker when it opens and on ``r``.
 
     Rows and details are shown literally (markup off): a detail is often a command to copy.
@@ -76,8 +77,8 @@ class ChecksScreen(Screen):
         )
 
     def action_back(self) -> None:
-        """Leave; a run still going finishes unseen."""
-        self.dismiss()
+        """Leave (once); a run still going finishes unseen."""
+        self._leave_once()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         event.stop()
