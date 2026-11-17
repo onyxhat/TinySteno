@@ -353,7 +353,7 @@ def cmd_tui(args, config, *, first_run: bool = False):
         recordings_dir=_recordings_dir(config),
         load_settings=read_stored,
         save_settings=save_settings,
-        run_checks=lambda: run_checks(config),
+        run_checks=lambda: run_checks(dict(config)),
         seed_personas=lambda: seed_builtin_personas(force=True),
         delete_recording=lambda wav: delete_recording(deps.recordings_dir, wav),
         first_run=first_run,

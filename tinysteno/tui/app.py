@@ -15,6 +15,7 @@ from textual.screen import ModalScreen, Screen
 
 from tinysteno.personas import Persona
 from tinysteno.session import resolve_timeout_seconds
+from tinysteno.tui.checks import ChecksScreen
 from tinysteno.tui.confirm import ConfirmScreen
 from tinysteno.tui.deps import TuiDeps
 from tinysteno.tui.guard import RecorderGuard
@@ -26,6 +27,7 @@ from tinysteno.tui.processing import ProcessingScreen
 from tinysteno.tui.recording import RecordingScreen
 from tinysteno.tui.result import ResultScreen
 from tinysteno.tui.settings import SettingsScreen
+from tinysteno.tui.setup import SetupScreen
 
 # While one of these is open, a recording or a pipeline run is (or was just) in progress: the
 # Menu and its destinations stay closed, so settings never change under a running session.
@@ -72,6 +74,8 @@ class TinyStenoApp(App):
         # list them in DESTINATION_ORDER; each management screen registers itself here.
         self.destinations: dict[str, tuple[str, Callable[[], Screen]]] = {
             "settings": ("Settings", SettingsScreen),
+            "setup": ("Setup guide", SetupScreen),
+            "checks": ("System check", ChecksScreen),
         }
         self._opened: dict[str, weakref.ref[Screen]] = {}  # the last screen of each destination
         self._asking_to_quit = False
@@ -80,6 +84,9 @@ class TinyStenoApp(App):
         self._install_signal_handlers()
         self.use_theme(self.config.get("tui_theme"))
         self.push_screen(HomeScreen(persona=self.initial_persona))
+        if self.deps.first_run and not self.autostart:
+            # Over Home, so Skip, escape and the checks' Back all land on a working Home.
+            self.call_after_refresh(self.open_destination, "setup")
         if self.autostart:
             slug = self.initial_persona or self.config.get("persona", "default")
             # After Home has mounted, so a failed start can fall back to a ready Home screen.

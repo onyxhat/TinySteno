@@ -3,37 +3,19 @@
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Static
 
 from tinysteno.config import config_path
 from tinysteno.settings import SETTINGS
 from tinysteno.tui.confirm import ConfirmScreen
-from tinysteno.tui.deps import SettingsNotApplied
-from tinysteno.tui.forms import FormError, SettingsForm
+from tinysteno.tui.formscreen import FormScreen, readable_reason, unexpected
+from tinysteno.tui.forms import SettingsForm
 
 
-def readable_reason(err: Exception) -> str:
-    """The error's text without quoted file content.
-
-    A YAML error quotes the offending line of the file (indented four spaces, with a ``^``
-    under it), and that line may hold an API key. config.py no longer passes that text on;
-    this is a second layer for any other error that might.
-    """
-    lines = [line for line in str(err).splitlines() if not line.startswith("    ")]
-    return "\n".join(line.rstrip(":") if line.startswith("  in ") else line for line in lines)
-
-
-def _unexpected(err: Exception) -> str:
-    return f"Unexpected error: {type(err).__name__}"
-
-
-class SettingsScreen(Screen):
+class SettingsScreen(FormScreen):
     """Every editable setting in one form; ctrl+s saves only what changed.
 
-    Stored values live only inside the form: no handler keeps them in a local variable
-    where an unexpected error could print them, and every handler turns such an error into
-    a line under the form instead of a crash.
+    Every handler turns an unexpected error into a line under the form instead of a crash.
     """
 
     SUB_TITLE = "Settings"
@@ -44,11 +26,8 @@ class SettingsScreen(Screen):
 
     def __init__(self) -> None:
         super().__init__()
-        self._form: SettingsForm | None = None
         self._load_error: str | None = None
         self._notice = ""       # shown under the form when the screen opens
-        self._leaving = False   # dismiss() has been called: act on nothing more
-        # (not `_closing`: Textual's message pump uses that name)
 
     def _build_form(self) -> None:
         deps = self.app.deps
@@ -67,7 +46,7 @@ class SettingsScreen(Screen):
                 SETTINGS, stored, personas, overridden=deps.overridden_keys, id="settings-form"
             )
         except Exception as err:
-            self._notice = _unexpected(err)
+            self._notice = unexpected(err)
 
     def compose(self) -> ComposeResult:
         self._build_form()
@@ -100,20 +79,6 @@ class SettingsScreen(Screen):
         elif event.button.id == "back":
             self.action_back()
 
-    def _show_error(self, message: str) -> None:
-        error = self.query_one("#form-error", Static)
-        error.update(message)
-        error.display = bool(message)
-
-    def _can_act(self) -> bool:
-        """Only the top screen that is not already closing handles Save and Back (queued
-        presses arriving after the first save must not pop the screen below)."""
-        return not self._leaving and self.is_active
-
-    def _close(self) -> None:
-        self._leaving = True
-        self.dismiss()
-
     def has_unsaved_changes(self) -> bool:
         """True when leaving now would lose edits (the app asks before quitting)."""
         if self._form is None or self._leaving:
@@ -132,44 +97,17 @@ class SettingsScreen(Screen):
         try:
             self._save(self._form)
         except Exception as err:
-            self._show_error(_unexpected(err))
+            self._show_error(unexpected(err))
 
     def _save(self, form: SettingsForm) -> None:
-        try:
-            changes = form.changes()
-        except FormError as err:
-            self._show_error(err.message)
-            form.focus_field(err.key)
+        changes = self._collect(form, form.changes)
+        if changes is None:
             return
         if not changes:
             self._close()
             return
-        try:
-            self.app.deps.save_settings(changes)
-        except SettingsNotApplied as err:
-            self._saved(changes)
-            self.app.notify(
-                "Settings saved, but they could not be applied to this session: "
-                f"{readable_reason(err)}. Restart TinySteno to use them.",
-                severity="warning", markup=False,
-            )
+        if self._write(changes) is not None:
             self._close()
-            return
-        except ValueError as err:
-            self._show_error(readable_reason(err))
-            return
-        except Exception as err:  # OSError, or anything else: keep the edits on screen
-            self._show_error(f"Could not save settings: {readable_reason(err)}")
-            return
-        self._saved(changes)
-        if "tui_theme" in changes:
-            self.app.use_theme(changes["tui_theme"])
-        self.app.notify("Settings saved")
-        self._close()
-
-    def _saved(self, changes: dict) -> None:
-        # Key names only: a value may be an API key.
-        self.app.events.append(("settings_saved", tuple(sorted(changes))))
 
     # ── leaving ──────────────────────────────────────────────────────────────
 
@@ -185,7 +123,7 @@ class SettingsScreen(Screen):
                 ConfirmScreen("Discard unsaved changes?", "Discard"), self._discard_answered
             )
         except Exception as err:
-            self._show_error(_unexpected(err))
+            self._show_error(unexpected(err))
 
     def _discard_answered(self, confirmed: bool | None) -> None:
         if confirmed and self._can_act():

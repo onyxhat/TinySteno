@@ -1,0 +1,94 @@
+"""Shared base of the screens that edit settings: the Settings screen and the Setup guide."""
+
+from collections.abc import Callable
+
+from textual.screen import Screen
+from textual.widgets import Static
+
+from tinysteno.tui.deps import SettingsNotApplied
+from tinysteno.tui.forms import FormError, SettingsForm
+
+
+def readable_reason(err: Exception) -> str:
+    """The error's text without quoted file content.
+
+    A YAML error quotes the offending line of the file (indented four spaces, with a ``^``
+    under it), and that line may hold an API key. config.py no longer passes that text on;
+    this is a second layer for any other error that might.
+    """
+    lines = [line for line in str(err).splitlines() if not line.startswith("    ")]
+    return "\n".join(line.rstrip(":") if line.startswith("  in ") else line for line in lines)
+
+
+def unexpected(err: Exception) -> str:
+    """One line for an error nobody planned for: its type, never its text (which could
+    hold a value from the form)."""
+    return f"Unexpected error: {type(err).__name__}"
+
+
+class FormScreen(Screen):
+    """A screen with a ``SettingsForm`` and a ``#form-error`` line under it.
+
+    Subclasses set ``self._form`` and decide what happens after a save. Stored values live
+    only inside the form: no handler keeps them in a local variable where an unexpected
+    error could print them.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._form: SettingsForm | None = None
+        self._leaving = False   # the screen is closing: act on nothing more
+        # (not `_closing`: Textual's message pump uses that name)
+
+    def _show_error(self, message: str) -> None:
+        error = self.query_one("#form-error", Static)
+        error.update(message)
+        error.display = bool(message)
+
+    def _can_act(self) -> bool:
+        """Only the top screen that is not already closing handles Save and Back (queued
+        presses arriving after the first save must not pop the screen below)."""
+        return not self._leaving and self.is_active
+
+    def _close(self) -> None:
+        self._leaving = True
+        self.dismiss()
+
+    def _collect(self, form: SettingsForm, read: Callable[[], dict]) -> dict | None:
+        """The values ``read`` returns, or None after showing why they are not valid."""
+        try:
+            return read()
+        except FormError as err:
+            self._show_error(err.message)
+            form.focus_field(err.key)
+            return None
+
+    def _write(self, changes: dict) -> bool | None:
+        """Save ``changes``. True: saved and applied. False: saved, but this session could
+        not apply it (a warning is shown). None: not saved, the reason is on screen."""
+        app = self.app
+        try:
+            app.deps.save_settings(changes)
+        except SettingsNotApplied as err:
+            self._saved(changes)
+            app.notify(
+                "Settings saved, but they could not be applied to this session: "
+                f"{readable_reason(err)}. Restart TinySteno to use them.",
+                severity="warning", markup=False,
+            )
+            return False
+        except ValueError as err:
+            self._show_error(readable_reason(err))
+            return None
+        except Exception as err:  # OSError, or anything else: keep the edits on screen
+            self._show_error(f"Could not save settings: {readable_reason(err)}")
+            return None
+        self._saved(changes)
+        if "tui_theme" in changes:
+            app.use_theme(changes["tui_theme"])
+        app.notify("Settings saved")
+        return True
+
+    def _saved(self, changes: dict) -> None:
+        # Key names only: a value may be an API key.
+        self.app.events.append(("settings_saved", tuple(sorted(changes))))

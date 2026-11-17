@@ -37,7 +37,8 @@ async def test_menu_lists_destinations_in_the_fixed_order_with_their_labels(tmp_
     labels = {"settings": "Settings", "setup": "Setup guide", "personas": "Personas",
               "recordings": "Recordings", "checks": "System check"}
     assert DESTINATION_ORDER == tuple(labels)
-    # Later tasks register these; the menu must keep the fixed order whatever was added first.
+    # Setup and checks are registered by the app itself; the menu must keep the fixed order
+    # whatever was added first.
     for dest in ("checks", "personas"):
         app.destinations[dest] = (labels[dest], SettingsScreen)
     async with app.run_test() as pilot:
@@ -45,8 +46,9 @@ async def test_menu_lists_destinations_in_the_fixed_order_with_their_labels(tmp_
         await pilot.pause()
         menu = app.screen.query_one("#menu", OptionList)
         options = [menu.get_option_at_index(i) for i in range(menu.option_count)]
-        assert [o.id for o in options] == ["settings", "personas", "checks"]
-        assert [str(o.prompt) for o in options] == ["Settings", "Personas", "System check"]
+        assert [o.id for o in options] == ["settings", "setup", "personas", "checks"]
+        assert [str(o.prompt) for o in options] == [
+            "Settings", "Setup guide", "Personas", "System check"]
 
 
 async def test_choosing_settings_in_the_menu_opens_it(tmp_path):

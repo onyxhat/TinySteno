@@ -221,3 +221,17 @@ def test_overridden_keys():
     assert deps.overridden_keys == {"transcription_backend", "max_speakers"}
     deps, _config = _launch()
     assert deps.overridden_keys == frozenset()
+
+
+def test_run_checks_gets_a_copy_of_the_live_config():
+    deps, config = _launch()
+    before = dict(config)
+
+    def mutate(copy):
+        copy["persona"] = "mutated"
+        copy["added"] = 1
+        return []
+
+    with patch("tinysteno.main.run_checks", side_effect=mutate):
+        deps.run_checks()
+    assert config == before
