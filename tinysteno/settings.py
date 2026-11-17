@@ -60,7 +60,7 @@ SETTINGS: tuple[Setting, ...] = (
             "Transcribe on this computer (local) or through a Whisper API (api).",
             choices=("local", "api"), essential=True),
     Setting("whisper_model", "Whisper model", "choice", "Transcription",
-            "Local model size; a name outside this list is kept as typed.",
+            "Local model: tiny, base, small, medium or large-v3, or any other model name.",
             choices=("tiny", "base", "small", "medium", "large-v3")),
     Setting("whisper_device", "Whisper device", "choice", "Transcription",
             "Hardware for local transcription.", choices=("auto", "cpu", "cuda")),
@@ -110,6 +110,11 @@ _BOOL_WORDS = {
     "true": True, "yes": True, "on": True, "1": True,
     "false": False, "no": False, "off": False, "0": False,
 }
+
+
+def accepts_any(item: Setting) -> bool:
+    """True for a choice setting whose choices are only suggestions: any value is accepted."""
+    return item.key in _OPEN_CHOICES
 
 
 def setting(key: str) -> Setting:
@@ -179,7 +184,7 @@ def from_text(item: Setting, text: str) -> object:
         _check_range(item, number)
         return number
     if kind == "choice":
-        if item.choices and item.key not in _OPEN_CHOICES and text not in item.choices:
+        if item.choices and not accepts_any(item) and text not in item.choices:
             raise _fail(item, f"must be one of {', '.join(item.choices)}")
         return int(text) if item.key == "channels" else text
     return text

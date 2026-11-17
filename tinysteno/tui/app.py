@@ -3,6 +3,7 @@
 import asyncio
 import os
 import signal
+import weakref
 from collections.abc import Callable, Iterable
 from datetime import datetime
 from functools import partial
@@ -14,6 +15,7 @@ from textual.screen import ModalScreen, Screen
 
 from tinysteno.personas import Persona
 from tinysteno.session import resolve_timeout_seconds
+from tinysteno.tui.confirm import ConfirmScreen
 from tinysteno.tui.deps import TuiDeps
 from tinysteno.tui.guard import RecorderGuard
 from tinysteno.pipeline import PipelineResult
@@ -71,6 +73,8 @@ class TinyStenoApp(App):
         self.destinations: dict[str, tuple[str, Callable[[], Screen]]] = {
             "settings": ("Settings", SettingsScreen),
         }
+        self._opened: dict[str, weakref.ref[Screen]] = {}  # the last screen of each destination
+        self._asking_to_quit = False
 
     def on_mount(self) -> None:
         self._install_signal_handlers()
@@ -109,7 +113,8 @@ class TinyStenoApp(App):
             self.exit_signals.append(sig)
 
     def _on_exit_signal(self) -> None:
-        self.call_later(self.action_quit)
+        # Never held up by a dialog: a closing terminal or a kill quits at once.
+        self.call_later(self._quit_now)
 
     def on_unmount(self) -> None:
         loop = asyncio.get_running_loop()
@@ -223,8 +228,13 @@ class TinyStenoApp(App):
         """Open a registered destination's screen; ignored where the Menu is unavailable."""
         if dest not in self.destinations or not self.menu_available():
             return
+        opened = self._opened.get(dest)
+        if opened is not None and opened() in self.screen_stack:
+            return  # already open (perhaps under another management screen)
         _, factory = self.destinations[dest]
-        self.push_screen(factory())
+        screen = factory()
+        self._opened[dest] = weakref.ref(screen)
+        self.push_screen(screen)
 
     def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
         """Command palette entries: Textual's defaults minus Screenshot, plus the app's own:
@@ -254,6 +264,31 @@ class TinyStenoApp(App):
         self.clear_notifications()
 
     async def action_quit(self) -> None:
+        """Quit (q, ctrl+q, the palette); ask first when the screen has unsaved changes.
+
+        A screen with edits that quitting would lose implements ``has_unsaved_changes() ->
+        bool``; the topmost screen that is not a dialog is asked. Exit signals skip this.
+        """
+        if self._asking_to_quit:
+            return
+        screen = next(
+            (s for s in reversed(self.screen_stack) if not isinstance(s, ModalScreen)), None
+        )
+        has_unsaved = getattr(screen, "has_unsaved_changes", None)
+        if callable(has_unsaved) and has_unsaved():
+            self._asking_to_quit = True
+            self.push_screen(
+                ConfirmScreen("Quit and discard unsaved changes?", "Quit"), self._quit_answered
+            )
+            return
+        await self._quit_now()
+
+    def _quit_answered(self, confirmed: bool | None) -> None:
+        self._asking_to_quit = False
+        if confirmed:
+            self.call_later(self._quit_now)
+
+    async def _quit_now(self) -> None:
         """Quit; a recording in progress is stopped and saved first, never lost.
 
         The exit message comes from the ledger: every WAV that has no note yet (a running

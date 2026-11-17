@@ -4,7 +4,9 @@ import re
 import pytest
 
 from tinysteno.config import DEFAULT_CONFIG, validate_config
-from tinysteno.settings import SECTIONS, SETTINGS, collect, from_text, setting, to_text
+from tinysteno.settings import (
+    SECTIONS, SETTINGS, accepts_any, collect, from_text, setting, to_text,
+)
 
 
 def by_key(key):
@@ -88,3 +90,11 @@ def test_secret_errors_never_echo_the_text():
     with pytest.raises(ValueError) as info:
         from_text(by_key("api_key"), "   ")
     assert by_key("api_key").label in str(info.value)
+
+
+def test_accepts_any_marks_choices_that_are_only_suggestions():
+    assert accepts_any(setting("whisper_model"))
+    assert not accepts_any(setting("whisper_device"))
+    assert not accepts_any(setting("model"))
+    help_text = setting("whisper_model").help
+    assert all(size in help_text for size in setting("whisper_model").choices)

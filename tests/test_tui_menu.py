@@ -146,6 +146,19 @@ async def test_menu_is_not_reachable_from_a_dialog(tmp_path):
         assert isinstance(app.screen, ConfirmScreen)
 
 
+async def test_a_destination_already_open_is_not_opened_again(tmp_path):
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
+    async with app.run_test() as pilot:
+        app.open_destination("settings")
+        await pilot.pause()
+        first = app.screen
+        assert isinstance(first, SettingsScreen)
+        app.open_destination("settings")
+        await pilot.pause()
+        assert app.screen is first
+        assert sum(isinstance(s, SettingsScreen) for s in app.screen_stack) == 1
+
+
 async def test_unregistered_destination_is_ignored(tmp_path):
     app = TinyStenoApp(CONFIG, make_deps(tmp_path))
     async with app.run_test() as pilot:
