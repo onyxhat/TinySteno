@@ -22,6 +22,24 @@ def recent_recordings(directory: Path, limit: int = 8) -> list[Path]:
     return wavs[:limit]
 
 
+def initial_persona(config: dict, personas: list[str], preferred: str | None = None) -> object:
+    """The persona a Select starts on: ``preferred``, then the configured default, then the
+    first persona there is; ``Select.NULL`` when there are none."""
+    candidates = [preferred, config.get("persona"), *personas]
+    return next((slug for slug in candidates if slug in personas), Select.NULL)
+
+
+RECENT_LABEL = "Recent recordings"
+RECENT_LABEL_MORE = "Recent recordings (m → Recordings for all)"
+RECENT_LIMIT = 8
+
+
+def _recent_and_more(directory: Path) -> tuple[list[Path], bool]:
+    """The newest recordings Home shows, and whether there are more than that."""
+    found = recent_recordings(directory, RECENT_LIMIT + 1)
+    return found[:RECENT_LIMIT], len(found) > RECENT_LIMIT
+
+
 class HomeScreen(Screen):
     """Landing screen."""
 
@@ -41,11 +59,10 @@ class HomeScreen(Screen):
         app = self.app
         self._personas = personas = list(app.deps.list_personas())
         # --persona first, then the configured default, then the first persona there is.
-        candidates = [self._persona_arg, app.config.get("persona"), *personas]
-        initial = next((slug for slug in candidates if slug in personas), Select.NULL)
+        initial = initial_persona(app.config, personas, self._persona_arg)
         self._persona_picked = self._persona_arg in personas
         self._default_shown = initial if isinstance(initial, str) else None
-        self._recent = recent_recordings(app.deps.recordings_dir)
+        self._recent, more = _recent_and_more(app.deps.recordings_dir)
         yield Header()
         with Vertical(id="panel"):
             with Horizontal(classes="field"):
@@ -57,7 +74,7 @@ class HomeScreen(Screen):
             yield Static("", id="timeout-hint")
             yield Button("● Record", id="record", variant="success", compact=True,
                          disabled=not personas)
-            yield Label("Recent recordings", id="recent-label")
+            yield Label(RECENT_LABEL_MORE if more else RECENT_LABEL, id="recent-label")
             yield OptionList(*self._recent_options(), id="recent")
         yield Footer()
 
@@ -89,7 +106,8 @@ class HomeScreen(Screen):
         folder, which a settings save may have changed), the personas as they are now, the
         new default persona unless the user picked one, and Record ready."""
         await self._follow_persona_list()
-        recent = recent_recordings(self.app.deps.recordings_dir)
+        recent, more = _recent_and_more(self.app.deps.recordings_dir)
+        self.query_one("#recent-label", Label).update(RECENT_LABEL_MORE if more else RECENT_LABEL)
         if recent != self._recent:
             self._recent = recent
             listing = self.query_one("#recent", OptionList)

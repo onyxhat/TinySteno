@@ -26,6 +26,7 @@ from tinysteno.tui.menu import DESTINATION_ORDER, MenuScreen
 from tinysteno.tui.personas import PersonasScreen
 from tinysteno.tui.processing import ProcessingScreen
 from tinysteno.tui.recording import RecordingScreen
+from tinysteno.tui.recordings import RecordingsScreen
 from tinysteno.tui.result import ResultScreen
 from tinysteno.tui.settings import SettingsScreen
 from tinysteno.tui.setup import SetupScreen
@@ -77,6 +78,7 @@ class TinyStenoApp(App):
             "settings": ("Settings", SettingsScreen),
             "setup": ("Setup guide", SetupScreen),
             "personas": ("Personas", PersonasScreen),
+            "recordings": ("Recordings", RecordingsScreen),
             "checks": ("System check", ChecksScreen),
         }
         self._opened: dict[str, weakref.ref[Screen]] = {}  # the last screen of each destination

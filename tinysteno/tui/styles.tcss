@@ -441,3 +441,24 @@ PersonasScreen {
     height: 1fr;
     margin-top: 1;
 }
+
+/* ── Recordings ────────────────────────────────────────────────────────── */
+
+RecordingsScreen {
+    align: center top;
+}
+
+#recordings-panel {
+    width: 100%;
+    max-width: 88;
+    height: 1fr;
+    padding: 0 1;
+}
+
+#recordings-note {
+    color: $warning;
+}
+
+#recordings {
+    height: 1fr;
+}

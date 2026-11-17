@@ -171,6 +171,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
 
     def _start(self) -> None:
         self.state = Run.RUNNING
+        self.app.ledger.begin_run(self.wav_path)
         self.refresh_bindings()
         loop = asyncio.get_running_loop()
         outcome: asyncio.Future = loop.create_future()
@@ -218,6 +219,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
             self._on_done(result)
 
     def _on_done(self, result: PipelineResult) -> None:
+        self.app.ledger.end_run(self.wav_path)
         if result.no_speech or not result.note_path:
             self.state = Run.NO_SPEECH
             self.refresh_bindings()
@@ -239,6 +241,7 @@ class ProcessingScreen(Screen):  # pylint: disable=too-many-instance-attributes
             self.app.notify("Used the saved transcript for this recording.", markup=False)
 
     def _on_failed(self, err: Exception) -> None:
+        self.app.ledger.end_run(self.wav_path)
         self.state = Run.FAILED
         self.refresh_bindings()
         if isinstance(err, PipelineError):
