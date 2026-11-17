@@ -869,7 +869,12 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
 
     setup_logging(getattr(args, "verbose", False))
     first_run = not _config_path().exists()
-    config = load_config()
+    try:
+        config = load_config()
+    except ValueError as exc:  # its message names the file, never the file's content
+        print(f"Error: {exc}", file=sys.stderr)
+        print("Fix the file, or run: tinysteno config --edit", file=sys.stderr)
+        sys.exit(1)
 
     if args.command == "tui":
         cmd_tui(args, config, first_run=first_run)

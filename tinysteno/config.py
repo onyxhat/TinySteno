@@ -145,22 +145,35 @@ def write_config(path: Path, config: dict) -> None:
         raise
 
 
+def _parse_yaml(text: str, path: Path):
+    """yaml.safe_load, raising ValueError that names where the file is broken, never what it
+    says there: PyYAML's own message quotes the line, which may hold an API key."""
+    import yaml
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = "unreadable"
+        if mark is not None:
+            where = f"line {mark.line + 1}, column {mark.column + 1}"
+        message = f"Config file is not valid YAML ({where}): {path}"
+    # Raised outside the except block, and from None: the original error is neither
+    # chained nor kept as context, so no traceback can show its text.
+    raise ValueError(message) from None
+
+
 def read_stored() -> dict:
     """Return the config file's own contents, unexpanded; {} when the file is missing.
 
     An empty or comments-only file counts as {}. Raises ValueError when the file is not
     valid YAML or not a mapping.
     """
-    import yaml
     path = config_path()
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
-    try:
-        stored = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        raise ValueError(f"Config file is not valid YAML: {path}: {exc}") from exc
+    stored = _parse_yaml(text, path)
     if stored is None:
         return {}
     if not isinstance(stored, dict):
@@ -197,9 +210,10 @@ def update_config(changes: dict) -> dict:
 
 
 def load_config() -> dict:
-    """Load configuration from ~/.tinysteno/config.yaml, creating defaults on first run."""
-    import yaml
+    """Load configuration from ~/.tinysteno/config.yaml, creating defaults on first run.
 
+    Raises ValueError when the file is not valid YAML, not a mapping or holds invalid values.
+    """
     path = config_path()
 
     if not path.exists():
@@ -212,7 +226,7 @@ def load_config() -> dict:
     if not personas_dir.exists():
         seed_builtin_personas()
 
-    config = yaml.safe_load(path.read_text())
+    config = _parse_yaml(path.read_text(), path)
     if not isinstance(config, dict):
         raise ValueError(f"Config file is malformed: {path}")
     validate_config(config)

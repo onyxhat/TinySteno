@@ -252,3 +252,55 @@ def test_config_show_of_an_invalid_file_explains_and_exits_1(home, capsys):
         main.cmd_config(argparse.Namespace(edit=False))
     assert info.value.code == 1
     assert "--edit" in capsys.readouterr().err
+
+
+# ── a malformed file is reported without quoting it (the bad line may hold an API key) ──
+
+LEAKY_YAML = "model: a\napi_key sk-live-SECRET\nbase_url: x\n"
+
+
+def _write_leaky_config():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    (config_path().parent / "personas").mkdir(exist_ok=True)   # load_config: no seeding
+    config_path().write_text(LEAKY_YAML)
+
+
+@pytest.mark.parametrize("loader", [read_stored, load_config])
+def test_yaml_error_names_the_place_not_the_content(loader):
+    _write_leaky_config()
+    with pytest.raises(ValueError) as caught:
+        loader()
+    message = str(caught.value)
+    assert "SECRET" not in message and "api_key" not in message
+    assert message == f"Config file is not valid YAML (line 3, column 1): {config_path()}"
+    assert caught.value.__cause__ is None and caught.value.__suppress_context__ is True
+
+
+def test_yaml_error_without_a_position_says_unreadable(monkeypatch):
+    _write_leaky_config()
+
+    def broken(_text):
+        raise yaml.YAMLError("api_key sk-live-SECRET")
+    monkeypatch.setattr(yaml, "safe_load", broken)
+    with pytest.raises(ValueError) as caught:
+        read_stored()
+    assert str(caught.value) == f"Config file is not valid YAML (unreadable): {config_path()}"
+
+
+@pytest.mark.parametrize("argv", [
+    ["tinysteno", "process", "x.wav"],
+    ["tinysteno", "record"],
+    ["tinysteno", "tui"],
+])
+def test_main_reports_a_malformed_config_without_a_traceback(argv, monkeypatch, capsys):
+    _write_leaky_config()
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exit_info:
+        main.main()          # fails at load_config, before any audio or app is touched
+    assert exit_info.value.code == 1
+    out, err = capsys.readouterr()
+    assert "SECRET" not in out + err and "Traceback" not in err
+    assert err.splitlines() == [
+        f"Error: Config file is not valid YAML (line 3, column 1): {config_path()}",
+        "Fix the file, or run: tinysteno config --edit",
+    ]
