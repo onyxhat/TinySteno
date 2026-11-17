@@ -209,10 +209,12 @@ def update_config(changes: dict) -> dict:
     return stored
 
 
-def load_config() -> dict:
-    """Load configuration from ~/.tinysteno/config.yaml, creating defaults on first run.
+def ensure_config_file() -> Path:
+    """Create ~/.tinysteno/config.yaml with the defaults when it does not exist, and seed the
+    built-in personas when the personas folder does not exist; return the path.
 
-    Raises ValueError when the file is not valid YAML, not a mapping or holds invalid values.
+    An existing file is never read or changed, so this also prepares a broken file for an
+    editor.
     """
     path = config_path()
 
@@ -225,7 +227,15 @@ def load_config() -> dict:
     personas_dir = path.parent / "personas"
     if not personas_dir.exists():
         seed_builtin_personas()
+    return path
 
+
+def load_config() -> dict:
+    """Load configuration from ~/.tinysteno/config.yaml, creating defaults on first run.
+
+    Raises ValueError when the file is not valid YAML, not a mapping or holds invalid values.
+    """
+    path = ensure_config_file()
     config = _parse_yaml(path.read_text(), path)
     if not isinstance(config, dict):
         raise ValueError(f"Config file is malformed: {path}")

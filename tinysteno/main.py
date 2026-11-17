@@ -27,7 +27,8 @@ from tinysteno.log_file import log_to_file
 from tinysteno.signals import deferred_exit_signals
 from tinysteno.config import (
     config_dir as _config_dir, config_path as _config_path,
-    DEFAULT_CONFIG, read_stored, invalid_settings, load_config, recordings_dir as _recordings_dir,
+    DEFAULT_CONFIG, ensure_config_file, read_stored, invalid_settings, load_config,
+    recordings_dir as _recordings_dir,
     validate_config as _validate_config, update_config, write_config as _write_config,
     is_timeout_minutes as _is_timeout_minutes, is_positive_number as _is_positive_number,
     is_speaker_count as _is_speaker_count,
@@ -466,6 +467,11 @@ def cmd_config(args):
     config_path = _config_path()
 
     if args.edit:
+        try:
+            ensure_config_file()  # the editor needs a folder to save into; never reads the file
+        except OSError as exc:
+            print(f"Cannot create {config_path}: {exc}", file=sys.stderr)
+            sys.exit(1)
         editor = (
             os.environ.get("VISUAL")
             or os.environ.get("EDITOR")
