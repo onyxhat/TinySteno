@@ -462,3 +462,8 @@ RecordingsScreen {
 #recordings {
     height: 1fr;
 }
+
+#recordings-personas-error {
+    height: auto;
+    color: $error;
+}

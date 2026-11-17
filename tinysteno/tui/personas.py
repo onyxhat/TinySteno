@@ -183,7 +183,7 @@ class PersonasScreen(LeaveOnceMixin, Screen):
         if not self._rows:
             return NO_PERSONAS
         if self._default is not None and self._default not in {r.slug for r in self._rows}:
-            return f'The default persona "{self._default}" was not found.'
+            return f'The default persona "{self._default}" was not found or is not valid.'
         return ""
 
     def _show_rows(self) -> None:
@@ -254,9 +254,15 @@ class PersonasScreen(LeaveOnceMixin, Screen):
     def _can_act(self) -> bool:
         return self._may_leave() and not self._busy
 
+    def navigation_blocked(self) -> bool:
+        """True while a restore runs: its outcome is always reported here, so no leaving
+        (Back, the Menu and the palette's destinations wait, as for a delete)."""
+        return self._restore is not None or self.app.restoring_personas.is_set()
+
     def action_back(self) -> None:
-        """Leave; a read or restore still going finishes unseen."""
-        self._leave_once()
+        """Leave; a read still going finishes unseen. Not while a restore runs."""
+        if not self.navigation_blocked():
+            self._leave_once()
 
     def action_set_default(self) -> None:
         """Make the persona under the cursor the default (a valid one only)."""

@@ -10,6 +10,7 @@ from textual.widgets.option_list import Option
 
 from tinysteno.personas import PersonaInvalidError, PersonaNotFoundError
 from tinysteno.recordings import list_recordings
+from tinysteno.tui.formscreen import readable_reason
 
 NO_RECORDINGS = "No recordings yet"
 NO_PERSONAS = "No personas found. Open the menu (m) and choose Personas."
@@ -56,10 +57,11 @@ class HomeScreen(Screen):
         # picks another (or gave a valid --persona), a new default no longer replaces it.
         self._default_shown: str | None = None
         self._persona_picked = False
+        self._personas_error: str | None = None   # why the personas could not be listed
 
     def compose(self) -> ComposeResult:
         app = self.app
-        self._personas = personas = list(app.deps.list_personas())
+        self._personas = personas = self._list_personas() or []
         # --persona first, then the configured default, then the first persona there is.
         initial = initial_persona(app.config, personas, self._persona_arg)
         self._persona_picked = self._persona_arg in personas
@@ -123,11 +125,8 @@ class HomeScreen(Screen):
         """Rebuild the persona Select when the personas on disk changed (restored, added or
         removed in the Personas screen): keep the current choice if it still exists, else
         --persona, else the configured default, else the first."""
-        try:
-            personas = list(self.app.deps.list_personas())
-        except Exception:
-            return  # cannot tell: keep what is shown
-        if personas == self._personas:
+        personas = self._list_personas()
+        if personas is None or personas == self._personas:  # cannot tell: keep what is shown
             return
         current = self._slug_or_none()
         # The current choice stays unless the user never picked it and --persona (which did
@@ -145,6 +144,18 @@ class HomeScreen(Screen):
         await old.remove()
         await parent.mount(self._persona_select(personas, initial))
         self.query_one("#record", Button).disabled = not personas
+
+    def _list_personas(self) -> list[str] | None:
+        """The personas there are; None (with the reason kept for the hint) when they cannot
+        be listed, for example a personas folder that cannot be read."""
+        try:
+            personas = list(self.app.deps.list_personas())
+        except Exception as err:
+            self._personas_error = (
+                f"Personas cannot be listed: {readable_reason(err) or type(err).__name__}")
+            return None
+        self._personas_error = None
+        return personas
 
     def _slug_or_none(self) -> str | None:
         value = self.query_one("#persona", Select).value
@@ -167,7 +178,7 @@ class HomeScreen(Screen):
         hint = self.query_one("#timeout-hint", Static)
         if not self._personas:
             hint.add_class("error")
-            hint.update(NO_PERSONAS)
+            hint.update(self._personas_error or NO_PERSONAS)
             return
         try:
             persona = self.app.deps.load_persona(self._slug())

@@ -78,7 +78,7 @@ async def test_a_default_that_does_not_exist_is_named_above_the_table(tmp_path):
     app = TinyStenoApp(CONFIG, make_deps(tmp_path, settings={"persona": "ghost"}))
     async with app.run_test() as pilot:
         screen = await open_personas(app, pilot)
-        assert note(screen) == 'The default persona "ghost" was not found.'
+        assert note(screen) == 'The default persona "ghost" was not found or is not valid.'
         assert [r[3] for r in rows(screen)] == ["ok", "ok"]
 
 
@@ -237,7 +237,7 @@ async def test_restore_failure_is_reported(tmp_path):
         assert ("Could not restore personas: not allowed", "error") in notes(app)
 
 
-async def test_keys_are_ignored_while_restoring_and_late_results_are_discarded(tmp_path):
+async def test_keys_and_back_are_ignored_while_restoring_and_the_result_is_shown(tmp_path):
     gate = threading.Event()
     deps = make_deps(tmp_path, seed_gate=gate, seed_result={"copied": ["x"], "skipped": []})
     app = TinyStenoApp(CONFIG, deps)
@@ -251,13 +251,13 @@ async def test_keys_are_ignored_while_restoring_and_late_results_are_discarded(t
         await pilot.press("d", "b")
         await pilot.pause()
         assert not deps.saved and app.screen is screen
-        await pilot.press("escape")          # leave while the restore is still running
+        await pilot.press("escape")          # Back waits while the restore is running
         await pilot.pause()
-        assert isinstance(app.screen, HomeScreen)
+        assert app.screen is screen
         gate.set()
-        await pilot.pause()
-        await pilot.pause()
-        assert not [n for n in notes(app) if n[0].startswith("Restored")]
+        for _ in range(20):
+            await pilot.pause(0.05)
+        assert ("Restored: x", "information") in notes(app)
 
 
 async def test_empty_list_offers_restore_and_home_enables_record_afterwards(tmp_path):
@@ -415,28 +415,20 @@ async def test_d_refuses_a_persona_broken_since_the_listing(tmp_path):
         assert rows(screen)[1][3] == "Invalid: now broken"
 
 
-async def test_a_restore_outlives_the_screen_and_blocks_a_second_one(tmp_path):
-    gate = threading.Event()
-    calls = []
-    deps = make_deps(tmp_path, seed_gate=gate, seed_result={"copied": [], "skipped": []})
-    inner = deps.seed_personas
-    deps.seed_personas = lambda: calls.append(1) or inner()
-    app = TinyStenoApp(CONFIG, deps)
+async def test_a_restore_running_when_the_screen_opens_blocks_a_second_one(tmp_path):
+    # Back is blocked during a restore, so this is a restore started elsewhere (the flag
+    # lives on the app): the screen waits for it, then reads the list again.
+    app = TinyStenoApp(CONFIG, make_deps(tmp_path))
     async with app.run_test() as pilot:
-        screen = await open_personas(app, pilot)
-        await confirm_restore(app, pilot)
-        await pilot.press("escape")
-        await pilot.pause()
-        assert app.restoring_personas.is_set()
+        app.restoring_personas.set()
         again = await open_personas(app, pilot)
-        assert again is not screen and note(again) == "Restoring…"
+        assert note(again) == "Restoring…"
         await pilot.press("b")
         await pilot.pause()
         assert app.screen is again
-        gate.set()
+        app.restoring_personas.clear()
         for _ in range(20):
             await pilot.pause(0.05)
-        assert not app.restoring_personas.is_set() and calls == [1]
         assert note(again) == ""
         await pilot.press("b")
         await pilot.pause()

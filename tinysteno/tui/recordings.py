@@ -85,15 +85,19 @@ class RecordingsScreen(LeaveOnceMixin, Screen):  # pylint: disable=too-many-inst
         self._reload_wanted = False          # a refresh was asked for while a read ran
         self._delete: Worker | None = None   # the delete in progress, None when idle
         self._deleting: Path | None = None   # the file it deletes, for the message
+        self._personas_error = ""            # why the personas could not be listed
 
     def compose(self) -> ComposeResult:
         app = self.app
-        self._personas = personas = list(app.deps.list_personas())
+        self._personas = personas = self._list_personas() or []
         yield Header()
         with Vertical(id="recordings-panel"):
             with Horizontal(classes="field"):
                 yield Label("Persona", classes="field-label")
                 yield self._persona_select(personas, initial_persona(app.config, personas))
+            error = Static(self._personas_error, id="recordings-personas-error", markup=False)
+            error.display = bool(self._personas_error)
+            yield error
             yield Static(LOADING, id="recordings-note", markup=False)
             yield DataTable(id="recordings", cursor_type="row", zebra_stripes=True)
         yield Footer()
@@ -113,11 +117,11 @@ class RecordingsScreen(LeaveOnceMixin, Screen):  # pylint: disable=too-many-inst
     async def _follow_persona_list(self) -> None:
         """Rebuild the persona Select when the personas changed (restored, added, removed):
         keep the current choice if it still exists, else the configured default."""
-        try:
-            personas = list(self.app.deps.list_personas())
-        except Exception:
-            return  # cannot tell: keep what is shown
-        if personas == self._personas:
+        personas = self._list_personas()
+        error = self.query_one("#recordings-personas-error", Static)
+        error.update(self._personas_error)
+        error.display = bool(self._personas_error)
+        if personas is None or personas == self._personas:  # cannot tell: keep what is shown
             return
         current = self.query_one("#persona", Select).value
         initial = current if current in personas else initial_persona(self.app.config, personas)
@@ -126,6 +130,18 @@ class RecordingsScreen(LeaveOnceMixin, Screen):  # pylint: disable=too-many-inst
         parent = old.parent
         await old.remove()
         await parent.mount(self._persona_select(personas, initial))
+
+    def _list_personas(self) -> list[str] | None:
+        """The personas there are; None (with the reason kept for the note) when they cannot
+        be listed, for example a personas folder that cannot be read."""
+        try:
+            personas = list(self.app.deps.list_personas())
+        except Exception as err:
+            reason = readable_reason(err) or type(err).__name__
+            self._personas_error = f"Personas cannot be listed: {reason}"
+            return None
+        self._personas_error = ""
+        return personas
 
     @staticmethod
     def _persona_select(personas: list[str], initial: object) -> Select:
