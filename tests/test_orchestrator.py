@@ -4,6 +4,9 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
+from openai import BadRequestError
+
 from tinysteno.personas import Persona
 from tinysteno.orchestrator import Orchestrator, PromptContext
 
@@ -711,3 +714,68 @@ def test_notes_too_long_for_the_budget_are_shortened_with_a_warning():
     block = _notes_block(messages[0])
     assert len(block) <= 450 and "n…\n</notes>" in block
     assert all(len(chunk) <= 600 // 4 for chunk in chunks)
+
+
+# --- thinking switch ---
+
+def _rejected(message: str) -> BadRequestError:
+    request = httpx.Request("POST", "http://localhost/v1/chat/completions")
+    return BadRequestError(message, response=httpx.Response(400, request=request), body=None)
+
+
+def _thinking_sent(call) -> object:
+    """The enable_thinking value a create() call carried, or None when it carried none."""
+    body = call.kwargs.get("extra_body") or {}
+    return body.get("chat_template_kwargs", {}).get("enable_thinking")
+
+
+def test_every_llm_call_asks_for_thinking_off_by_default():
+    orch = _scripted([{"summary": "s", "items": []}])
+    orch.summarize("We met.", PERSONA)
+    orch._client.chat.completions.create.side_effect = None
+    orch._client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content="Weekly sync"))])
+    orch.generate_title("We met.")
+    orch.generate_tags("We met.")
+    calls = orch._client.chat.completions.create.call_args_list
+    assert [_thinking_sent(call) for call in calls] == [False, False, False]
+
+
+def test_thinking_can_be_turned_on():
+    with patch("tinysteno.orchestrator.OpenAI"):
+        orch = Orchestrator("k", "http://x", "m", enable_thinking=True)
+    orch._client.chat.completions.create.return_value = _llm_response({"summary": "s"})
+    orch.summarize("We met.", PERSONA)
+    assert _thinking_sent(orch._client.chat.completions.create.call_args) is True
+
+
+def test_a_server_rejecting_the_thinking_field_is_asked_again_without_it():
+    orch = _scripted([
+        _rejected("Unrecognized request argument supplied: chat_template_kwargs"),
+        {"summary": "s", "items": ["i"]},
+    ])
+    assert orch.summarize("We met.", PERSONA) == {"summary": "s", "items": ["i"]}
+    first, second = orch._client.chat.completions.create.call_args_list
+    assert _thinking_sent(first) is False
+    assert "extra_body" not in second.kwargs
+    assert not orch.warnings
+
+
+def test_once_rejected_the_thinking_field_is_not_sent_again():
+    orch = _scripted([
+        _rejected("property 'chat_template_kwargs' is unsupported"),
+        {"summary": "s", "items": []},
+    ])
+    orch.summarize("We met.", PERSONA)
+    orch._client.chat.completions.create.side_effect = None
+    orch._client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content="Weekly sync"))])
+    orch.generate_title("We met.")
+    assert "extra_body" not in orch._client.chat.completions.create.call_args.kwargs
+
+
+def test_other_bad_requests_keep_the_thinking_field():
+    orch = _scripted([_rejected("max_tokens is too large"), _rejected("max_tokens is too large")])
+    orch.summarize("We met.", PERSONA)
+    calls = orch._client.chat.completions.create.call_args_list
+    assert [_thinking_sent(call) for call in calls] == [False, False]

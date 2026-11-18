@@ -90,6 +90,20 @@ async def test_switch_and_choice_changes_are_typed(tmp_path):
         assert deps.saved == [{"auto_tags": False, "channels": 2, "session_timeout_minutes": 90}]
 
 
+async def test_thinking_is_a_summary_switch_that_saves_a_bool(tmp_path):
+    deps = make_deps(tmp_path)
+    app = TinyStenoApp(CONFIG, deps)
+    async with app.run_test() as pilot:
+        screen = await open_settings(app, pilot)
+        thinking = field(screen, "enable_thinking")
+        assert isinstance(thinking, Switch) and thinking.value is False
+        section = next(a for a in thinking.ancestors if isinstance(a, Collapsible))
+        assert str(section.title) == "Summary (LLM)"
+        thinking.value = True
+        await save(pilot)
+        assert deps.saved == [{"enable_thinking": True}]
+
+
 async def test_retyping_the_same_value_is_not_a_change(tmp_path):
     deps = make_deps(tmp_path, settings={"session_timeout_minutes": 120.0})
     app = TinyStenoApp(CONFIG, deps)

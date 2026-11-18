@@ -69,6 +69,12 @@ def test_bool_round_trip():
     assert from_text(s, to_text(s, False)) is False
 
 
+def test_thinking_is_a_summary_switch_that_is_off_by_default():
+    s = by_key("enable_thinking")
+    assert (s.kind, s.section) == ("bool", "Summary (LLM)")
+    assert DEFAULT_CONFIG["enable_thinking"] is False
+
+
 
 
 

@@ -319,6 +319,13 @@ model: "llama3.2:3b"
 # split into chunks of 60% of it (at 2 characters per token); values below 500
 # are treated as 500. Must be a whole number. See "Long transcripts" below.
 llm_context_tokens: 8192
+# Let a reasoning model (Qwen3, DeepSeek-R1, ...) think before answering. Sent on
+# every summary, title and tag request as chat_template_kwargs.enable_thinking, which
+# is not part of the OpenAI API: a service that refuses it with a 400 error naming
+# that field is asked again without it, and is not sent it again during that run.
+# Thinking is much slower and can run past the 120-second request timeout on local
+# hardware. Also in the TUI: Settings > Summary (LLM) > "Let the model think".
+enable_thinking: false
 auto_title: true            # generate note titles from content
 auto_tags: true             # generate tags from content
 

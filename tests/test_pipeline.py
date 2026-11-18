@@ -362,6 +362,16 @@ def test_context_window_is_passed_to_the_orchestrator_only_when_configured(tmp_p
     assert orchestrator_cls.call_args.kwargs["context_tokens"] == 4096
 
 
+def test_thinking_switch_is_passed_to_the_orchestrator_only_when_configured(tmp_path):
+    orchestrator_cls = _orchestrator_cls()
+    _run(tmp_path, orchestrator_cls=orchestrator_cls)
+    assert "enable_thinking" not in orchestrator_cls.call_args.kwargs
+    orchestrator_cls = _orchestrator_cls()
+    _run(tmp_path, orchestrator_cls=orchestrator_cls,
+         config_overrides={"enable_thinking": True})
+    assert orchestrator_cls.call_args.kwargs["enable_thinking"] is True
+
+
 def test_reused_flag_is_false_then_true(tmp_path):
     transcriber, wav = CountingTranscriber(), _real_wav(tmp_path)
     assert not _run(tmp_path, transcriber=transcriber, wav_path=wav).reused_transcript

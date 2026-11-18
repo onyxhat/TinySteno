@@ -17,6 +17,7 @@ DEFAULT_CONFIG: dict = {
     "base_url": "http://localhost:11434/v1",
     "model": "llama3.2:3b",
     "llm_context_tokens": 8192,
+    "enable_thinking": False,
     "whisper_model": "small",
     "transcription_backend": "local",
     "whisper_device": "auto",
