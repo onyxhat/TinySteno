@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional
 
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 if TYPE_CHECKING:
     from tinysteno.personas import Persona
@@ -23,6 +23,8 @@ _TITLE_MAX_WORDS = 6
 _TITLE_MAX_OVERVIEW_CHARS = 4000
 _TAG_MAX_OVERVIEW_CHARS = 4000
 _LLM_TIMEOUT_SECONDS = 120.0
+# Request field carrying enable_thinking; not part of the OpenAI API, so some services reject it.
+_THINKING_FIELD = "chat_template_kwargs"
 
 _WARN_SUMMARY_FAILED = "The summary could not be generated; this note contains the transcript only."
 _WARN_CHUNKS_FAILED = (
@@ -126,8 +128,13 @@ def _notes_chars(notes: str) -> int:
 class Orchestrator:
     """Orchestrate LLM calls for transcript extraction and title generation."""
 
-    def __init__(self, api_key: str, base_url: str, model: str, context_tokens: int = 8192):
+    def __init__(  # pylint: disable=too-many-arguments
+        self, api_key: str, base_url: str, model: str, context_tokens: int = 8192,
+        *, enable_thinking: bool = False,
+    ):
         self.model = model
+        self.enable_thinking = bool(enable_thinking)
+        self._send_thinking = True  # cleared once the service rejects _THINKING_FIELD
         self._chunk_chars = int(
             max(int(context_tokens), _MIN_CONTEXT_TOKENS) * _CHARS_PER_TOKEN * _CHUNK_CONTEXT_SHARE
         )
@@ -262,7 +269,7 @@ class Orchestrator:
         """
         prompt = self._title_prompt(field_value)
         try:
-            response = self._client.chat.completions.create(
+            response = self._chat(
                 model=self.model,
                 messages=[
                     {
@@ -290,7 +297,7 @@ class Orchestrator:
         """
         prompt = self._tags_prompt(field_value)
         try:
-            response = self._client.chat.completions.create(
+            response = self._chat(
                 model=self.model,
                 messages=[
                     {
@@ -461,7 +468,7 @@ class Orchestrator:
         """Make one LLM call and validate the response against the persona schema."""
         parsed: dict = {}
         try:
-            response = self._client.chat.completions.create(
+            response = self._chat(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": persona.system_prompt},
@@ -477,6 +484,26 @@ class Orchestrator:
         if not isinstance(parsed, dict):
             parsed = {}
         return self._validate(parsed, persona)
+
+    def _chat(self, **request):
+        """One chat completion carrying the enable_thinking switch.
+
+        A service that rejects the switch's field is asked again without it, and is not
+        sent the field again.
+        """
+        if self._send_thinking:
+            try:
+                return self._client.chat.completions.create(
+                    **request,
+                    extra_body={_THINKING_FIELD: {"enable_thinking": self.enable_thinking}},
+                )
+            except BadRequestError as e:
+                if _THINKING_FIELD not in str(e):
+                    raise
+                logger.warning("The LLM service rejects %s; sending requests without it.",
+                               _THINKING_FIELD)
+                self._send_thinking = False
+        return self._client.chat.completions.create(**request)
 
     def _validate(self, parsed: dict, persona: "Persona") -> dict:
         """Normalize a parsed LLM response against the persona schema."""

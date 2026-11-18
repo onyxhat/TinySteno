@@ -56,6 +56,9 @@ SETTINGS: tuple[Setting, ...] = (
             "Key for the summary service; local services accept any text.", essential=True),
     Setting("llm_context_tokens", "LLM context tokens", "int", "Summary (LLM)",
             "How many tokens of transcript to send to the model at once."),
+    Setting("enable_thinking", "Let the model think", "bool", "Summary (LLM)",
+            "Let a reasoning model think before answering: can help quality, "
+            "but is much slower."),
     Setting("transcription_backend", "Transcription backend", "choice", "Transcription",
             "Transcribe on this computer (local) or through a Whisper API (api).",
             choices=("local", "api"), essential=True),

@@ -276,6 +276,8 @@ def run_pipeline(  # pylint: disable=too-many-arguments,too-many-positional-argu
             extra = {}
             if "llm_context_tokens" in config:
                 extra["context_tokens"] = config["llm_context_tokens"]
+            if "enable_thinking" in config:
+                extra["enable_thinking"] = config["enable_thinking"]
             orchestrator = orchestrator_cls(
                 api_key=config["api_key"],
                 base_url=config["base_url"],

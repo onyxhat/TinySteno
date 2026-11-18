@@ -58,6 +58,7 @@ Each stage is independent and communicates through well-defined data contracts (
 - `persona` -- active persona slug
 - `session_timeout_minutes` -- maximum recording length in minutes, a finite number `>= 0` (default 75; `0` disables). `inf` and `nan` are rejected here, by `--timeout` and in `persona.yaml`
 - `llm_context_tokens` -- context window the model is served with (default 8192; an int, validated by `validate_config`); the orchestrator sizes its chunks from it
+- `enable_thinking` -- whether a reasoning model may think before answering (default false). Every chat call (summary, merge, title, tags) sends it as `extra_body={"chat_template_kwargs": {"enable_thinking": ...}}`; when the service answers 400 naming `chat_template_kwargs`, the call is sent again without the field and the orchestrator stops sending it. Passed to the orchestrator only when present in the config
 - `whisper_vad` (default true, local backend only), `whisper_prompt` (default empty, both backends) -- passed to Whisper as `vad_filter` / `initial_prompt` (`prompt` for the API)
 - `hallucination_filter`, `bleed_filter` (default true) -- switch the two `hygiene` filters; `transcript_timestamps` (default true) -- `[hh:mm:ss]` on each transcript line
 - `speaker_split` (default false) -- relabel the remote channel as `Others` / `Speaker 2` / ... (a split microphone or single-channel file as `Speaker 1` / `Speaker 2` / ..., never `You`) with the optional diarizer; only acts when `diarization` is also on. `max_speakers` (optional int >= 1, validated) caps the voices kept
@@ -362,6 +363,7 @@ api_key: ollama
 base_url: http://localhost:11434/v1
 model: llama3.2:3b
 llm_context_tokens: 8192   # the context window the model is served with
+enable_thinking: false     # let a reasoning model think first (slower)
 whisper_model: small
 whisper_vad: true         # local backend only
 whisper_prompt: ""
