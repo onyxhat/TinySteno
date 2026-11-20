@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.10] - 2026-11-20
+- build: install mlx-whisper automatically on Apple Silicon
+- docs(trail): learning on the mlx backend decisions
+- fix: mlx review findings — line length, model-name mapping both ways, doctor check, docs
+- feat: wire mlx transcription backend with cross-platform fallback
+- feat: MLX (Metal) local transcription backend
+- refactor: extract LocalTranscriber base from WhisperTranscriber
+- feat: configurable whisper_beam_size for local transcription
+- docs: plan for MLX transcription backend and beam-size setting
+
 ## [0.2.9] - 2026-11-18
 - feat(llm): add enable_thinking setting, off by default
 
