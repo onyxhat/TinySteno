@@ -91,6 +91,14 @@ def create_transcriber(config: dict) -> Transcriber:
             timeout=(float(config["whisper_api_timeout"])
                      if _is_positive_number(config.get("whisper_api_timeout")) else 600.0),
         )
+    if backend == "mlx":
+        from tinysteno.mlx_transcriber import MlxWhisperTranscriber, mlx_available
+        if mlx_available():
+            return MlxWhisperTranscriber(
+                config.get("whisper_model", "small"), prompt=prompt, options=options)
+        logging.getLogger(__name__).warning(
+            "The mlx backend is unavailable on this machine (it needs Apple Silicon and "
+            "`uv sync --extra mlx`); using the local faster-whisper backend.")
     return WhisperTranscriber(
         model_size=config.get("whisper_model", "small"),
         device=config.get("whisper_device", "auto"),
@@ -774,7 +782,7 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     record_parser.add_argument(
         "--notes", metavar="PATH", help="Text file of your own notes for the summary (UTF-8)")
     record_parser.add_argument("--verbose", action="store_true", help="Verbose output")
-    record_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
+    record_parser.add_argument("--backend", choices=["local", "mlx", "api"], help="Transcription backend")
     record_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
     record_parser.add_argument(
         "--whisper-compute-type",
@@ -798,7 +806,7 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
     tui_parser.add_argument(
         "--notes", metavar="PATH", help="Text file of your own notes for the summary (UTF-8)")
     tui_parser.add_argument("--verbose", action="store_true", help="Verbose output")
-    tui_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
+    tui_parser.add_argument("--backend", choices=["local", "mlx", "api"], help="Transcription backend")
     tui_parser.add_argument("--whisper-device", help="Whisper device override (cpu, cuda, auto)")
     tui_parser.add_argument(
         "--whisper-compute-type",
@@ -821,7 +829,7 @@ def main():  # pylint: disable=too-many-statements  # argparse setup + dispatch
         "--retranscribe", action="store_true",
         help="Transcribe again even if a saved transcript sits beside the recording")
     process_parser.add_argument("--verbose", action="store_true", help="Verbose output")
-    process_parser.add_argument("--backend", choices=["local", "api"], help="Transcription backend")
+    process_parser.add_argument("--backend", choices=["local", "mlx", "api"], help="Transcription backend")
     process_parser.add_argument("--whisper-device", help="Whisper device (cpu, cuda, auto)")
     process_parser.add_argument(
         "--whisper-compute-type",

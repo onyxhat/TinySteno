@@ -60,8 +60,9 @@ SETTINGS: tuple[Setting, ...] = (
             "Let a reasoning model think before answering: can help quality, "
             "but is much slower."),
     Setting("transcription_backend", "Transcription backend", "choice", "Transcription",
-            "Transcribe on this computer (local) or through a Whisper API (api).",
-            choices=("local", "api"), essential=True),
+            "Transcribe on this computer (local), on an Apple Silicon GPU (mlx), "
+            "or through a Whisper API (api).",
+            choices=("local", "mlx", "api"), essential=True),
     Setting("whisper_model", "Whisper model", "choice", "Transcription",
             "Local model: tiny, base, small, medium or large-v3, or any other model name.",
             choices=("tiny", "base", "small", "medium", "large-v3")),

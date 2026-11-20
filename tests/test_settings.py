@@ -100,3 +100,7 @@ def test_beam_size_setting_requires_one_or_more():
     assert from_text(item, "1") == 1
     with pytest.raises(ValueError, match="1 or more"):
         from_text(item, "0")
+
+
+def test_transcription_backend_offers_mlx():
+    assert setting("transcription_backend").choices == ("local", "mlx", "api")

@@ -821,3 +821,34 @@ def test_create_transcriber_passes_beam_size():
         assert cls.call_args.kwargs["beam_size"] == 5
         create_transcriber({"whisper_beam_size": 0})
         assert cls.call_args.kwargs["beam_size"] == 5
+
+
+def test_create_transcriber_mlx_backend_when_available(monkeypatch):
+    import types
+    from tinysteno.mlx_transcriber import MlxWhisperTranscriber
+    monkeypatch.setitem(sys.modules, "mlx_whisper", types.SimpleNamespace())
+    result = create_transcriber({"transcription_backend": "mlx", "whisper_model": "base",
+                                 "whisper_prompt": "Acme"})
+    assert isinstance(result, MlxWhisperTranscriber)
+    assert result.model == "mlx-community/whisper-base-mlx" and result.prompt == "Acme"
+
+
+def test_create_transcriber_mlx_falls_back_to_local(monkeypatch, caplog):
+    monkeypatch.setitem(sys.modules, "mlx_whisper", None)
+    with patch("tinysteno.main.WhisperTranscriber") as cls, caplog.at_level(logging.WARNING):
+        result = create_transcriber({"transcription_backend": "mlx", "whisper_beam_size": 1})
+    assert result is cls.return_value and cls.call_args.kwargs["beam_size"] == 1
+    assert [r for r in caplog.records if "mlx" in r.getMessage()]
+
+
+@pytest.mark.parametrize("command", [["record"], ["tui"], ["process", "x.wav"]])
+def test_backend_flag_accepts_mlx(command):
+    argv = ["tinysteno", *command, "--backend", "mlx"]
+    with patch.object(sys, "argv", argv), patch("tinysteno.main.load_config", return_value={}), \
+            patch("tinysteno.main._config_path") as path, \
+            patch("tinysteno.main.cmd_record") as rec, patch("tinysteno.main.cmd_tui") as tui, \
+            patch("tinysteno.main.cmd_process") as proc:
+        path.return_value.exists.return_value = True
+        main()
+    called = next(m for m in (rec, tui, proc) if m.called)
+    assert called.call_args.args[0].backend == "mlx"

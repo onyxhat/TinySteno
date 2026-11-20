@@ -646,3 +646,10 @@ def test_fingerprint_includes_non_default_beam_size_on_local_only(tmp_path):
     assert transcript_fingerprint(wav, {"whisper_beam_size": 1})["beam_size"] == 1
     api = {"transcription_backend": "api", "whisper_beam_size": 1}
     assert "beam_size" not in transcript_fingerprint(wav, api)
+
+
+def test_fingerprint_ignores_beam_size_on_the_mlx_backend(tmp_path):
+    wav = _real_wav(tmp_path)
+    mlx = {"transcription_backend": "mlx", "whisper_beam_size": 1}
+    assert "beam_size" not in transcript_fingerprint(wav, mlx)
+    assert transcript_fingerprint(wav, mlx)["backend"] == "mlx"
