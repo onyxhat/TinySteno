@@ -11,7 +11,7 @@ import yaml
 
 from tinysteno import main
 from tinysteno.config import (
-    DEFAULT_CONFIG, config_path, load_config, read_stored, update_config,
+    DEFAULT_CONFIG, config_path, load_config, read_stored, update_config, validate_config,
 )
 
 
@@ -304,3 +304,14 @@ def test_main_reports_a_malformed_config_without_a_traceback(argv, monkeypatch, 
         f"Error: Config file is not valid YAML (line 3, column 1): {config_path()}",
         "Fix the file, or run: tinysteno config --edit",
     ]
+
+
+@pytest.mark.parametrize("bad", [0, -3, "abc", 2.5, True])
+def test_validate_config_rejects_bad_beam_size(bad):
+    with pytest.raises(ValueError, match="whisper_beam_size"):
+        validate_config({**DEFAULT_CONFIG, "whisper_beam_size": bad})
+
+
+def test_default_config_includes_beam_size():
+    assert DEFAULT_CONFIG["whisper_beam_size"] == 5
+    validate_config(DEFAULT_CONFIG)

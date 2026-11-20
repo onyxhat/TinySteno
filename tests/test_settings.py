@@ -93,3 +93,14 @@ def test_accepts_any_marks_choices_that_are_only_suggestions():
     assert not accepts_any(setting("model"))
     help_text = setting("whisper_model").help
     assert all(size in help_text for size in setting("whisper_model").choices)
+
+
+def test_beam_size_setting_requires_one_or_more():
+    item = setting("whisper_beam_size")
+    assert from_text(item, "1") == 1
+    with pytest.raises(ValueError, match="1 or more"):
+        from_text(item, "0")
+
+
+def test_transcription_backend_offers_mlx():
+    assert setting("transcription_backend").choices == ("local", "mlx", "api")

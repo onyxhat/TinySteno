@@ -21,7 +21,8 @@ disable=
 ignored-modules=sounddevice,
                 objc,
                 ScreenCaptureKit,
-                Foundation
+                Foundation,
+                mlx_whisper
 
 [DESIGN]
 max-attributes=12

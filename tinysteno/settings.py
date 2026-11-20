@@ -60,8 +60,9 @@ SETTINGS: tuple[Setting, ...] = (
             "Let a reasoning model think before answering: can help quality, "
             "but is much slower."),
     Setting("transcription_backend", "Transcription backend", "choice", "Transcription",
-            "Transcribe on this computer (local) or through a Whisper API (api).",
-            choices=("local", "api"), essential=True),
+            "Transcribe on this computer (local), on an Apple Silicon GPU (mlx), "
+            "or through a Whisper API (api).",
+            choices=("local", "mlx", "api"), essential=True),
     Setting("whisper_model", "Whisper model", "choice", "Transcription",
             "Local model: tiny, base, small, medium or large-v3, or any other model name.",
             choices=("tiny", "base", "small", "medium", "large-v3")),
@@ -71,6 +72,8 @@ SETTINGS: tuple[Setting, ...] = (
             "Numeric precision for local transcription; auto picks one."),
     Setting("whisper_vad", "Skip silence", "bool", "Transcription",
             "Skip silent stretches when transcribing locally."),
+    Setting("whisper_beam_size", "Whisper beam size", "int", "Transcription",
+            "Decoding beams for local transcription; 1 is fastest, 5 is most accurate."),
     Setting("whisper_prompt", "Whisper prompt", "text", "Transcription",
             "Words or names to help the transcriber spell things right.", optional=True),
     Setting("whisper_base_url", "Whisper API base URL", "text", "Transcription",
@@ -160,7 +163,7 @@ def _check_range(item: Setting, number: int | float) -> None:
         raise _fail(item, "must be 0 or more (0 disables)")
     if key in ("whisper_api_timeout", "llm_context_tokens", "sample_rate") and number <= 0:
         raise _fail(item, "must be more than 0")
-    if key == "max_speakers" and number < 1:
+    if key in ("max_speakers", "whisper_beam_size") and number < 1:
         raise _fail(item, "must be 1 or more")
 
 

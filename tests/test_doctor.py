@@ -225,3 +225,15 @@ def test_recordings_tilde_path_is_expanded():
     check = by_name(run_checks(config))["Recordings folder"]
     assert check.ok
     assert str(Path.home() / "rec") in check.detail
+
+
+def test_mlx_check_only_on_the_mlx_backend(tmp_path, monkeypatch):
+    from tinysteno import doctor
+    assert "MLX backend" not in by_name(run_checks(make_config(tmp_path)))
+    monkeypatch.setattr(doctor, "_find_spec", lambda name: None)
+    check = by_name(run_checks(make_config(tmp_path, transcription_backend="mlx")))["MLX backend"]
+    assert not check.ok and check.required is False
+    assert "Apple Silicon" in check.detail and "--extra" not in check.detail
+    monkeypatch.setattr(doctor, "_find_spec", lambda name: object())
+    check = by_name(run_checks(make_config(tmp_path, transcription_backend="mlx")))["MLX backend"]
+    assert check.ok

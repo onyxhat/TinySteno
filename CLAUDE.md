@@ -54,8 +54,11 @@ Built-in personas live in `tinysteno/personas/<slug>/`, each with `persona.yaml`
   so comments in a hand-edited file are not preserved.
 - A new editable setting is added to `SETTINGS` in `tinysteno/settings.py` (and to `DEFAULT_CONFIG`
   in `config.py` when it has a default); the Settings screen and the first-run guide are built from it.
-- Transcription has two backends, selected by `transcription_backend` / `--backend`:
-  `local` (faster-whisper, GPU auto-detected) and `api` (Whisper-compatible endpoint).
+- Transcription has three backends, selected by `transcription_backend` / `--backend`:
+  `local` (faster-whisper, GPU auto-detected), `mlx` (mlx-whisper on the Apple Silicon GPU;
+  `tinysteno/mlx_transcriber.py`) and `api` (Whisper-compatible endpoint). `mlx-whisper` is a core
+  dependency gated by a darwin/arm64 marker and imported lazily; the factory falls back to `local`
+  when it is missing, so `mlx` must never break other platforms.
 - This repo is indexed by both `graft` and the GitNexus MCP for code navigation and
   impact analysis.
 - The TUI lives in `tinysteno/tui/` (Textual). It takes all side effects through `TuiDeps`, must not

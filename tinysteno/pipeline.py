@@ -171,6 +171,11 @@ def transcript_fingerprint(wav_path: str, config: dict) -> dict:
         "speaker_split": split,
         "max_speakers": config.get("max_speakers") if split else None,
     }
+    beam = config.get("whisper_beam_size", 5)
+    if backend not in ("api", "mlx") and beam != 5:
+        # Present only when not the default, so transcripts saved before the setting existed
+        # stay fresh.
+        fingerprint["beam_size"] = beam
     if backend == "api":
         # Which server transcribed it (the LLM endpoint when no separate one is set), as a
         # digest: the URL can carry credentials, and the sidecar sits in the (synced) vault.

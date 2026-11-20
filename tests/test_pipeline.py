@@ -633,3 +633,23 @@ def test_prompt_for_a_split_call_with_you_names_the_recorder(tmp_path):
     ctx, block = _block_for(tmp_path, ["You", "Others", "Speaker 2"])
     assert ctx.has_you_label and not ctx.has_speaker_one
     assert _RECORDER in block and _FURTHER in block and "Speaker 1" not in block
+
+
+def test_fingerprint_unchanged_at_default_beam_size(tmp_path):
+    wav = _real_wav(tmp_path)
+    assert transcript_fingerprint(wav, {"whisper_beam_size": 5}) == transcript_fingerprint(wav, {})
+    assert "beam_size" not in transcript_fingerprint(wav, {})
+
+
+def test_fingerprint_includes_non_default_beam_size_on_local_only(tmp_path):
+    wav = _real_wav(tmp_path)
+    assert transcript_fingerprint(wav, {"whisper_beam_size": 1})["beam_size"] == 1
+    api = {"transcription_backend": "api", "whisper_beam_size": 1}
+    assert "beam_size" not in transcript_fingerprint(wav, api)
+
+
+def test_fingerprint_ignores_beam_size_on_the_mlx_backend(tmp_path):
+    wav = _real_wav(tmp_path)
+    mlx = {"transcription_backend": "mlx", "whisper_beam_size": 1}
+    assert "beam_size" not in transcript_fingerprint(wav, mlx)
+    assert transcript_fingerprint(wav, mlx)["backend"] == "mlx"

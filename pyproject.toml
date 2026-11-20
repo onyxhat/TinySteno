@@ -12,6 +12,8 @@ dependencies = [
     "rich>=14.3.3",
     "soundfile>=0.13.1",
     "faster-whisper>=1.2.1",
+    # The mlx backend (Apple Silicon GPU); installed only where it can run.
+    "mlx-whisper>=0.4.1; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "pyobjc-framework-ScreenCaptureKit>=12.1; sys_platform == 'darwin'",
     "jinja2>=3.1.6",
     "scipy>=1.13",
