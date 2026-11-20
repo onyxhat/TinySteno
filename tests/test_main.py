@@ -811,3 +811,13 @@ def test_process_audio_prints_warnings_before_raising_a_failed_stage(tmp_path, c
         _run_process_audio(tmp_path, orchestrator_setup=setup,
                            transcript_extra={"warnings": ["one channel silent"]})
     assert "Warning: one channel silent\n" in capsys.readouterr().out
+
+
+def test_create_transcriber_passes_beam_size():
+    with patch("tinysteno.main.WhisperTranscriber") as cls:
+        create_transcriber({"whisper_beam_size": 1})
+        assert cls.call_args.kwargs["beam_size"] == 1
+        create_transcriber({})
+        assert cls.call_args.kwargs["beam_size"] == 5
+        create_transcriber({"whisper_beam_size": 0})
+        assert cls.call_args.kwargs["beam_size"] == 5

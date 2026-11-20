@@ -71,6 +71,8 @@ SETTINGS: tuple[Setting, ...] = (
             "Numeric precision for local transcription; auto picks one."),
     Setting("whisper_vad", "Skip silence", "bool", "Transcription",
             "Skip silent stretches when transcribing locally."),
+    Setting("whisper_beam_size", "Whisper beam size", "int", "Transcription",
+            "Decoding beams for local transcription; 1 is fastest, 5 is most accurate."),
     Setting("whisper_prompt", "Whisper prompt", "text", "Transcription",
             "Words or names to help the transcriber spell things right.", optional=True),
     Setting("whisper_base_url", "Whisper API base URL", "text", "Transcription",
@@ -160,7 +162,7 @@ def _check_range(item: Setting, number: int | float) -> None:
         raise _fail(item, "must be 0 or more (0 disables)")
     if key in ("whisper_api_timeout", "llm_context_tokens", "sample_rate") and number <= 0:
         raise _fail(item, "must be more than 0")
-    if key == "max_speakers" and number < 1:
+    if key in ("max_speakers", "whisper_beam_size") and number < 1:
         raise _fail(item, "must be 1 or more")
 
 

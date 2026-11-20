@@ -95,6 +95,8 @@ def create_transcriber(config: dict) -> Transcriber:
         model_size=config.get("whisper_model", "small"),
         device=config.get("whisper_device", "auto"),
         compute_type=config.get("whisper_compute_type", "auto"),
+        beam_size=(config["whisper_beam_size"]
+                   if _is_speaker_count(config.get("whisper_beam_size")) else 5),
         vad=config.get("whisper_vad", True),
         prompt=prompt,
         options=options,

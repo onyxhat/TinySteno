@@ -28,6 +28,7 @@ DEFAULT_CONFIG: dict = {
     "whisper_api_diarize": False,
     "whisper_api_timeout": 600,
     "whisper_vad": True,
+    "whisper_beam_size": 5,
     "whisper_prompt": "",
     "hallucination_filter": True,
     "bleed_filter": True,
@@ -105,6 +106,8 @@ def validate_config(config: dict) -> None:
         raise ValueError("Config field 'channels' must be 1 or 2")
     if "max_speakers" in config and not is_speaker_count(config["max_speakers"]):
         raise ValueError("Config field 'max_speakers' must be a whole number >= 1")
+    if "whisper_beam_size" in config and not is_speaker_count(config["whisper_beam_size"]):
+        raise ValueError("Config field 'whisper_beam_size' must be a whole number >= 1")
     if "whisper_api_timeout" in config and not is_positive_number(config["whisper_api_timeout"]):
         raise ValueError("Config field 'whisper_api_timeout' must be a positive number of seconds")
     if "session_timeout_minutes" in config:

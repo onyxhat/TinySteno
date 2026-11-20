@@ -89,6 +89,11 @@ def test_decode_uses_vad_and_prompt_by_default_settings():
     assert kwargs["vad_filter"] is True and kwargs["initial_prompt"] == "Kubernetes, Priya"
 
 
+def test_decode_uses_the_configured_beam_size():
+    assert _decode_kwargs()["beam_size"] == 5
+    assert _decode_kwargs(beam_size=1)["beam_size"] == 1
+
+
 def test_decode_without_prompt_passes_none():
     kwargs = _decode_kwargs(vad=False, prompt="")
     assert kwargs["initial_prompt"] is None and kwargs["vad_filter"] is False

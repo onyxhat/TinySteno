@@ -156,11 +156,13 @@ class WhisperTranscriber:
         device: str = "auto",
         compute_type: str = "auto",
         *,
+        beam_size: int = 5,
         vad: bool = True,
         prompt: str = "",
         options: TranscriptOptions | None = None,
     ):
         self.model_size = model_size
+        self.beam_size = beam_size
         self.vad = vad
         self.prompt = prompt
         self.options = options
@@ -236,7 +238,7 @@ class WhisperTranscriber:
         duration = len(audio) / SAMPLE_RATE
         raw_segments, info = self._model.transcribe(
             audio,
-            beam_size=5,
+            beam_size=self.beam_size,
             vad_filter=self.vad,
             initial_prompt=self.prompt or None,
         )
