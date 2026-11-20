@@ -147,43 +147,22 @@ def _detect_device() -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-class WhisperTranscriber:
-    """Transcribe audio files using local faster-whisper."""
+class LocalTranscriber:
+    """Shared orchestration for on-device backends: split channels, decode each, assemble.
 
-    def __init__(  # pylint: disable=too-many-arguments
+    Subclasses implement ``_decode`` for one 16 kHz mono channel.
+    """
+
+    def __init__(
         self,
-        model_size: str = "small",
-        device: str = "auto",
-        compute_type: str = "auto",
         *,
-        beam_size: int = 5,
         vad: bool = True,
         prompt: str = "",
         options: TranscriptOptions | None = None,
     ):
-        self.model_size = model_size
-        self.beam_size = beam_size
         self.vad = vad
         self.prompt = prompt
         self.options = options
-
-        # Resolve "auto" to detected hardware once.
-        if device == "auto" or compute_type == "auto":
-            detected_device, detected_compute = _detect_device()
-            if device == "auto":
-                device = detected_device
-            if compute_type == "auto":
-                compute_type = detected_compute
-
-        self.device = device
-        self.compute_type = compute_type
-
-        cache_key = (model_size, device, compute_type)
-        if cache_key not in _MODEL_CACHE:
-            _MODEL_CACHE[cache_key] = WhisperModel(
-                model_size, device=device, compute_type=compute_type
-            )
-        self._model = _MODEL_CACHE[cache_key]
 
     def transcribe(  # pylint: disable=too-many-locals
         self,
@@ -228,6 +207,51 @@ class WhisperTranscriber:
         if splitting and on_progress is not None:
             on_progress(1.0)
         return result
+
+    def _decode(
+        self,
+        audio: np.ndarray,
+        on_progress: Callable[[float], None] | None = None,
+    ) -> tuple[list[Segment], str]:
+        """Run one pass over 16 kHz mono audio; return segments and language."""
+        raise NotImplementedError
+
+
+class WhisperTranscriber(LocalTranscriber):
+    """Transcribe audio files using local faster-whisper."""
+
+    def __init__(  # pylint: disable=too-many-arguments
+        self,
+        model_size: str = "small",
+        device: str = "auto",
+        compute_type: str = "auto",
+        *,
+        beam_size: int = 5,
+        vad: bool = True,
+        prompt: str = "",
+        options: TranscriptOptions | None = None,
+    ):
+        super().__init__(vad=vad, prompt=prompt, options=options)
+        self.model_size = model_size
+        self.beam_size = beam_size
+
+        # Resolve "auto" to detected hardware once.
+        if device == "auto" or compute_type == "auto":
+            detected_device, detected_compute = _detect_device()
+            if device == "auto":
+                device = detected_device
+            if compute_type == "auto":
+                compute_type = detected_compute
+
+        self.device = device
+        self.compute_type = compute_type
+
+        cache_key = (model_size, device, compute_type)
+        if cache_key not in _MODEL_CACHE:
+            _MODEL_CACHE[cache_key] = WhisperModel(
+                model_size, device=device, compute_type=compute_type
+            )
+        self._model = _MODEL_CACHE[cache_key]
 
     def _decode(
         self,
