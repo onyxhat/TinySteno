@@ -96,6 +96,14 @@ def _speaker_separation() -> Check:
     return Check("Speaker separation", True, required=False)
 
 
+def _mlx_backend() -> Check:
+    if _find_spec("mlx_whisper") is None:
+        return Check("MLX backend", False,
+                     "needs Apple Silicon; uv sync --extra mlx (or pip install 'tinysteno[mlx]'); "
+                     "until then the local backend is used", False)
+    return Check("MLX backend", True, required=False)
+
+
 def run_checks(config: dict | None) -> list[Check]:
     """Run every setup check. `config=None` means no usable config: only module and file checks."""
     checks = [
@@ -118,6 +126,8 @@ def run_checks(config: dict | None) -> list[Check]:
         checks.append(_safely("Vault folder", lambda: _vault(config)))
         checks.append(_safely("Recordings folder", lambda: _recordings_folder(config)))
         checks.append(_safely("Default persona", lambda: _default_persona(config)))
+        if config.get("transcription_backend") == "mlx":
+            checks.append(_safely("MLX backend", _mlx_backend, required=False))
         if config.get("speaker_split"):
             checks.append(_safely("Speaker separation", _speaker_separation, required=False))
     return checks

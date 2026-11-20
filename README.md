@@ -11,7 +11,7 @@ Minimal meeting recorder with Obsidian export (local filesystem vault).
 - Interactive terminal UI (`tinysteno`) with live level meters, per-stage progress and an in-terminal note preview
 - A Menu in the terminal UI for first-run setup, settings, personas, recordings and a system check
 - Captures mic + system audio simultaneously — no virtual audio device required
-- Transcribe with faster-whisper (local CPU/GPU) or OpenAI Whisper API
+- Transcribe with faster-whisper (local CPU/GPU), mlx-whisper (Apple Silicon GPU) or OpenAI Whisper API
 - GPU auto-detection — CUDA, with a CPU fallback (Apple Silicon runs on the CPU)
 - Stereo diarization — `[You]` / `[Others]` labels when system audio is captured
 - Optional, best-effort speaker split of the remote side (`Speaker 2`, `Speaker 3`, ...), off by default; see "Speaker split (optional)"
@@ -171,7 +171,7 @@ Press `m` on Home, or open the command palette (`Ctrl+P`) and pick an entry, to 
 
 ![Recordings screen: recordings with date, size and whether a transcript is saved](docs/images/tui-recordings.svg)
 
-**System check** runs the checks `tinysteno test` runs: the recorder and transcriber modules, the `sounddevice`, `faster-whisper`, `openai`, `pyyaml` and `rich` packages, the config file, the vault folder, the recordings folder (it must exist or be creatable and writable), the default persona, and, only when `speaker_split` is on, whether the optional speaker-separation package is installed. `✓` is a pass, `✗` a failure and `!` an optional item that needs attention; the summary says how many problems were found, and optional items alone do not count as problems. `r` runs the checks again.
+**System check** runs the checks `tinysteno test` runs: the recorder and transcriber modules, the `sounddevice`, `faster-whisper`, `openai`, `pyyaml` and `rich` packages, the config file, the vault folder, the recordings folder (it must exist or be creatable and writable), the default persona, and, only when `speaker_split` is on, whether the optional speaker-separation package is installed, and, only when the backend is `mlx`, whether mlx-whisper is installed. `✓` is a pass, `✗` a failure and `!` an optional item that needs attention; the summary says how many problems were found, and optional items alone do not count as problems. `r` runs the checks again.
 
 ![Menu over Home: Settings, Setup guide, Personas, Recordings and System check](docs/images/tui-menu.svg)
 
@@ -333,7 +333,8 @@ auto_tags: true             # generate tags from content
 # Model sizes (speed ↔ accuracy): tiny · base · small · medium · large
 whisper_model: "small"
 
-# Backend: "local" (default, faster-whisper) or "api" (OpenAI Whisper API)
+# Backend: "local" (default, faster-whisper), "mlx" (Apple Silicon GPU, needs the mlx extra)
+# or "api" (OpenAI Whisper API)
 transcription_backend: "local"
 
 # Device override for local backend: "auto" (default, auto-detect), "cpu", "cuda"
@@ -346,6 +347,8 @@ whisper_compute_type: "auto"
 
 # Local backend only: skip stretches without speech (faster-whisper's VAD filter)
 whisper_vad: true
+# Local backend only: decoding beams; 1 is fastest (greedy), 5 is most accurate
+whisper_beam_size: 5
 # Text that primes Whisper's vocabulary: names, product terms, acronyms ("" = none).
 # Used by both backends; keep it short.
 whisper_prompt: ""
@@ -510,7 +513,7 @@ After transcribing, TinySteno writes the transcript as JSON beside the recording
 It exists so that retrying after a failed summary, export or LLM outage does not transcribe again. `tinysteno process` and the TUI (including its retry after a failed stage) reuse it only when all of these hold:
 
 - it is no older than the recording, and the recording is the same size as when it was transcribed;
-- the settings that shape a transcript are unchanged: `transcription_backend`, the model (`whisper_model` for the local backend, `whisper_api_model` for the API), on the API backend the transcription server (`whisper_base_url`, or `base_url` when it is not set; only a SHA-256 digest of the URL is stored, never the URL, which can contain credentials), `whisper_prompt`, `whisper_vad`, `hallucination_filter` and `bleed_filter`, and whether the speaker split is in effect (`speaker_split` with `diarization`), with `max_speakers` and, on the API backend, `whisper_api_diarize` when it is. Changing those transcribes again instead of reusing old labels; while the split is off (or `diarization` is off), `speaker_split` and `max_speakers` do not matter;
+- the settings that shape a transcript are unchanged: `transcription_backend`, the model (`whisper_model` for the local backend, `whisper_api_model` for the API), on the API backend the transcription server (`whisper_base_url`, or `base_url` when it is not set; only a SHA-256 digest of the URL is stored, never the URL, which can contain credentials), `whisper_prompt`, `whisper_vad`, `whisper_beam_size` on the local backend when it is not 5, `hallucination_filter` and `bleed_filter`, and whether the speaker split is in effect (`speaker_split` with `diarization`), with `max_speakers` and, on the API backend, `whisper_api_diarize` when it is. Changing those transcribes again instead of reusing old labels; while the split is off (or `diarization` is off), `speaker_split` and `max_speakers` do not matter;
 - it is of the current file format and passes validation.
 
 A missing file, one from an earlier format version, or one that fails validation is ignored and the recording is transcribed afresh (and the file rewritten). Pass `--retranscribe` to `tinysteno process` to force a fresh transcription, or delete the file. `transcript_timestamps` is applied when the note is rendered, so changing it does not need a new transcription; nor does `diarization`, unless `speaker_split` is on (then the split is part of the transcript and toggling `diarization` transcribes again). A transcript saved before the speaker split existed does not match the current settings and is transcribed again once.
@@ -539,7 +542,7 @@ Without this permission, only the microphone will be recorded.
 
 ## Transcription Backends
 
-TinySteno supports two transcription backends, selected via `transcription_backend` in config or `--backend` on the CLI.
+TinySteno supports three transcription backends, selected via `transcription_backend` in config or `--backend` on the CLI.
 
 ### Local (default) — faster-whisper
 
@@ -563,6 +566,20 @@ Or on the CLI:
 ```bash
 tinysteno record --whisper-device cuda --whisper-compute-type float16
 ```
+
+**Speed:** `whisper_beam_size: 1` (greedy decoding) is noticeably faster than the default 5 on the CPU, at a small cost in accuracy.
+
+### MLX — Apple Silicon GPU
+
+On an Apple Silicon Mac, `transcription_backend: mlx` runs Whisper on the GPU through [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), on-device like the local backend and many times faster than faster-whisper on the CPU. It needs the optional extra, which installs only on macOS arm64:
+
+```bash
+pip install "tinysteno[mlx]"      # or, from a checkout: uv sync --extra mlx
+```
+
+A plain `uv sync` removes extras that are not named, so run `uv sync --extra mlx` in a checkout. `whisper_model` takes the same names as the local backend (`small`, `large`, `turbo`, `small.en`, ...), mapped to the matching `mlx-community` conversion, or any Hugging Face repo id such as `mlx-community/whisper-large-v3-turbo`; the model downloads on first use. mlx-whisper has no VAD and no beam search, so `whisper_vad`, `whisper_beam_size`, `whisper_device` and `whisper_compute_type` do not apply; the hallucination and bleed filters still run. Progress moves once per channel.
+
+When mlx-whisper is not installed (another platform, an Intel Mac, or the extra missing), TinySteno logs a warning and uses the local backend instead, translating an `mlx-community` model name to its faster-whisper equivalent (or `small` when there is none), so a config synced between machines keeps working. `tinysteno test` and the System check show an optional `MLX backend` item when the backend is set to `mlx`.
 
 ### API — OpenAI Whisper API
 

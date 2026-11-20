@@ -40,12 +40,11 @@ def _make(model_size="small", **kwargs):
 
 
 def test_decode_adapts_mlx_result_to_segments(fake_mlx):
-    from tinysteno.mlx_transcriber import _MLX_MODELS
     segments, language = _make()._decode(np.zeros(16000, dtype=np.float32))
     assert segments == [Segment(start=0.0, end=0.5, text="hi")]
     assert language == "en"
     _, kwargs = fake_mlx[0]
-    assert kwargs["path_or_hf_repo"] == _MLX_MODELS["small"]
+    assert kwargs["path_or_hf_repo"] == "mlx-community/whisper-small-mlx"
     assert kwargs["initial_prompt"] is None
 
 
@@ -64,9 +63,37 @@ def test_large_v3_maps_to_its_repo():
     assert _make("large-v3").model == "mlx-community/whisper-large-v3-mlx"
 
 
-@pytest.mark.parametrize("name", ["mlx-community/whisper-large-v3-turbo", "my-model"])
-def test_unknown_model_names_pass_through(name):
+@pytest.mark.parametrize("name", ["mlx-community/whisper-large-v3-turbo", "me/my-model"])
+def test_repo_ids_pass_through(name):
     assert _make(name).model == name
+
+
+@pytest.mark.parametrize("name, repo", [
+    ("large", "mlx-community/whisper-large-v3-mlx"),
+    ("turbo", "mlx-community/whisper-large-v3-turbo"),
+    ("large-v3-turbo", "mlx-community/whisper-large-v3-turbo"),
+    ("large-v2", "mlx-community/whisper-large-v2-mlx"),
+    ("small.en", "mlx-community/whisper-small.en-mlx"),
+    ("distil-large-v3", "mlx-community/distil-whisper-large-v3"),
+    ("distil-medium.en", "mlx-community/distil-whisper-medium.en"),
+])
+def test_faster_whisper_names_map_to_mlx_repos(name, repo):
+    assert _make(name).model == repo
+
+
+@pytest.mark.parametrize("name, local", [
+    ("small", "small"),
+    ("mlx-community/whisper-small-mlx", "small"),
+    ("mlx-community/whisper-small.en-mlx", "small.en"),
+    ("mlx-community/whisper-large-v3-turbo", "large-v3-turbo"),
+    ("mlx-community/whisper-turbo", "large-v3-turbo"),
+    ("mlx-community/distil-whisper-large-v3", "distil-large-v3"),
+    ("Systran/faster-whisper-small", "Systran/faster-whisper-small"),
+    ("mlx-community/some-other-model", None),
+])
+def test_local_model_name_for_the_fallback(name, local):
+    from tinysteno.mlx_transcriber import local_model_name
+    assert local_model_name(name) == local
 
 
 def test_prompt_forwarded(fake_mlx):

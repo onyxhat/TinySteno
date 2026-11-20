@@ -13,11 +13,40 @@ import numpy as np
 from tinysteno.transcriber import LocalTranscriber
 from tinysteno.transcript import Segment, TranscriptOptions
 
-# The whisper_model setting's sizes, as mlx-community conversions; other names pass through.
-_MLX_MODELS: dict[str, str] = {
-    size: f"mlx-community/whisper-{size}-mlx"
-    for size in ("tiny", "base", "small", "medium", "large-v3")
+_REPO = "mlx-community/"
+# faster-whisper names whose mlx-community conversion does not follow whisper-<name>-mlx.
+_ALIASES: dict[str, str] = {
+    "large": "whisper-large-v3-mlx",
+    "turbo": "whisper-large-v3-turbo",
+    "large-v3-turbo": "whisper-large-v3-turbo",
+    "distil-large-v3": "distil-whisper-large-v3",
+    "distil-medium.en": "distil-whisper-medium.en",
 }
+_LOCAL_ALIASES: dict[str, str] = {
+    "whisper-large-v3-turbo": "large-v3-turbo",
+    "whisper-turbo": "large-v3-turbo",
+    "distil-whisper-large-v3": "distil-large-v3",
+    "distil-whisper-medium.en": "distil-medium.en",
+}
+
+
+def mlx_model_name(name: str) -> str:
+    """The mlx-community repo for a faster-whisper model name; a repo id passes through."""
+    if "/" in name:
+        return name
+    return _REPO + _ALIASES.get(name, f"whisper-{name}-mlx")
+
+
+def local_model_name(name: str) -> str | None:
+    """The faster-whisper name for an mlx model setting; None when it has no equivalent."""
+    if not name.startswith(_REPO):
+        return name
+    repo = name[len(_REPO):]
+    if repo in _LOCAL_ALIASES:
+        return _LOCAL_ALIASES[repo]
+    if repo.startswith("whisper-") and repo.endswith("-mlx"):
+        return repo[len("whisper-"):-len("-mlx")]
+    return None
 
 
 def mlx_available() -> bool:
@@ -44,7 +73,7 @@ class MlxWhisperTranscriber(LocalTranscriber):
         options: TranscriptOptions | None = None,
     ):
         super().__init__(vad=False, prompt=prompt, options=options)
-        self.model = _MLX_MODELS.get(model_size, model_size)
+        self.model = mlx_model_name(model_size)
 
     def _decode(
         self,

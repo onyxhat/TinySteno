@@ -852,3 +852,15 @@ def test_backend_flag_accepts_mlx(command):
         main()
     called = next(m for m in (rec, tui, proc) if m.called)
     assert called.call_args.args[0].backend == "mlx"
+
+
+@pytest.mark.parametrize("model, expected", [
+    ("mlx-community/whisper-large-v3-turbo", "large-v3-turbo"),
+    ("mlx-community/some-other-model", "small"),
+    ("medium", "medium"),
+])
+def test_mlx_fallback_translates_the_model_name(monkeypatch, caplog, model, expected):
+    monkeypatch.setitem(sys.modules, "mlx_whisper", None)
+    with patch("tinysteno.main.WhisperTranscriber") as cls, caplog.at_level(logging.WARNING):
+        create_transcriber({"transcription_backend": "mlx", "whisper_model": model})
+    assert cls.call_args.kwargs["model_size"] == expected
