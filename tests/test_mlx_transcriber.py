@@ -130,3 +130,14 @@ def test_module_imports_without_mlx_whisper(monkeypatch):
     monkeypatch.delitem(sys.modules, "tinysteno.mlx_transcriber", raising=False)
     module = importlib.import_module("tinysteno.mlx_transcriber")
     assert module.MlxWhisperTranscriber("tiny").model == "mlx-community/whisper-tiny-mlx"
+
+
+def test_mlx_whisper_installs_automatically_on_apple_silicon_only():
+    import tomllib
+    from pathlib import Path
+    project = tomllib.loads(
+        (Path(__file__).parent.parent / "pyproject.toml").read_text())["project"]
+    deps = [d for d in project["dependencies"] if d.startswith("mlx-whisper")]
+    assert len(deps) == 1
+    assert "sys_platform == 'darwin'" in deps[0] and "platform_machine == 'arm64'" in deps[0]
+    assert "mlx" not in project.get("optional-dependencies", {})

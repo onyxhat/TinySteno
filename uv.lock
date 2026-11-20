@@ -1412,6 +1412,7 @@ source = { editable = "." }
 dependencies = [
     { name = "faster-whisper" },
     { name = "jinja2" },
+    { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "numpy" },
     { name = "openai" },
     { name = "pyobjc-framework-screencapturekit", marker = "sys_platform == 'darwin'" },
@@ -1427,9 +1428,6 @@ dependencies = [
 diarize = [
     { name = "sherpa-onnx" },
 ]
-mlx = [
-    { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -1443,7 +1441,7 @@ dev = [
 requires-dist = [
     { name = "faster-whisper", specifier = ">=1.2.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
-    { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = ">=0.4.1" },
+    { name = "mlx-whisper", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = ">=0.4.1" },
     { name = "numpy", specifier = ">=2.4.3" },
     { name = "openai", specifier = ">=2.29.0" },
     { name = "pyobjc-framework-screencapturekit", marker = "sys_platform == 'darwin'", specifier = ">=12.1" },
@@ -1455,7 +1453,7 @@ requires-dist = [
     { name = "soundfile", specifier = ">=0.13.1" },
     { name = "textual", specifier = ">=8.2" },
 ]
-provides-extras = ["diarize", "mlx"]
+provides-extras = ["diarize"]
 
 [package.metadata.requires-dev]
 dev = [

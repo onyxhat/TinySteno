@@ -233,7 +233,7 @@ def test_mlx_check_only_on_the_mlx_backend(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, "_find_spec", lambda name: None)
     check = by_name(run_checks(make_config(tmp_path, transcription_backend="mlx")))["MLX backend"]
     assert not check.ok and check.required is False
-    assert "uv sync --extra mlx" in check.detail and "tinysteno[mlx]" in check.detail
+    assert "Apple Silicon" in check.detail and "--extra" not in check.detail
     monkeypatch.setattr(doctor, "_find_spec", lambda name: object())
     check = by_name(run_checks(make_config(tmp_path, transcription_backend="mlx")))["MLX backend"]
     assert check.ok

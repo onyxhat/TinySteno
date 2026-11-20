@@ -99,9 +99,9 @@ def create_transcriber(config: dict) -> Transcriber:
             return MlxWhisperTranscriber(model_size, prompt=prompt, options=options)
         local = local_model_name(model_size) or "small"
         logging.getLogger(__name__).warning(
-            "The mlx backend is unavailable on this machine (it needs Apple Silicon and "
-            "`uv sync --extra mlx` or `pip install 'tinysteno[mlx]'`); using the local "
-            "faster-whisper backend with model %s.", local)
+            "The mlx backend is unavailable on this machine (it needs an Apple Silicon Mac "
+            "running a native arm64 Python); using the local faster-whisper backend "
+            "with model %s.", local)
         model_size = local
     return WhisperTranscriber(
         model_size=model_size,

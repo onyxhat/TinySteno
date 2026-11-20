@@ -99,7 +99,7 @@ def _speaker_separation() -> Check:
 def _mlx_backend() -> Check:
     if _find_spec("mlx_whisper") is None:
         return Check("MLX backend", False,
-                     "needs Apple Silicon; uv sync --extra mlx (or pip install 'tinysteno[mlx]'); "
+                     "needs an Apple Silicon Mac with a native arm64 Python; "
                      "until then the local backend is used", False)
     return Check("MLX backend", True, required=False)
 

@@ -571,15 +571,9 @@ tinysteno record --whisper-device cuda --whisper-compute-type float16
 
 ### MLX — Apple Silicon GPU
 
-On an Apple Silicon Mac, `transcription_backend: mlx` runs Whisper on the GPU through [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), on-device like the local backend and many times faster than faster-whisper on the CPU. It needs the optional extra, which installs only on macOS arm64:
+On an Apple Silicon Mac, `transcription_backend: mlx` runs Whisper on the GPU through [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper), on-device like the local backend and many times faster than faster-whisper on the CPU. mlx-whisper is installed automatically on macOS arm64 (and skipped on every other platform), so there is no extra step; it does need a native arm64 Python, not one running under Rosetta. `whisper_model` takes the same names as the local backend (`small`, `large`, `turbo`, `small.en`, ...), mapped to the matching `mlx-community` conversion, or any Hugging Face repo id such as `mlx-community/whisper-large-v3-turbo`; the model downloads on first use. mlx-whisper has no VAD and no beam search, so `whisper_vad`, `whisper_beam_size`, `whisper_device` and `whisper_compute_type` do not apply; the hallucination and bleed filters still run. Progress moves once per channel.
 
-```bash
-pip install "tinysteno[mlx]"      # or, from a checkout: uv sync --extra mlx
-```
-
-A plain `uv sync` removes extras that are not named, so run `uv sync --extra mlx` in a checkout. `whisper_model` takes the same names as the local backend (`small`, `large`, `turbo`, `small.en`, ...), mapped to the matching `mlx-community` conversion, or any Hugging Face repo id such as `mlx-community/whisper-large-v3-turbo`; the model downloads on first use. mlx-whisper has no VAD and no beam search, so `whisper_vad`, `whisper_beam_size`, `whisper_device` and `whisper_compute_type` do not apply; the hallucination and bleed filters still run. Progress moves once per channel.
-
-When mlx-whisper is not installed (another platform, an Intel Mac, or the extra missing), TinySteno logs a warning and uses the local backend instead, translating an `mlx-community` model name to its faster-whisper equivalent (or `small` when there is none), so a config synced between machines keeps working. `tinysteno test` and the System check show an optional `MLX backend` item when the backend is set to `mlx`.
+When mlx-whisper is not installed (another platform, an Intel Mac, or an x86_64 Python under Rosetta), TinySteno logs a warning and uses the local backend instead, translating an `mlx-community` model name to its faster-whisper equivalent (or `small` when there is none), so a config synced between machines keeps working. `tinysteno test` and the System check show an optional `MLX backend` item when the backend is set to `mlx`.
 
 ### API — OpenAI Whisper API
 
