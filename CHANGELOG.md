@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.11] - 2026-11-24
+- fix(transcribe): time transcript lines from their words, split at pauses
+
 ## [0.2.10] - 2026-11-20
 - build: install mlx-whisper automatically on Apple Silicon
 - docs(trail): learning on the mlx backend decisions
