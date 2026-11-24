@@ -110,6 +110,38 @@ def _scaled_progress(
     return lambda value: on_progress((index + value) / count)
 
 
+# A pause longer than this between two words of one segment starts a new segment. Whisper can
+# return a segment spanning minutes of silence (faster-whisper's VAD joins the speech on either
+# side; mlx-whisper starts a segment early after silence), and the transcript is ordered by
+# segment start, so such a segment would sit before what was said in between.
+WORD_GAP_SECONDS = 2.0
+
+
+def split_at_word_gaps(
+    start: float, end: float, text: str, words: list[tuple[float, float, str]]
+) -> list[Segment]:
+    """One segment per run of words with no pause longer than WORD_GAP_SECONDS, timed from
+    its own words.
+
+    `words` are (start, end, word), with the leading spaces Whisper gives each word. A
+    segment without words is returned as given.
+    """
+    if not words:
+        return [Segment(start=start, end=end, text=text.strip())]
+    runs: list[list[tuple[float, float, str]]] = [[words[0]]]
+    for word in words[1:]:
+        if word[0] - runs[-1][-1][1] > WORD_GAP_SECONDS:
+            runs.append([word])
+        else:
+            runs[-1].append(word)
+    segments = []
+    for run in runs:
+        run_text = "".join(word for _, _, word in run).strip()
+        if run_text:
+            segments.append(Segment(start=run[0][0], end=run[-1][1], text=run_text))
+    return segments
+
+
 # ---------------------------------------------------------------------------
 # GPU / device detection
 # ---------------------------------------------------------------------------
@@ -265,12 +297,13 @@ class WhisperTranscriber(LocalTranscriber):
             beam_size=self.beam_size,
             vad_filter=self.vad,
             initial_prompt=self.prompt or None,
+            word_timestamps=True,
         )
         segments = []
         for seg in raw_segments:
-            text = seg.text.strip()
-            if text:
-                segments.append(Segment(start=seg.start, end=seg.end, text=text))
+            if seg.text.strip():
+                words = [(w.start, w.end, w.word) for w in seg.words or []]
+                segments.extend(split_at_word_gaps(seg.start, seg.end, seg.text, words))
             if on_progress is not None and duration > 0:
                 on_progress(min(seg.start / duration, 1.0))
         if on_progress is not None:

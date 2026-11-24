@@ -224,7 +224,7 @@ def test_save_then_load_round_trips(tmp_path):
     assert loaded["duration_seconds"] == 12.5 and loaded["detected_language"] == "en"
     assert loaded["text"] == "hello there"
     assert loaded["diarised_text"] == "[You] hello\n[Others] there"
-    assert _sidecar_json(wav)["version"] == 2
+    assert _sidecar_json(wav)["version"] == 3
     assert sorted(p.name for p in tmp_path.iterdir()) == [
         "Meeting-1.wav", "Meeting-1.wav.transcript.json"]
 
@@ -250,7 +250,7 @@ def test_corrupt_sidecar_is_ignored(tmp_path):
     assert load_transcript(str(wav), FP) is None
 
 
-@pytest.mark.parametrize("version", [1, 3, None])
+@pytest.mark.parametrize("version", [1, 2, 4, None])  # 2: saved before segments split at pauses
 def test_other_versions_are_ignored(tmp_path, version):
     wav = _wav(tmp_path)
     save_transcript(str(wav), RESULT, FP)

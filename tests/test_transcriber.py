@@ -362,3 +362,55 @@ def test_split_switched_on_without_labels_leaves_progress_as_it_is(tmp_path):
         return seen
 
     assert run(TranscriptOptions(speaker_split=True)) == run(None)
+
+
+# --- splitting segments at pauses between words ---
+
+# The words of one segment faster-whisper returned for a real recording's microphone channel
+# (VAD joined three stretches of speech): "Okay," at 25.4 s, the question two minutes later.
+_SPANNING = (25.4, 182.1, "Okay, so I guess where does my team come in? Let me just", [
+    (25.4, 25.9, " Okay,"), (166.0, 166.2, " so"), (166.2, 166.3, " I"),
+    (166.3, 166.4, " guess"), (166.4, 166.9, " where"), (166.9, 167.5, " does"),
+    (167.5, 167.8, " my"), (167.8, 168.0, " team"), (168.0, 168.2, " come"),
+    (168.2, 168.6, " in?"), (181.2, 181.7, " Let"), (181.7, 181.8, " me"),
+    (181.8, 182.1, " just"),
+])
+
+
+def test_a_segment_is_split_at_each_long_pause_and_timed_from_its_words():
+    from tinysteno.transcriber import split_at_word_gaps
+    from tinysteno.transcript import Segment
+
+    assert split_at_word_gaps(*_SPANNING) == [
+        Segment(start=25.4, end=25.9, text="Okay,"),
+        Segment(start=166.0, end=168.6, text="so I guess where does my team come in?"),
+        Segment(start=181.2, end=182.1, text="Let me just"),
+    ]
+
+
+def test_words_without_a_long_pause_stay_one_segment_timed_from_the_words():
+    from tinysteno.transcriber import split_at_word_gaps
+    from tinysteno.transcript import Segment
+
+    words = [(12.0, 12.4, " We"), (13.9, 14.2, " met.")]  # a 1.5 s pause is not a split
+    assert split_at_word_gaps(10.0, 15.0, "We met.", words) == [
+        Segment(start=12.0, end=14.2, text="We met.")]
+
+
+def test_a_segment_without_words_is_kept_as_given():
+    from tinysteno.transcriber import split_at_word_gaps
+    from tinysteno.transcript import Segment
+
+    assert split_at_word_gaps(1.0, 2.0, " hi ", []) == [Segment(start=1.0, end=2.0, text="hi")]
+
+
+def test_decode_asks_for_word_timestamps_and_splits_at_pauses():
+    t = _make_transcriber()
+    start, end, text, words = _SPANNING
+    segment = MagicMock(start=start, end=end, text=f" {text}",
+                        words=[MagicMock(start=s, end=e, word=w) for s, e, w in words])
+    t._model.transcribe.return_value = (iter([segment]), MagicMock(language="en"))
+    segments, _ = t._decode(np.zeros(16000, dtype=np.float32), None)
+    assert t._model.transcribe.call_args.kwargs["word_timestamps"] is True
+    assert [(s.start, s.text) for s in segments] == [
+        (25.4, "Okay,"), (166.0, "so I guess where does my team come in?"), (181.2, "Let me just")]
