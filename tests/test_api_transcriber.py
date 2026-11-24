@@ -584,7 +584,9 @@ def test_no_server_labels_on_the_diarized_channel_is_a_warning(mock_openai, tmp_
 def test_no_labels_warning_needs_server_diarization_and_speech(mock_openai, tmp_path):
     _, client = mock_openai
     plain = _response("them", [_spk(1.0, 31.0, "a"), _spk(40.0, 100.0, "b")])
-    assert not _server_run(client, tmp_path, [_LEFT, plain], server=False)["warnings"]
+    # Without server diarization the local split runs; stand it in so no model is downloaded.
+    with patch("tinysteno.transcript._default_turns", return_value=lambda _label, _audio: []):
+        assert not _server_run(client, tmp_path, [_LEFT, plain], server=False)["warnings"]
     empty = _server_run(client, tmp_path, [_response("", [])], path=_long_stereo(
         tmp_path, right_only=True))
     assert NO_LABELS not in empty["warnings"]

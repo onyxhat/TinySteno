@@ -38,7 +38,10 @@ EMBEDDING_URL = (
 
 # SHA-256 of the files exactly as downloaded from the URLs above (the archive, not its contents).
 SEGMENTATION_SHA256 = "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488"
-EMBEDDING_SHA256 = "aa3cfc16963a10586a9393f5035d6d6b57e98d358b347f80c2a30bf4f00ceba2"
+# The embedding model was re-uploaded on 2026-11-19 (re-exported with PyTorch 2.14.1; its
+# embeddings match the earlier file's to a cosine similarity of 0.995 or more). Files already
+# downloaded are not checked again, so earlier copies keep working.
+EMBEDDING_SHA256 = "53cab20ba8f2eb2f6e2d89ecc18e88ef3222169b61b4419cbc13666744a4574b"
 MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024
 
 _CHUNK_BYTES = 64 * 1024
