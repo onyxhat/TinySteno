@@ -10,7 +10,7 @@ from typing import Callable
 
 import numpy as np
 
-from tinysteno.transcriber import LocalTranscriber
+from tinysteno.transcriber import LocalTranscriber, split_at_word_gaps
 from tinysteno.transcript import Segment, TranscriptOptions
 
 _REPO = "mlx-community/"
@@ -87,13 +87,16 @@ class MlxWhisperTranscriber(LocalTranscriber):
             audio.astype(np.float32, copy=False),
             path_or_hf_repo=self.model,
             initial_prompt=self.prompt or None,
+            word_timestamps=True,
         )
-        segments = []
+        segments: list[Segment] = []
         for seg in result.get("segments") or []:
-            text = str(seg.get("text", "")).strip()
-            if text:
-                segments.append(
-                    Segment(start=float(seg["start"]), end=float(seg["end"]), text=text))
+            text = str(seg.get("text", ""))
+            if text.strip():
+                words = [(float(w["start"]), float(w["end"]), str(w["word"]))
+                         for w in seg.get("words") or []]
+                segments.extend(split_at_word_gaps(
+                    float(seg["start"]), float(seg["end"]), text, words))
         if on_progress is not None:
             on_progress(1.0)
         return segments, result.get("language") or "en"

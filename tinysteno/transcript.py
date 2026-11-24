@@ -19,7 +19,7 @@ YOU = "You"
 OTHERS = "Others"
 SILENCE_RMS = 0.001
 SAMPLE_RATE = 16000
-SIDECAR_VERSION = 2
+SIDECAR_VERSION = 3  # 3: segments split at pauses between words
 
 _CHANNEL_NAMES = {YOU: "Microphone", OTHERS: "System"}
 _WARN_SPLIT_FAILED = "Speaker separation failed; channel labels were used."

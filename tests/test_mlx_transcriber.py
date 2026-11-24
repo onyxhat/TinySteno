@@ -141,3 +141,32 @@ def test_mlx_whisper_installs_automatically_on_apple_silicon_only():
     assert len(deps) == 1
     assert "sys_platform == 'darwin'" in deps[0] and "platform_machine == 'arm64'" in deps[0]
     assert "mlx" not in project.get("optional-dependencies", {})
+
+
+def test_decode_asks_for_word_timestamps_and_splits_at_pauses(monkeypatch):
+    calls = []
+
+    def transcribe(_audio, **kwargs):
+        calls.append(kwargs)
+        return {"language": "en", "segments": [{
+            "start": 151.0, "end": 182.4, "text": " OK, so where does my team come in? Let me",
+            "words": [
+                {"word": " OK,", "start": 166.0, "end": 166.3},
+                {"word": " so", "start": 166.3, "end": 166.5},
+                {"word": " where", "start": 166.5, "end": 166.9},
+                {"word": " does", "start": 166.9, "end": 167.5},
+                {"word": " my", "start": 167.5, "end": 167.8},
+                {"word": " team", "start": 167.8, "end": 168.0},
+                {"word": " come", "start": 168.0, "end": 168.2},
+                {"word": " in?", "start": 168.2, "end": 168.6},
+                {"word": " Let", "start": 181.2, "end": 181.7},
+                {"word": " me", "start": 181.7, "end": 182.4},
+            ]}]}
+
+    monkeypatch.setitem(sys.modules, "mlx_whisper", types.SimpleNamespace(transcribe=transcribe))
+    segments, _ = _make()._decode(np.zeros(16000, dtype=np.float32))
+    assert calls[0]["word_timestamps"] is True
+    assert segments == [
+        Segment(start=166.0, end=168.6, text="OK, so where does my team come in?"),
+        Segment(start=181.2, end=182.4, text="Let me"),
+    ]
